@@ -1,178 +1,54 @@
 # Logistics Platform
 
-A unified transportation and logistics marketplace that connects customers and businesses with the right vehicle for rides, deliveries, and cargo.
+A unified mobility, delivery, grocery, and cargo platform connecting customers, drivers, merchants, fleets, and operations through one ecosystem.
 
 ## Product Vision
 
-> **Any compatible vehicle can perform multiple kinds of jobs, and the platform continuously matches demand to the best vehicle while maximizing driver profitability and minimizing empty kilometers.**
+The platform lets providers register motorcycles, rickshaws, cars, loaders, vans, and trucks and participate in eligible services according to vehicle capability, verification, geography, and operational rules.
 
-The platform is designed as a **transportation and logistics operating system**, not simply another ride-hailing application.
+### Core services
 
----
+- Ride booking
+- Ride sharing
+- Grocery delivery
+- Parcel delivery
+- Multi-stop delivery
+- Cargo and loader services
+- Truck/commercial transport
+- Scheduled rides and deliveries
+- Merchant fulfillment
+- Real-time dispatch and tracking
+- Payments and settlements
+- Customer, driver, merchant, and support communication
 
-## Core Product
+## Actors
 
-### Customers
+### Customer
+Registration, ride/delivery booking, grocery ordering, tracking, payment, ratings, safety, and support.
 
-Customers can:
+### Driver / Provider
+Registration, vehicle registration, verification, availability, job acceptance, navigation, completion, earnings, communication, and incident reporting.
 
-- Book a ride
-- Send a parcel/document
-- Move cargo
-- Schedule a delivery
-- Track an active job
-- Pay by supported payment methods
-- Rate drivers
-- Get proof of delivery
-
-### Drivers
-
-A driver can register one or more compatible vehicles:
-
-- Motorcycle
-- Rickshaw
-- Car
-- Loader
-- Suzuki pickup
-- Shehzore
-- Mazda
-- Truck
-
-A vehicle has **capabilities**, allowing it to participate in multiple services.
-
-For example:
-
-```text
-Suzuki Pickup
-├── Parcel
-├── Grocery
-├── Small Cargo
-└── House Moving
-```
-
-The driver does not need separate accounts or separate apps for different services.
-
-### Merchants
-
-Merchants can:
-
-- Create deliveries
-- Track orders
-- Schedule deliveries
-- Upload bulk orders
-- Handle COD
-- View reports
-- Use the logistics API
-- Manage delivery history
+### Merchant
+Store management, catalog, order fulfillment, delivery coordination, settlements, analytics, and support.
 
 ### Operations
+Driver/vehicle approval, merchant management, live dispatch, pricing, service zones, incidents, fraud/risk, support, configuration, and audit.
 
-Admins can:
+## Vehicle Model
 
-- Monitor live jobs
-- Dispatch drivers
-- Verify drivers and vehicles
-- Manage pricing
-- Manage zones
-- Handle disputes
-- Monitor safety
-- Manage support
-- Review fraud signals
-- View analytics
+Vehicles are capability-driven rather than hard-coded to one service.
 
----
+| Vehicle | Possible Services |
+|---|---|
+| Motorcycle | Ride, parcel, grocery |
+| Rickshaw | Ride, shared ride, selected delivery |
+| Car | Ride, shared ride, selected delivery |
+| Loader | Cargo, heavy delivery |
+| Van | Delivery, grocery, cargo |
+| Truck | Cargo, commercial transport |
 
-# Product Strategy
-
-The initial product wedge is:
-
-```text
-Motorcycle + Rickshaw + Car + Loader/Suzuki
-                 |
-                 v
-       Ride + Parcel + Cargo
-```
-
-Grocery should initially be treated as a **merchant delivery capability**, rather than a warehouse/inventory business.
-
-Later:
-
-```text
-Ride
-  ↓
-Parcel
-  ↓
-Small Cargo
-  ↓
-Merchant Delivery
-  ↓
-COD
-  ↓
-Scheduled Logistics
-  ↓
-Return Loads
-  ↓
-Intercity
-  ↓
-Freight
-  ↓
-Logistics API
-```
-
----
-
-# Core Differentiation
-
-The platform is built around two concepts:
-
-## 1. Vehicle-Centric Supply
-
-A vehicle is not permanently tied to one service.
-
-```text
-Vehicle
-   ↓
-Capabilities
-   ↓
-Eligible Jobs
-```
-
-This increases utilization and driver earning potential.
-
-## 2. Job-Centric Demand
-
-Customers describe what they need to move.
-
-```text
-Customer
-   ↓
-Job Requirements
-   ↓
-Vehicle Recommendation
-   ↓
-Pricing
-   ↓
-Dispatch
-```
-
-The customer should not need to understand every vehicle category.
-
----
-
-# Key Competitive Advantages
-
-The platform should compete on:
-
-1. Multi-service vehicle utilization
-2. Transparent driver earnings
-3. Fair pricing
-4. Route compatibility
-5. Return-load matching
-6. Reduced empty kilometers
-7. Merchant logistics infrastructure
-8. Two-sided reputation
-9. Proof of delivery
-10. Strong operational tooling
+Eligibility depends on vehicle type, capacity, documentation, verification, geography, service rules, and operational configuration.
 
 ---
 
@@ -180,494 +56,842 @@ The platform should compete on:
 
 ## Mobile
 
-**React Native + Expo + TypeScript**
+**React Native + TypeScript**
 
-Two primary applications:
+Used for customer and driver applications.
 
-```text
-Customer Mobile
-Driver Mobile
-```
+React Native is the default because it provides cross-platform efficiency while allowing native modules for platform-specific capabilities or performance-sensitive functionality.
 
-React Native owns the application experience.
+Native code should be isolated behind shared interfaces. Do not duplicate complete screens and business logic for iOS and Android merely because a feature contains native code.
 
-Native Swift/Kotlin modules are used only where platform capabilities or performance require them.
+Typical native-module candidates:
 
-Examples:
+- background location
+- advanced location tracking
+- navigation integrations
+- push notification infrastructure
+- device-specific capabilities
+- performance-sensitive native functionality
 
-- Background location
-- GPS processing
-- Biometrics
-- Secure storage
-- Sensors
-- Specialized navigation
-- Native notification capabilities
+## Admin Web
 
-## Dashboards
+**ReactJS + TypeScript**
 
-**React + TypeScript + Vite**
+The Admin/Operations dashboard is a React SPA.
 
-```text
-Merchant Dashboard
-Admin Dashboard
-```
+It covers dispatch, drivers, vehicles, merchants, pricing, zones, support, incidents, analytics, configuration, and audit.
 
-## Public Website
-
-**Next.js + TypeScript**
-
-Used primarily for:
-
-- Marketing
-- SEO
-- Public pages
-- Documentation where appropriate
+**Next.js is not the Admin Dashboard framework.**
 
 ## Backend
 
-**Go**
+Primary:
 
-The Go backend handles:
+- Node.js
+- TypeScript
 
-- Business logic
-- Jobs
-- Dispatch
-- Pricing
-- Driver availability
-- Realtime location processing
-- Payments
-- Merchant operations
-- Notifications
-- Fraud/risk processing
+Performance/system-oriented services where justified:
 
-## Database
+- Go
+- Rust
 
-**PostgreSQL + PostGIS**
+Multiple languages should only be introduced when there is a measurable technical reason.
 
-PostGIS is important for:
+## APIs
 
-- Nearby-driver searches
-- Geographic zones
-- Route-related queries
-- Pickup/dropoff locations
-- Vehicle availability
-- Geographic analytics
+Depending on domain requirements:
 
-## Realtime / Cache
+- REST
+- GraphQL
+- gRPC
+- WebSocket/realtime protocols
 
-**Redis**
+## Data
 
-Used for:
-
-- Current driver locations
-- Driver availability
-- Active jobs
-- Geospatial availability
-- Short-lived locks
-- Rate limiting
-- Caching
-
-**NATS**
-
-Used for:
-
-- Domain events
-- Asynchronous processing
-- Realtime event distribution
-- Background jobs
+- PostgreSQL
+- PostGIS
+- Redis
+- Object storage
+- Event/queue infrastructure
 
 ## Infrastructure
 
+- AWS
 - Docker
-- AWS ECS/Fargate initially
-- Terraform
+- ECS
 - GitHub Actions
-- S3-compatible object storage
-
-## Observability
-
-- Sentry
-- OpenTelemetry
-- PostHog
-
-## Testing
-
-- Playwright for E2E
-- Vitest/Jest where appropriate
-- Go unit/integration tests
+- Infrastructure as Code
+- Centralized logs
+- Metrics
+- Distributed tracing
+- Monitoring and alerting
 
 ---
 
-# Architecture Principle
+# Architecture Principles
 
-The system follows:
+## Modular first
+
+Core domains remain independently understandable and testable:
 
 ```text
-React Native
-    ↓
-Product experience / client flows
+Identity
+Vehicles
+Services
+Pricing
+Booking
+Orders
+Jobs
+Dispatch
+Tracking
+Payments
+Ledger
+Merchant
+Delivery
+Cargo
+Safety
+Fraud
+Notifications
+Chat
+Support
+Admin
+Analytics
+Infrastructure
+```
 
-Swift + Kotlin
-    ↓
-Platform-specific capabilities
+Start with clear modules and extract independent services only when scale, ownership, reliability isolation, or performance justifies it.
 
-Go
-    ↓
-Business logic / dispatch / pricing / realtime
+## Source of truth
 
-PostgreSQL + PostGIS
-    ↓
-Durable transactional + geographic data
+Transactional systems are authoritative.
 
+- PostgreSQL → transactional state
+- Ledger → financial truth
+- Domain services → business state
+- Redis → ephemeral/accelerated state
+- Analytics storage → analytical representation
+
+## Event-driven integration
+
+```text
+Domain Event
+    ↓
+Event Bus / Queue
+    ├── Notifications
+    ├── Analytics
+    ├── Merchant
+    ├── Dispatch
+    └── Support
+```
+
+Consumers must be idempotent.
+
+## Server authoritative
+
+The server is authoritative for:
+
+- pricing
+- payment
+- assignment
+- eligibility
+- permissions
+- service state
+
+Realtime messages and client state are synchronization mechanisms, not sources of truth.
+
+---
+
+# High-Level Architecture
+
+```text
+Customers ───────┐
+Drivers ─────────┤
+Merchants ───────┤
+Admin React ─────┤
+                 ▼
+          API / Realtime Gateway
+                 │
+     ┌───────────┼───────────┐
+     ▼           ▼           ▼
+ Booking      Dispatch    Payments
+ Orders       Tracking    Ledger
+     │           │           │
+     └───────────┼───────────┘
+                 ▼
+          Events / Queues
+                 │
+       ┌─────────┼─────────┐
+       ▼         ▼         ▼
+ PostgreSQL    Redis    Object Storage
+   + PostGIS
+                 │
+                 ▼
+          Analytics / BI
+```
+
+---
+
+# Recommended Repository
+
+Use a monorepo.
+
+```text
+/
+├── README.md
+├── docs/
+│   ├── 028-...
+│   ├── 029-...
+│   └── 190-...
+│
+├── apps/
+│   ├── customer-mobile/
+│   ├── driver-mobile/
+│   └── admin-web/
+│
+├── services/
+│   ├── api/
+│   ├── auth/
+│   ├── booking/
+│   ├── dispatch/
+│   ├── tracking/
+│   ├── payments/
+│   ├── merchant/
+│   ├── delivery/
+│   ├── cargo/
+│   ├── notifications/
+│   ├── chat/
+│   ├── support/
+│   ├── safety/
+│   └── analytics/
+│
+├── packages/
+│   ├── ui/
+│   ├── types/
+│   ├── validation/
+│   ├── api-client/
+│   ├── config/
+│   └── domain/
+│
+├── infrastructure/
+│   ├── aws/
+│   ├── docker/
+│   └── ci/
+│
+└── scripts/
+```
+
+This is the target structure; actual service extraction should follow proven domain boundaries rather than creating microservices prematurely.
+
+---
+
+# Documentation Index
+
+The detailed documentation is organized into numbered documents.
+
+| Documents | Area |
+|---|---|
+| 028–032 | Identity & Vehicles |
+| 033–037 | Jobs, Quotes & Booking |
+| 038–050 | Dispatch & Realtime |
+| 051–064 | Payments & Financials |
+| 065–078 | Merchant & Grocery |
+| 079–092 | Parcel, Delivery & Cargo |
+| 093–106 | Maps, Navigation & Tracking |
+| 107–120 | Safety, Fraud & Trust |
+| 121–134 | Notifications, Chat & Support |
+| 135–148 | Admin & Operations |
+| 149–162 | Analytics & BI |
+| 163–176 | Infrastructure, AWS & DevOps |
+| 177–190 | Testing, Performance & Production |
+
+## 028–032 — Identity & Vehicles
+
+Identity, authentication, users, driver onboarding, vehicle registration, vehicle capabilities, and verification.
+
+## 033–037 — Jobs, Quotes & Booking
+
+Service requests, quotes, booking, job creation, job lifecycle, and booking states.
+
+## 038–050 — Dispatch & Realtime
+
+Driver availability, matching, assignment, realtime communication, location updates, and job synchronization.
+
+## 051–064 — Payments & Financials
+
+Payment methods, pricing, commissions, refunds, wallet/credits where applicable, ledger, settlements, and reconciliation.
+
+## 065–078 — Merchant & Grocery
+
+Merchant onboarding, stores, catalogs, grocery orders, fulfillment, delivery integration, and settlements.
+
+## 079–092 — Parcel, Delivery & Cargo
+
+Parcel delivery, pickup/drop-off, proof of delivery, multi-stop delivery, loaders, trucks, and commercial transportation.
+
+## 093–106 — Maps, Navigation & Tracking
+
+Geolocation, maps, routing, navigation, ETA, geofencing, live tracking, and location architecture.
+
+## 107–120 — Safety, Fraud & Trust
+
+Verification, SOS, trusted contacts, ratings, fraud detection, abuse prevention, incidents, safety audit, device/session trust, and safety operations.
+
+## 121–134 — Notifications, Chat & Support
+
+Push, SMS, email, OTP, preferences, localization, events, chat, chat privacy, support cases, support routing, operational support actions, and communication observability.
+
+## 135–148 — Admin & Operations
+
+RBAC, driver/vehicle operations, merchant management, order operations, dispatch console, pricing, service zones, feature flags, review queues, audit, and React admin architecture.
+
+## 149–162 — Analytics & BI
+
+Event taxonomy, product analytics, marketplace analytics, driver/merchant analytics, unit economics, KPIs, data warehouse, analytics models, dashboards, experimentation, governance, and data quality.
+
+## 163–176 — Infrastructure & DevOps
+
+AWS, networking, security, Docker, ECS, PostgreSQL/PostGIS, Redis, queues, GitHub Actions, secrets, observability, monitoring, backups, disaster recovery, capacity, and cost.
+
+## 177–190 — Testing & Production
+
+Testing strategy, backend/frontend testing, E2E, load testing, mobile performance, security, offline resilience, idempotency, release management, production readiness, incident response, and launch.
+
+---
+
+# Development Roadmap
+
+```text
+Phase 1   Identity & Vehicles
+Phase 2   Jobs, Quotes & Booking
+Phase 3   Dispatch & Realtime
+Phase 4   Payments & Financials
+Phase 5   Merchant & Grocery
+Phase 6   Parcel, Delivery & Cargo
+Phase 7   Maps & Tracking
+Phase 8   Safety, Fraud & Trust
+Phase 9   Notifications, Chat & Support
+Phase 10  Admin & Operations
+Phase 11  Analytics & BI
+Phase 12  Infrastructure & DevOps
+Phase 13  Testing & Production
+```
+
+These are capability phases, not necessarily strict sequential development gates.
+
+---
+
+# MVP Recommendation
+
+Do not launch every service simultaneously.
+
+Start with a narrow geography and a small number of services.
+
+## Customer
+
+- registration/login
+- location selection
+- ride booking
+- delivery booking
+- tracking
+- payment
+- ratings
+- support
+
+## Driver
+
+- registration
+- vehicle registration
+- verification
+- online/offline
+- job acceptance
+- navigation
+- completion
+- earnings
+
+## Operations
+
+- driver approval
+- vehicle approval
+- live jobs
+- dispatch
+- pricing
+- service zones
+- support
+- incidents
+
+## Backend
+
+- identity
+- vehicles
+- booking
+- dispatch
+- tracking
+- payments
+- notifications
+- support
+
+Grocery marketplace, advanced cargo, complex fleet management, experimentation, and advanced BI can be introduced progressively.
+
+---
+
+# Realtime & Location
+
+Realtime is critical for:
+
+- driver locations
+- job assignment
+- ride state
+- delivery tracking
+- chat
+- dispatch
+- operations
+
+Use:
+
+```text
+Client
+ ↓
+Realtime Gateway
+ ↓
+Event / State Layer
+ ↓
+Domain Services
+```
+
+After reconnect, app restart, or missed events, clients must reconcile against authoritative server state.
+
+Driver location architecture must account for:
+
+- foreground/background location
+- battery consumption
+- permissions
+- unstable connectivity
+- location update frequency
+- active-job tracking
+- privacy and retention
+
+---
+
+# Financial Architecture
+
+Financial state requires stronger consistency than ordinary CRUD.
+
+Core concepts:
+
+```text
+Customer Charge
+Provider Earnings
+Platform Fee
+Commission
+Refund
+Adjustment
+Settlement
+Ledger
+```
+
+The ledger should be treated as immutable in principle. Corrections should be represented through new transactions/adjustments rather than silently rewriting historical financial records.
+
+Analytics consumes financial data but does not become the financial source of truth.
+
+---
+
+# Security & Privacy
+
+Security controls include:
+
+- authentication
+- server-side authorization
+- RBAC
+- scoped admin access
+- rate limiting
+- fraud detection
+- secure file handling
+- secrets management
+- audit logs
+- encryption in transit
+- appropriate encryption at rest
+- dependency/security scanning
+
+Sensitive data may include:
+
+- location
+- identity documents
+- contact information
+- payment information
+- conversations
+- delivery addresses
+
+Principles:
+
+1. Collect only what is necessary.
+2. Restrict access by role.
+3. Do not expose private contact details unnecessarily.
+4. Define retention periods.
+5. Audit sensitive access.
+6. Remove/anonymize data where appropriate.
+7. Do not copy sensitive data into analytics without a defined purpose.
+
+---
+
+# Observability
+
+Important requests/events should be traceable using identifiers such as:
+
+```text
+request_id
+correlation_id
+trace_id
+event_id
+job_id
+order_id
+payment_id
+notification_id
+```
+
+Monitor:
+
+- API latency/errors
+- database latency
+- queue depth
+- dispatch latency
+- assignment success
+- realtime connections
+- notification delivery
+- payment failures
+- crash rates
+- support SLA
+- infrastructure health
+
+---
+
+# Testing Strategy
+
+Use a balanced pyramid:
+
+```text
+             E2E
+       Integration / Contract
+          Unit / Component
+```
+
+Critical areas:
+
+- pricing
+- booking
+- dispatch
+- payments
+- state transitions
+- authorization
+- idempotency
+- notifications
+- tracking
+- support
+- safety
+
+Use Playwright for web/admin E2E where appropriate and an appropriate mobile E2E strategy for React Native.
+
+---
+
+# Production Engineering
+
+Production should support:
+
+- Dockerized services
+- AWS
+- ECS
+- secure networking
+- PostgreSQL/PostGIS
+- Redis
+- queues/workers
+- CI/CD
+- secrets management
+- backups
+- disaster recovery
+- monitoring
+- alerting
+- runbooks
+- staged releases
+- rollback
+
+---
+
+# Engineering Principles
+
+1. **Mobile-first operational thinking** — the driver app is mission-critical.
+2. **Server authoritative** — never trust client state for business-critical decisions.
+3. **Idempotency** — critical mutations must be safe to retry.
+4. **Realtime is not truth** — realtime accelerates synchronization.
+5. **Poor connectivity is normal** — design for unreliable networks.
+6. **Measure before optimizing** — use native modules, Go, Rust, or microservices when justified by evidence.
+7. **Avoid premature microservices** — modular architecture first.
+8. **Financial correctness** — ledger correctness has priority over convenience.
+9. **Security by default** — authorization is enforced server-side.
+10. **Operational simplicity** — the system must remain understandable and operable.
+
+---
+
+# Development Workflow
+
+```text
+Issue
+ ↓
+Technical Design
+ ↓
+Implementation
+ ↓
+Unit / Integration Tests
+ ↓
+Pull Request
+ ↓
+CI
+ ↓
+Review
+ ↓
+Staging
+ ↓
+E2E / Smoke Tests
+ ↓
+Production
+ ↓
+Monitoring
+```
+
+Significant architectural decisions should be documented.
+
+---
+
+# Definition of Done
+
+A production-ready feature normally includes:
+
+- domain logic
+- API
+- authorization
+- validation
+- error handling
+- loading/empty/error states
+- observability
+- analytics events where applicable
+- unit/integration tests
+- E2E coverage where critical
+- mobile/offline handling where applicable
+- audit requirements where applicable
+- documentation
+- operational support
+
+---
+
+# Documentation Rules
+
+This README is the **single entry point** to the project documentation.
+
+Detailed documents live under `docs/`.
+
+Use:
+
+```text
+028-document-name.md
+029-document-name.md
+...
+190-document-name.md
+```
+
+Do **not** create another `README.md` for the documentation series.
+
+## Source of Truth
+
+When documents conflict:
+
+1. Explicitly approved architectural decisions take precedence.
+2. Later approved decisions supersede earlier proposals.
+3. Implementation must be updated to match the latest approved architecture.
+4. Major changes should be recorded as architecture decisions.
+
+---
+
+# Current Architecture Decisions
+
+| Area | Decision |
+|---|---|
+| Mobile | React Native |
+| Mobile language | TypeScript |
+| Admin | ReactJS |
+| Admin language | TypeScript |
+| Backend primary | Node.js + TypeScript |
+| High-performance backend | Go/Rust where justified |
+| Primary database | PostgreSQL |
+| Geospatial | PostGIS |
+| Cache/realtime state | Redis |
+| Containers | Docker |
+| Compute | AWS ECS |
+| CI/CD | GitHub Actions |
+| Realtime | WebSocket/event-driven architecture |
+| Analytics | Separate analytics storage |
+| Web E2E | Playwright |
+| Architecture | Modular first; extract services when justified |
+
+---
+
+# What Comes Next
+
+The documentation phase is now complete through document 190.
+
+The next work should be implementation-oriented rather than creating more generic documentation.
+
+## 1. Reconcile the documentation
+
+Review documents 028–190 together and resolve:
+
+- conflicting requirements
+- duplicate concepts
+- inconsistent terminology
+- overlapping services
+- missing dependencies
+- architecture decisions requiring final approval
+
+## 2. Finalize implementation architecture
+
+Define:
+
+```text
+Apps
+ ↓
+API
+ ↓
+Domain Modules
+ ↓
+Database
+ ↓
 Redis
-    ↓
-Realtime operational state
-
-NATS
-    ↓
-Events / asynchronous processing
+ ↓
+Events
+ ↓
+Workers
 ```
 
----
+## 3. Finalize database design
 
-# Architecture Approach
+Define:
 
-Start with a **modular monolith**, not a microservice-heavy architecture.
+- PostgreSQL schema
+- PostGIS schema
+- indexes
+- relationships
+- migrations
+- state machines
+- constraints
 
-Backend modules:
+## 4. Finalize API contracts
+
+Define contracts for:
+
+- authentication
+- vehicles
+- services
+- pricing
+- booking
+- dispatch
+- tracking
+- payments
+- merchant
+- delivery
+- cargo
+- support
+
+## 5. Initialize the monorepo
+
+Set up:
+
+- workspace
+- customer mobile
+- driver mobile
+- React admin
+- backend
+- shared packages
+- linting
+- formatting
+- testing
+- CI
+
+## 6. Implement the MVP
+
+Recommended order:
 
 ```text
-identity/
-users/
-drivers/
-vehicles/
-documents/
-jobs/
-dispatch/
-pricing/
-payments/
-wallet/
-tracking/
-merchants/
-notifications/
-support/
-fraud/
-analytics/
-zones/
+Identity
+ ↓
+Vehicles
+ ↓
+Service Eligibility
+ ↓
+Booking
+ ↓
+Pricing
+ ↓
+Dispatch
+ ↓
+Tracking
+ ↓
+Payment
+ ↓
+Completion
 ```
 
-Services should only be extracted when there is a concrete reason such as:
-
-- independent scaling
-- team ownership
-- deployment isolation
-- reliability requirements
-- high-volume workloads
+Then progressively add grocery, parcel, cargo, merchant, advanced operations, analytics, and additional services.
 
 ---
 
-# Core Domain Model
-
-The central abstraction is the **Job**.
+# Target Platform
 
 ```text
-Job
-├── Ride
-├── Parcel
-├── Grocery
-├── Cargo
-└── Freight
+                 LOGISTICS PLATFORM
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+      RIDES          DELIVERY          CARGO
+        │                │                │
+   ┌────┴────┐      ┌────┴────┐      ┌────┴────┐
+   │ Car     │      │ Grocery │      │ Loader  │
+   │ Rickshaw│      │ Parcel  │      │ Van     │
+   │ Shared  │      │ Multi   │      │ Truck   │
+   └─────────┘      └─────────┘      └─────────┘
+                         │
+                ┌────────┴────────┐
+                │                 │
+             MERCHANT          CUSTOMER
+                │                 │
+                └────────┬────────┘
+                         │
+                    DRIVER/FLEET
+                         │
+                  DISPATCH + MAPS
+                         │
+              PAYMENTS + LEDGER
+                         │
+             SAFETY + FRAUD + TRUST
+                         │
+              SUPPORT + ANALYTICS
+                         │
+                 AWS PLATFORM
 ```
 
-Common job concepts:
-
-- Requester
-- Pickup
-- Destination
-- Stops
-- Requirements
-- Vehicle
-- Driver
-- Pricing
-- Assignment
-- Payment
-- Tracking
-- Proof
-- Status
-- Audit history
+The objective is not simply to build another ride-hailing or delivery application. It is to build a **general-purpose mobility and logistics platform** in which different vehicle types and services share the same identity, vehicle, booking, dispatch, tracking, payment, safety, and operations foundation.
 
 ---
 
-# Dispatch Engine
+# Status
 
-The dispatch system should **not simply select the nearest driver**.
-
-Candidate scoring should consider:
-
-```text
-ETA
-+ Vehicle suitability
-+ Capacity
-+ Driver reliability
-+ Route compatibility
-+ Price
-+ Destination demand
-- Empty kilometers
-- Cancellation risk
-```
-
-Long term, the dispatch engine should optimize the entire network rather than individual jobs.
+**Documentation:** Complete through document 190  
+**Architecture:** Defined at high level  
+**Technology stack:** Defined  
+**Mobile:** React Native  
+**Admin:** ReactJS  
+**Backend:** Node.js/TypeScript with Go/Rust where justified  
+**Infrastructure:** AWS + Docker + ECS  
+**Next milestone:** Documentation reconciliation → database/API design → monorepo implementation → MVP
 
 ---
 
-# Return-Load Marketplace
+# License
 
-A major future differentiator is matching vehicles with return jobs.
-
-Example:
-
-```text
-Truck
-
-Lahore
-   ↓
-Islamabad
-
-Cargo delivered
-   ↓
-Return to Lahore
-```
-
-Instead of returning empty:
-
-```text
-Islamabad
-   ↓
-Lahore
-
-Compatible return cargo
-```
-
-This improves:
-
-- Driver earnings
-- Fleet utilization
-- Customer pricing
-- Platform margins
-- Network efficiency
-
----
-
-# Driver Economics
-
-The platform should show estimated net earnings before accepting a job.
-
-Example:
-
-```text
-Gross earning       Rs 650
-Estimated fuel      Rs 125
-Platform fee         Rs 55
----------------------------
-Estimated net       Rs 470
-```
-
-Primary driver KPI:
-
-> **Net earnings per online hour**
-
-Supporting metrics:
-
-- Jobs/hour
-- Revenue/km
-- Empty km
-- Acceptance rate
-- Completion rate
-- Cancellation rate
-- Driver retention
-
----
-
-# North-Star Metric
-
-The main business metric is:
-
-> **Completed profitable jobs per active vehicle per day**
-
-Other important metrics:
-
-### Customer
-- Fulfillment rate
-- Pickup ETA
-- Repeat rate
-- Cancellation rate
-
-### Driver
-- Net earnings/hour
-- Jobs/hour
-- Retention
-- Empty-km ratio
-
-### Merchant
-- Orders/month
-- Delivery success
-- COD value
-- Repeat usage
-
-### Platform
-- Contribution margin/job
-- CAC
-- LTV
-- Supply/demand ratio
-- Jobs/vehicle/day
-
----
-
-# Initial Launch Strategy
-
-Do not launch nationwide.
-
-Start with:
-
-```text
-One city
-    ↓
-5–8 dense connected zones
-    ↓
-High vehicle availability
-    ↓
-Reliable fulfillment
-    ↓
-Positive unit economics
-    ↓
-Expand
-```
-
-Lahore is the initial candidate city, subject to validation through local research and unit economics.
-
----
-
-# Development Documentation
-
-The documentation is organized into two major stages.
-
-## Product & Business Documentation
-
-```text
-00-project-vision.md
-01-competitive-analysis.md
-02-business-model.md
-03-mvp-prd.md
-04-domain-architecture.md
-05-dispatch-pricing.md
-06-business-go-to-market.md
-07-metrics-operations.md
-08-roadmap.md
-09-project-structure.md
-10-decision-log.md
-```
-
-These define the business, product strategy, competitive positioning, MVP and initial roadmap.
-
-## Technical & Engineering Documentation
-
-```text
-12-technical-blueprint.md
-13-database-schema.md
-14-api-specification.md
-15-job-state-machine.md
-16-driver-vehicle-state-machine.md
-17-native-mobile-architecture.md
-18-realtime-location-architecture.md
-19-payment-wallet-settlement.md
-20-auth-security.md
-21-screen-map.md
-22-engineering-phases.md
-```
-
-These define the technical architecture and implementation approach.
-
-> There is intentionally no `11` document at this stage. Do not renumber existing documents just to remove the gap.
-
----
-
-# Engineering Phases
-
-The implementation roadmap is:
-
-```text
-Phase 1   Foundation
-Phase 2   Identity & Vehicles
-Phase 3   Jobs
-Phase 4   Dispatch
-Phase 5   Realtime
-Phase 6   Payments
-Phase 7   Operations
-Phase 8   Merchant
-Phase 9   Optimization
-Phase 10  Scale
-Phase 11  Expansion
-```
-
-Detailed requirements are documented in:
-
-`22-engineering-phases.md`
-
----
-
-# Product Evolution
-
-Long-term architecture:
-
-```text
-                 Transportation
-                       |
-        +--------------+--------------+
-        |              |              |
-       Rides         Delivery       Cargo
-        |              |              |
-        +--------------+--------------+
-                       |
-                Merchant Logistics
-                       |
-                 Return Loads
-                       |
-                  Intercity
-                       |
-                    Freight
-                       |
-                Logistics API
-                       |
-          Logistics Infrastructure
-```
-
-The long-term goal is to become a **logistics infrastructure platform**, not merely a ride-hailing marketplace.
-
----
-
-# Current Development Principle
-
-Do not over-engineer before the marketplace is validated.
-
-Priorities:
-
-1. Supply density
-2. Reliable fulfillment
-3. Driver economics
-4. Customer experience
-5. Unit economics
-6. Dispatch quality
-7. Operational tooling
-8. Scale
-
-Technology should support these goals rather than become the goal itself.
-
----
-
-# Current Status
-
-The project is currently at the **product + technical blueprint stage**.
-
-Next work should move into detailed implementation specifications and then engineering phases, beginning with the foundation.
-
-The next documentation should continue from **23** without regenerating or replacing this README.
+License and commercial terms should be defined before public distribution or third-party contribution.
