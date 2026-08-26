@@ -1124,7 +1124,7 @@ When this AGENT.md is first loaded, perform these actions in order:
 
 1. Inspect repository.
 2. Inspect `/docs`.
-3. Read README.md.
+3. Read `docs/README.md` (there is no root-level README).
 4. Read documents 365, 366, 367, 368, 443, 444, and 564.
 5. Audit all documentation.
 6. Create/update:
