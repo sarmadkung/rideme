@@ -1,0 +1,91 @@
+# Local development infrastructure (document 24).
+#
+# Only the four services the platform actually depends on. The API itself runs
+# on the host for faster iteration, which is what document 24 recommends.
+#
+#   docker compose -f infra/docker/docker-compose.yml up -d
+#
+# Ports follow document 24's convention and can be overridden from .env.local.
+
+name: rideme
+
+services:
+  postgres:
+    # PostGIS is not optional: the schema is geospatial from Phase 5 onward.
+    image: postgis/postgis:16-3.4
+    container_name: rideme-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-logistics}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-logistics}
+      POSTGRES_DB: ${POSTGRES_DB:-logistics_dev}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-logistics} -d ${POSTGRES_DB:-logistics_dev}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: rideme-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2-alpine
+    container_name: rideme-nats
+    restart: unless-stopped
+    # JetStream is enabled now because durable delivery is a documented
+    # requirement of the event bus (document 18), not a later addition.
+    command: ['--jetstream', '--store_dir=/data', '--http_port=8222']
+    ports:
+      - '${NATS_PORT:-4222}:4222'
+      - '${NATS_MONITOR_PORT:-8222}:8222'
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:8222/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    # S3-compatible storage (document 12). Nothing uploads to it in Phase 1;
+    # it is here so the local environment matches the deployed one.
+    image: minio/minio:latest
+    container_name: rideme-minio
+    restart: unless-stopped
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - '${MINIO_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:
+  nats-data:
+  minio-data:
