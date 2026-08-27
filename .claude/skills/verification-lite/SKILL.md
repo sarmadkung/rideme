@@ -41,14 +41,49 @@ Comprehensive tests for everything affected, plus relevant E2E, plus the failure
 - Escalate one level when unsure between two. Escalate to 5 whenever money, dispatch assignment, auth, or concurrency is touched, regardless of diff size — a one-line change to fee arithmetic is Level 5.
 - Evidence or it did not happen. Paste the actual counts and the pass/fail line.
 
-# Toolchain
+# Commands By Surface
 
-Backend is Go, clients are TypeScript — the commands differ by surface:
+The repository holds two toolchains (ADR-001). Pick by what the change touched.
 
-- Go (`services/api/`): `go build ./...`, `go vet ./...`, `go test ./<pkg>/...`
-- TS (`apps/`, `packages/`): typecheck, lint, and the workspace test runner, scoped to the affected package
+| Surface | Typecheck / vet | Lint | Test | Build |
+|---|---|---|---|---|
+| One TS package | `pnpm --filter @platform/<name> typecheck` | `... lint` | `... test` | `... build` |
+| One TS app | `pnpm --filter @apps/<name> typecheck` | `... lint` | `... test` | `... build` |
+| Whole workspace | `pnpm typecheck` | `pnpm lint` | `pnpm test` | `pnpm build` |
+| One Go package | `go vet ./pkg/<name>/...` | `gofmt -l pkg/<name>` | `go test ./pkg/<name>/...` | `go build ./...` |
+| Whole Go service | `go vet ./...` | `make api-lint` | `go test -race ./...` | `go build ./...` |
+| Everything | — | — | — | `make verify` |
 
-**Today the repo contains no application code**, so every task is Level 0 until the foundation lands. Update this section when the toolchain exists.
+Go commands run from `services/api/`. Turborepo already skips unaffected
+packages and caches unchanged ones, so a scoped `--filter` is about intent, not
+speed — but it keeps the output readable.
+
+**Infrastructure-dependent checks** (need `make infra-up` first):
+
+- `go test -tags=integration ./tests/...` — Postgres/PostGIS, Redis, NATS reachable
+- `make migrate-up && make migrate-down && make migrate-up` — migrations reversible
+- `curl -s localhost:8080/health | jq` — with a dependency stopped, must return 503
+
+# What Each Level Actually Runs
+
+**Level 0** — `pnpm format:check`, or nothing. YAML/JSON parses.
+
+**Level 1** — the one package's `typecheck` and `test`.
+
+**Level 2** — that package's `test`, plus `typecheck` on packages importing it
+(Turborepo resolves this: `pnpm --filter ...@platform/<name>... test`).
+
+**Level 3** — the Go package's `go test`, plus `-tags=integration` if it touches
+Postgres, Redis or NATS. A migration must be applied **and rolled back** locally.
+
+**Level 4** — integration tests for every module on the path, plus the single
+E2E journey covering it. No E2E infrastructure exists yet; when a Level 4 change
+arrives before it does, say so rather than claiming coverage.
+
+**Level 5** — `make verify`, plus `-race`, plus the failure paths listed above.
+Infrastructure changes (`docker-compose.yml`, CI, Makefile) are Level 5: bring
+the stack down and up from clean, confirm every service reachable, migrations
+reversible, health accurate in both directions.
 
 # Blocking Conditions
 

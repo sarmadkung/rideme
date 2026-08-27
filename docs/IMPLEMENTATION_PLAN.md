@@ -14,7 +14,7 @@ the service lifecycles specialize it. Never fork a parallel booking entity per s
 ## Dependency Spine
 
 ```text
-Phase 1  repository foundation ····································· SPECIFIED
+Phase 1  repository foundation ····································· COMPLETE
              workspace · shared packages · Go foundation
              local infra · CI · testing harness
                     ↓
@@ -52,9 +52,26 @@ there is anything to operate is a hundred screens with no system behind them.
 
 ## Current Position
 
-**Phase 1, not started.** Repository contains documentation and skills only.
+**Phase 1 complete and verified (2026-08-27).** The repository runs end to end:
+workspace resolves, Go API starts and proves every dependency, local
+infrastructure comes up under Docker, migrations apply and roll back, all
+quality gates pass. No product functionality exists. Evidence per task is in
+`IMPLEMENTATION_STATUS.md`.
 
-Next task: implement `FIRST_IMPLEMENTATION_SLICE.md`.
+**Next: Phase 3 — backend foundation.** Phase 2 as originally drawn was
+infrastructure hardening; its local half landed inside Phase 1 (Docker, health,
+observability, error taxonomy, migration mechanism) and its cloud half belongs
+to Phase 15. It is not a separate unit of work, and pretending otherwise would
+manufacture a phase with nothing in it.
+
+Phase 3 opens with two things that must be settled first, both already tracked:
+
+- **B-2 — Go ↔ TypeScript type strategy.** Now concrete rather than
+  hypothetical: the error taxonomy already exists twice, hand-maintained, in
+  `pkg/httpx/errors.go` and `packages/types/src/errors.ts`. Decide the source of
+  truth before a third contract is duplicated.
+- **BD-07 — money representation and rounding.** Due before any code touches an
+  amount. A product decision, not an engineering one.
 
 ## Token-Efficiency Policy
 
@@ -90,7 +107,7 @@ assignment, auth, or concurrency is touched — regardless of how small the diff
 
 | Item | Due by | Tracked in |
 |---|---|---|
-| Go ↔ TypeScript shared type strategy | first endpoint (Phase 3) | B-2 |
+| Go ↔ TypeScript shared type strategy | **now** — one contract is already duplicated | B-2 |
 | Backend module list reconciliation | first domain module (Phase 5) | ADR-004, C-5 |
 | Money representation and rounding | before any financial code (Phase 3) | BD-07 |
 | Ride commercial rules | Phase 9 | BD-01 … BD-06 |

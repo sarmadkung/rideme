@@ -1,0 +1,11 @@
+-- Intentionally a no-op.
+--
+-- Dropping PostGIS would remove an extension the database image provisions and
+-- that every later migration depends on; on a managed instance it may not be
+-- re-creatable without elevated privileges. Rolling migration 1 back therefore
+-- leaves the extensions in place.
+--
+-- This is a deliberate exception for extension bootstrap, not a precedent:
+-- migrations that create tables, columns or indexes must undo exactly what they
+-- did, and CI proves it by running up → down → up on every pull request.
+SELECT 1;

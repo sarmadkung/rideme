@@ -108,3 +108,39 @@ given real content, this ADR should be superseded. The tier map must be re-verif
 are added or rewritten.
 
 **Affects:** `project-discovery`, `dependency-planning`, `documentation-audit`, `IMPLEMENTATION_PLAN.md`.
+
+---
+
+## ADR-006 — Two test runners: Vitest for web and packages, jest-expo for mobile
+
+**Date:** 2026-08-27 · **Status:** Accepted
+
+**Context:** `177` names the testing layers but not the runners. React Native
+cannot be tested by Vitest without reimplementing what `jest-expo` already
+provides (the Metro transform, the RN module registry, native mocks), and Expo
+ships and supports only the Jest preset. Meanwhile Vitest is the natural runner
+for Vite, and forcing Jest onto the dashboards would mean maintaining a second
+transform pipeline for no gain.
+
+**Decision:** `apps/*-mobile` use `jest-expo` (Jest 29 — the line `jest-expo` 57
+is built on). Everything else uses Vitest. Both are invoked through the same
+`pnpm test` / Turborepo task, so the split is invisible from the command line.
+
+`@platform/*` packages publish ESM only. Jest 29 runs CommonJS, so the mobile
+apps map `@platform/<name>` to the package's `src/index.ts` and let
+`babel-preset-expo` transform it. Mobile tests therefore exercise source, not
+built output; `pnpm build` verifies the built output separately.
+
+**Alternatives:** (a) Jest everywhere — a second transform pipeline for the web
+apps, and slower. (b) Vitest everywhere — would require hand-maintaining a React
+Native environment that Expo already ships. (c) Dual CJS/ESM builds for every
+shared package — real complexity in exchange for removing a three-line
+`moduleNameMapper`.
+
+**Consequences:** Two runners means two sets of matchers and two config shapes;
+a test helper written for one does not work in the other. Accepted. If a mobile
+test ever passes against source while the built package is broken, `pnpm build`
+is the check that catches it — which is why build stays a required CI step
+rather than an optional one.
+
+**Affects:** `apps/*-mobile`, `apps/admin-dashboard`, `packages/*`, CI.

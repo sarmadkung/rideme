@@ -45,6 +45,13 @@ for Zod schemas. `025` specifies Go domain entities. Neither document says how t
 sync — hand-maintained, generated from Go, or generated from a schema (OpenAPI/protobuf).
 `193-api-contracts` and `331-api-contract-testing` are Tier C and add nothing.
 
+**Now concrete.** Phase 1 already duplicated one contract by hand: the error
+taxonomy exists in `services/api/pkg/httpx/errors.go` and again in
+`packages/types/src/errors.ts`, with the health envelope duplicated alongside it
+and re-expressed a third time as Zod in `packages/validation`. Three hand-kept
+copies of one contract, today, with no domain payloads yet. Each is marked with a
+pointer back to this item.
+
 **Relevant documents:** `023`, `025`, `193`, `331`, `014-api-specification`
 
 **Decision required:** The source of truth for the API contract, and the generation direction.
@@ -55,10 +62,12 @@ sync — hand-maintained, generated from Go, or generated from a schema (OpenAPI
 - **Generate TS from Go** — single source of truth, needs tooling.
 - **OpenAPI as contract, generate both** — strongest guarantee, most setup.
 
-**Recommended:** Defer to the first API slice, then choose deliberately with an ADR. **Phase 1
-does not need it** — no API surface is built in the foundation slice.
+**Recommended:** Choose now, at the start of Phase 3, with an ADR. The cost of
+deciding late is that every duplicated contract has to be migrated, and the
+duplication only grows.
 
-**Status:** OPEN — does not block Phase 1. Must be settled before the first endpoint.
+**Status:** OPEN — **due immediately.** Phase 1 shipped without it, as planned,
+but three copies of one envelope already exist.
 
 ---
 

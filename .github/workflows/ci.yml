@@ -1,0 +1,169 @@
+# Pull-request quality gate (documents 23 and 170).
+#
+# Two independent paths, because the repository holds two toolchains (ADR-001).
+# Each runs only when its own surface changes, which is document 170's
+# "affected-project detection" applied at the granularity this repository has.
+#
+# E2E gets its own workflow when there is a journey to exercise. There is none
+# in the foundation slice.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect affected surfaces
+    runs-on: ubuntu-latest
+    outputs:
+      workspace: ${{ steps.filter.outputs.workspace }}
+      api: ${{ steps.filter.outputs.api }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            workspace:
+              - 'apps/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+              - 'tsconfig.base.json'
+              - 'eslint.config.mjs'
+              - '.github/workflows/ci.yml'
+            api:
+              - 'services/api/**'
+              - '.github/workflows/ci.yml'
+
+  workspace:
+    name: JavaScript workspace
+    needs: changes
+    if: needs.changes.outputs.workspace == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Format check
+        run: pnpm format:check
+
+  api:
+    name: Go API
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/api/go.mod
+          cache-dependency-path: services/api/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt -w:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Unit tests
+        run: go test -race ./...
+
+  api-integration:
+    name: Go API — integration
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: logistics
+          POSTGRES_PASSWORD: logistics
+          POSTGRES_DB: logistics_dev
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U logistics -d logistics_dev"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      nats:
+        image: nats:2-alpine
+        ports: ['4222:4222']
+    env:
+      DATABASE_URL: postgres://logistics:logistics@localhost:5432/logistics_dev?sslmode=disable
+      REDIS_URL: redis://localhost:6379/0
+      NATS_URL: nats://localhost:4222
+      JWT_SECRET: ci-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/api/go.mod
+          cache-dependency-path: services/api/go.sum
+
+      # Proves the migration mechanism is reversible on every pull request,
+      # not just the first time someone tries to roll back in production.
+      - name: Migrate up, down, up
+        run: |
+          go run ./cmd/migrate up
+          go run ./cmd/migrate down
+          go run ./cmd/migrate up
+          go run ./cmd/migrate version
+
+      - name: Integration tests
+        run: go test -tags=integration ./tests/...

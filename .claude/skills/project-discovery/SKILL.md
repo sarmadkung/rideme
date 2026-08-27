@@ -36,7 +36,34 @@ Give one cheap, repeatable answer to "what is this repo and what already exists?
 
 **Backend modules** (`09`): identity, users, drivers, vehicles, documents, jobs, dispatch, pricing, payments, wallet, ratings, support, merchants, notifications, zones, fraud, analytics.
 
-**Current repository state: documentation only.** No `apps/`, no `services/`, no `packages/`, no package manager, no Go module, no CI. Every implementation task is greenfield until this section says otherwise.
+**Current repository state: Phase 1 foundation complete.** The repository runs;
+it has no product functionality.
+
+```text
+apps/customer-mobile   Expo SDK 57 · RN 0.86 · placeholder shell
+apps/driver-mobile     Expo SDK 57 · RN 0.86 · placeholder shell
+apps/admin-dashboard   React 19 · Vite 7 · placeholder shell
+apps/merchant-dashboard, apps/marketing-web   reserved directories, not scaffolded
+packages/              @platform/{types,validation,api-client,auth,ui,maps,config}
+services/api/          Go 1.25 · own module · health only, no domain code
+infra/docker/          postgres+postgis · redis · nats · minio
+.github/workflows/ci.yml   two independent paths, affected-surface gated
+Makefile               make help lists every developer command
+```
+
+What exists in the Go service: `pkg/{config,database,cache,messaging,httpx,observability,health}`,
+`cmd/api`, `cmd/migrate`, one migration (PostGIS + pgcrypto).
+`internal/` is **empty on purpose** — domain modules start in Phase 5, and the
+module list is still open (ADR-004).
+
+What does *not* exist: any domain model, any real endpoint, authentication,
+NATS subjects, WebSocket gateway, UI beyond a placeholder, native modules,
+E2E infrastructure, Terraform. Do not assume otherwise; search first.
+
+Conventions already fixed by the foundation, worth knowing before writing code:
+error taxonomy and its HTTP mapping live only in `pkg/httpx`; configuration is
+loaded and validated once in `pkg/config` and never read from the environment
+elsewhere; migrations run only from `cmd/migrate`, never on startup.
 
 # The Documentation Tier Map
 
