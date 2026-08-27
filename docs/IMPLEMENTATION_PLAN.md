@@ -58,6 +58,13 @@ infrastructure comes up under Docker, migrations apply and roll back, all
 quality gates pass. No product functionality exists. Evidence per task is in
 `IMPLEMENTATION_STATUS.md`.
 
+One criterion is outstanding and cannot be closed locally: remote CI has never
+executed. Run 33077085568 on pull request #1 was triggered correctly on
+2026-08-27 and every job failed to start — the GitHub account is locked for
+billing. This is external to the repository. Under
+`IMPLEMENTATION_EXECUTION_POLICY.md` it does not block implementation; remote CI
+verification is a milestone activity, not a per-change gate.
+
 **Next: Phase 3 — backend foundation.** Phase 2 as originally drawn was
 infrastructure hardening; its local half landed inside Phase 1 (Docker, health,
 observability, error taxonomy, migration mechanism) and its cloud half belongs

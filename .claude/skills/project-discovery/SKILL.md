@@ -77,6 +77,14 @@ Tier C is 78% of the words and almost none of the information.
 
 Practical consequence: to learn what the platform *does*, read Tier A. To learn what still needs *building*, scan Tier C titles.
 
+# Policy
+
+Progressive documentation loading is §B of
+**`docs/IMPLEMENTATION_EXECUTION_POLICY.md`**, and the tier map below is what
+makes it work. §K forbids re-reading documentation, repeating completed audits,
+and inspecting unrelated source trees. This file exists so none of that is
+necessary.
+
 # Rules
 
 - Verify before trusting this file. It is a cache, not scripture — if it disagrees with the repo, the repo wins and you update this file.

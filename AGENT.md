@@ -38,6 +38,39 @@ The platform includes:
 
 ---
 
+# 1a. Execution Policy
+
+**`docs/IMPLEMENTATION_EXECUTION_POLICY.md` defines this project's
+implementation-efficiency and verification policy. It is the source of truth for
+*how* implementation work is performed.**
+
+It governs: the primary objective (implement quickly while keeping quality
+sufficient), progressive documentation loading, the implementation loop, CI
+priority, proportional testing, E2E restraint, build scope, architecture and
+business-decision handling, code quality, token efficiency, autonomous
+execution, progress tracking, commits, and stop conditions.
+
+That policy is not restated here. Read it; do not infer it from this document.
+
+Where these instructions and the execution policy differ on *how* work is
+performed, **the execution policy wins** — it was written against the built
+repository, this document against an empty one. Where they differ on *what* is
+built, the Tier A documentation (`00`–`190`) governs both.
+
+The hierarchy:
+
+```text
+AGENT.md                              mission and protocol
+    ↓
+IMPLEMENTATION_EXECUTION_POLICY.md    how work is performed
+    ↓
+implementation skills                 the operational loop
+    ↓
+authoritative documentation           what to build (Tier A)
+    ↓
+implementation  →  targeted verification
+```
+
 # 2. Documentation Is the Source of Truth
 
 The `/docs` directory contains the project's implementation documentation.

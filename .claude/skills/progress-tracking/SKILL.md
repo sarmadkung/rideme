@@ -60,6 +60,13 @@ Level 0 — the status file is documentation. Its *content* must reflect verific
 
 - Cannot determine whether something is genuinely implemented → mark `NOT_STARTED` and note the uncertainty. Never guess upward.
 
+# Policy
+
+§M of **`docs/IMPLEMENTATION_EXECUTION_POLICY.md`** governs this: record task,
+status, a one-line summary, verification performed, and blockers — and nothing
+more. **Do not create additional progress documents.** The control layer is
+fixed at seven files; a new one has to earn its place.
+
 # Relevant Documentation
 
 `docs/443-agent-progress-state.md` · `docs/444-agent-final-execution-protocol.md` · `docs/564-agent-workflow-execution-spec.md` (all Tier C — intent only)
