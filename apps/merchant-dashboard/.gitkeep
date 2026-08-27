@@ -1,0 +1,2 @@
+Scaffolded in its own slice (React + Vite + TypeScript, per ADR-002).
+Phase 1 reserves the directory only — see docs/FIRST_IMPLEMENTATION_SLICE.md.

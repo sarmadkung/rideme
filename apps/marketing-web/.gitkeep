@@ -1,0 +1,2 @@
+Scaffolded in its own slice (Next.js + TypeScript, per ADR-002 — the only place
+Next.js is used). Phase 1 reserves the directory only.
