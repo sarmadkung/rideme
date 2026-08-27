@@ -11,6 +11,13 @@ Turn a task into working code in one pass, without rediscovering the platform ea
 
 Every implementation unit. If you are about to write or change application code, you are in this loop.
 
+# Policy
+
+This loop implements §C of **`docs/IMPLEMENTATION_EXECUTION_POLICY.md`**, under
+§A: implement as quickly as possible while keeping quality sufficient. Read the
+policy for documentation loading (§B), code quality (§J), autonomous execution
+(§L) and stop conditions (§O). It is not restated here.
+
 # Rules
 
 - Context established earlier in the session is still valid. Do not re-derive the stack, the layout, or the domain model — `project-discovery` holds them.
@@ -32,6 +39,9 @@ Every implementation unit. If you are about to write or change application code,
 7. **Review the diff** — `git diff`. Look for accidental scope, duplicated abstractions, leaked secrets, client-side authority.
 8. **Update** `docs/IMPLEMENTATION_STATUS.md` with the honest status.
 9. **Continue** to the next unblocked task, or stop if blocked.
+
+Do not stop because CI has not run, unrelated E2E has not run, or a
+future-domain business decision is unresolved (policy §O).
 
 # Verification
 

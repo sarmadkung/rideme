@@ -61,6 +61,14 @@ Level 0 — analysis changes nothing.
 - Dependents cannot be enumerated (dynamic dispatch, reflection, string-keyed handlers) → say so and escalate the level rather than guessing narrow.
 - The change touches a Level 5 surface with no test coverage at all → block; that gap is the task.
 
+# Policy
+
+This skill produces the impact input that §E of
+**`docs/IMPLEMENTATION_EXECUTION_POLICY.md`** turns into a verification level.
+The four gates above are how §F (E2E restraint) and §G (build scope) are applied
+in practice: the default answer to each is *no*, and widening requires a reason
+you can state.
+
 # Relevant Documentation
 
 `docs/407-dependency-rules.md` · `docs/406-package-boundaries.md` · `docs/376-event-versioning.md` · `docs/375-api-versioning.md` · `docs/389-realtime-resynchronization.md`

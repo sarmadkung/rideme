@@ -49,7 +49,7 @@ Verified 2026-08-27 against the acceptance criteria in `FIRST_IMPLEMENTATION_SLI
 | `driver-mobile` shell (Expo) | VERIFIED | 5 | YES | as above |
 | Environment files + gitignore | VERIFIED | 3 | YES | `.env.local` ignored; public-prefix secret leak rejected at load |
 | Testing harness (TS + Go) | VERIFIED | n/a | YES | Vitest, jest-expo, `go test`; integration behind a build tag |
-| CI foundation (GitHub Actions) | IMPLEMENTED | n/a | **NO** | YAML valid and affected-surface gated; **not yet observed green on a PR** |
+| CI foundation (GitHub Actions) | IMPLEMENTED | n/a | **NO** | workflow parsed, registered and triggered; **execution blocked externally** — see below |
 | Root README.md | VERIFIED | n/a | YES | clone-to-running path executed |
 | Update `verification-lite` commands | VERIFIED | n/a | YES | real per-surface commands replace the Level-0 placeholder |
 | Update `project-discovery` repo state | VERIFIED | n/a | YES | ground truth now describes the built repository |
@@ -89,11 +89,43 @@ NATS subject, WebSocket, native module, E2E harness or Terraform exists.
 | B-2 — Go ↔ TS type strategy | first endpoint (Phase 3) | `BLOCKED_TASKS.md` — now concrete: the error taxonomy is hand-duplicated in `pkg/httpx/errors.go` and `packages/types/src/errors.ts` |
 | B-3 — 19 business rules | Phase 3 onward | `BUSINESS_DECISION_REGISTER.md` |
 
+## CI Execution Attempt
+
+| | |
+|---|---|
+| **Run** | [33077085568](https://github.com/sarmadkung/rideme/actions/runs/33077085568) — pull request [#1](https://github.com/sarmadkung/rideme/pull/1) |
+| **Date** | 2026-08-27 13:29 UTC |
+| **Trigger** | `pull_request`, branch `feat/phase-1-foundation` → `main` |
+| **Result** | **FAILURE — no job executed** |
+| **Cause** | `The job was not started because your account is locked due to a billing issue.` |
+
+| Job | Status |
+|---|---|
+| Detect affected surfaces | failure — runner never started |
+| JavaScript workspace | skipped (depends on the above) |
+| Go API | skipped |
+| Go API — integration | skipped |
+
+**What this does and does not tell us.** GitHub parsed the workflow, registered
+it as active, and triggered it on the pull request, so the YAML is valid and the
+triggers are correct. Beyond that, nothing was proven: no step ran, so the
+install, lint, typecheck, test, build, `gofmt`, `go vet` and migration
+up/down/up jobs are all unexecuted remotely.
+
+This is an account-level billing lock, not a repository, permission or
+configuration defect. It cannot be fixed from within the repository.
+
+**Acceptance criterion 12 — "CI runs both paths and is green on a pull request"
+— remains UNVERIFIED.** It is the only Phase 1 criterion in that state; the
+other thirteen were verified locally with observed command output. Per the
+implementation execution policy, remote CI verification is deferred to a
+milestone rather than blocking implementation.
+
 ## Carried Into Phase 2
 
 | Item | Why it matters |
 |---|---|
-| CI has never run | The workflow is valid YAML with correct steps, but "CI is green" is unproven until a pull request runs it. First PR settles it. |
+| CI has never executed | Attempted 2026-08-27 and blocked by an account billing lock, not by the configuration. Re-attempt when billing is restored; until then Phase 1 is complete on local evidence with criterion 12 outstanding. |
 | Error taxonomy duplicated across Go and TypeScript | Two hand-maintained lists that must agree. Harmless now, expensive when a payment payload drifts. B-2. |
 | `postgis/postgis:16-3.4` is amd64-only | Runs under emulation on Apple Silicon. Works, but slower; a multi-arch image is worth evaluating if it bites. |
 | MinIO runs with no consumer | Deliberate — the local environment should match the deployed one — but nothing verifies it beyond the container health check. |

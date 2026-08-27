@@ -52,7 +52,7 @@ The repository holds two toolchains (ADR-001). Pick by what the change touched.
 | Whole workspace | `pnpm typecheck` | `pnpm lint` | `pnpm test` | `pnpm build` |
 | One Go package | `go vet ./pkg/<name>/...` | `gofmt -l pkg/<name>` | `go test ./pkg/<name>/...` | `go build ./...` |
 | Whole Go service | `go vet ./...` | `make api-lint` | `go test -race ./...` | `go build ./...` |
-| Everything | — | — | — | `make verify` |
+| Everything (milestone) | — | — | — | `make verify` |
 
 Go commands run from `services/api/`. Turborepo already skips unaffected
 packages and caches unchanged ones, so a scoped `--filter` is about intent, not
@@ -80,15 +80,32 @@ Postgres, Redis or NATS. A migration must be applied **and rolled back** locally
 E2E journey covering it. No E2E infrastructure exists yet; when a Level 4 change
 arrives before it does, say so rather than claiming coverage.
 
-**Level 5** — `make verify`, plus `-race`, plus the failure paths listed above.
-Infrastructure changes (`docker-compose.yml`, CI, Makefile) are Level 5: bring
-the stack down and up from clean, confirm every service reachable, migrations
-reversible, health accurate in both directions.
+**Level 5** — comprehensive verification of **everything the change affects**,
+plus `-race` on the Go side, plus the failure paths above. Comprehensive means
+every affected surface, not every surface: a payment change does not rebuild the
+mobile apps (policy §G).
+
+`make verify` runs both toolchains end to end. Reach for it at a milestone, or
+when a change genuinely spans both — not as the default Level 5 command.
+
+Infrastructure changes (`docker-compose.yml`, CI, Makefile) are Level 5 because
+their blast radius is the whole developer environment: bring the stack down and
+up from clean, confirm every service reachable, migrations reversible, health
+accurate in both directions.
 
 # Blocking Conditions
 
 - Required test infrastructure does not exist yet → say so plainly and state what was actually verified. Do not describe unrun tests as passing.
 - A Level 5 area cannot be tested (no local payment sandbox, no seeded concurrency harness) → block rather than ship unverified financial or dispatch behavior.
+
+# Policy
+
+Levels and their triggers are defined by **`docs/IMPLEMENTATION_EXECUTION_POLICY.md`**
+(§E testing, §F E2E, §G build). This skill holds the commands; the policy holds
+the rule. If they diverge, the policy is right and this file needs fixing.
+
+Remote CI is not part of any level (§D). Local verification is what gates a
+change during development.
 
 # Relevant Documentation
 
