@@ -1,1 +1,35 @@
+# OS
 .DS_Store
+
+# Environment — never commit secrets
+.env
+.env.local
+.env.test
+.env.*.local
+!.env.example
+
+# Node
+node_modules/
+.pnpm-store/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+out/
+.next/
+.expo/
+.turbo/
+*.tsbuildinfo
+coverage/
+
+# Go
+services/api/bin/
+services/api/tmp/
+
+# Editors / tooling
+.vscode/
+.idea/
+.serena/
