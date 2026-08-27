@@ -130,14 +130,17 @@ application code exists yet**, so everything is Level 0 until the foundation lan
 
 ## 4. Token-Efficiency Strategy
 
-1. **The documentation tier map.** `docs/` is 565 files but not uniformly useful:
-   - **Tier A (`00`–`190`)** — substantive: schemas, state machines, formulas, event names.
-   - **Tier B (`245`–`364`)** — one real Objective line plus generic requirements.
-   - **Tier C (`191`–`244`, `365`–`564`)** — ~240 files sharing three near-identical templates;
-     unique content per file ≈ one sentence. **Topic index only.**
+1. **The documentation tier map.** 564 numbered documents, not uniformly useful. Refined by
+   structural signature clustering (see `DOCUMENT_AUDIT.md`):
+   - **Tier A (`000`–`190`)** — 190 docs, 28,321 words. Substantive: schemas, state machines,
+     formulas, event names.
+   - **Tier B (`191`–`204`)** — 14 docs, thin architectural restatements.
+   - **Tier C (`205`–`564`)** — **360 docs, 109,600 words: nine template batches of exactly 40.**
+     Within a batch only the title and a one-sentence Objective vary. **Topic index only.**
 
-   Encoded once in `project-discovery`. Without it, an agent reading "authoritative
-   specifications" in numeric order burns enormous context on boilerplate and learns nothing.
+   Tier C is 78% of the words and almost none of the information. Encoded once in
+   `project-discovery`. Without it, an agent reading "authoritative specifications" in numeric
+   order burns ~110,000 words of boilerplate and learns nothing.
 
 2. **Reference, never copy.** Skills cite document numbers. No documentation is duplicated
    into a SKILL.md — every fact carries its source so the agent reads only what the task needs.
@@ -159,11 +162,12 @@ Recorded rather than invented. Each becomes a `docs/BLOCKED_TASKS.md` entry when
 
 ### Documentation structure
 
-- **~240 documents are template boilerplate** (`191`–`244`, `365`–`564`). The control documents
-  the AGENT.md protocol depends on are among them: `366` names a dependency graph but contains
-  none; `367` names phases but lists none; `368` names a work queue but defines none. **The
-  documented execution protocol has no machine-readable substrate.** `dependency-planning`
-  compensates by deriving order from Tier A architecture instead.
+- **360 documents are template boilerplate** (`205`–`564`, in nine batches of 40). The control
+  documents the AGENT.md protocol depends on are among them: `366` names a dependency graph but
+  contains none; `367` names phases but lists none; `368` names a work queue but defines none.
+  **The documented execution protocol has no machine-readable substrate.** `dependency-planning`
+  compensates by deriving order from Tier A architecture; `IMPLEMENTATION_PLAN.md` holds the
+  derived spine. Recorded as ADR-005 and BLOCKED_TASKS B-1.
 - **Document 11 is absent** from the numbering. A gap, not a missing dependency.
 
 ### Architecture conflicts
@@ -176,7 +180,8 @@ Recorded rather than invented. Each becomes a `docs/BLOCKED_TASKS.md` entry when
 
 ### Undocumented business rules
 
-These are product/commercial decisions. No skill invents them:
+These are product/commercial decisions. No skill invents them. Each is now classified in
+**`BUSINESS_DECISION_REGISTER.md`** with a blocking timeline — 0 block Phase 1:
 
 | Gap | Blocks |
 |---|---|
@@ -199,6 +204,27 @@ These are product/commercial decisions. No skill invents them:
 | Tracking frequency per job state (battery vs accuracy) | `mobile-location` |
 | Offline queue expiry windows; which mutations may queue | `mobile-offline-sync` |
 | Mobile performance budgets | `mobile-performance` |
+
+### Control layer
+
+These skills operate against the control documents, all of which now exist:
+
+| File | Role |
+|---|---|
+| `DOCUMENT_AUDIT.md` | Tier map and counts — the input to every reading decision |
+| `DOCUMENT_CONFLICTS.md` | 5 conflicts, 4 resolved, 1 deferred |
+| `ARCHITECTURE_DECISIONS.md` | ADR-001 … ADR-005 |
+| `BUSINESS_DECISION_REGISTER.md` | 19 business rules, classified with a blocking timeline |
+| `IMPLEMENTATION_PLAN.md` | Derived dependency spine + token-efficiency policy |
+| `IMPLEMENTATION_STATUS.md` | Honest per-task status |
+| `IMPLEMENTATION_READINESS.md` | READY / BLOCKED / NOT_REQUIRED_YET assessment |
+| `FIRST_IMPLEMENTATION_SLICE.md` | Phase 1 scope and acceptance criteria |
+| `BLOCKED_TASKS.md` | B-1 … B-3 |
+
+The standing token-efficiency policy — documentation dependency + change impact + targeted
+verification, with full verification reserved for milestones and high-risk changes — is recorded
+in `IMPLEMENTATION_PLAN.md` and enforced by `project-discovery`, `change-impact-analysis`, and
+`verification-lite`.
 
 ### Adjacent-by-design pairs
 

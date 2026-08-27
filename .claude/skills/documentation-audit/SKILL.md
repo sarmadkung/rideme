@@ -23,10 +23,12 @@ Classify documentation cheaply and record disagreements instead of silently pick
 
 # Known Findings (already established — do not re-derive)
 
-1. **~240 docs are template boilerplate** (`191`–`244`, `365`–`564`). Three near-identical templates. Unique content per file ≈ one Objective sentence.
+1. **360 docs are template boilerplate** (`205`–`564`), in nine batches of exactly 40, each batch sharing one template. Unique content per file ≈ one Objective sentence. Full analysis in `docs/DOCUMENT_AUDIT.md` — do not re-derive it.
 2. **Backend language conflict.** `docs/04` and `docs/12` lock the backend to **Go**; `AGENT.md` Phase 1 prescribes a TypeScript-wide toolchain ("TypeScript configuration", `typecheck`). Go applies to `services/api/`, TS to `apps/` and `packages/`. Recorded, not silently resolved.
 3. **Web framework drift.** `docs/04` says "Web: Next.js"; `docs/12` splits it — React+Vite for admin/merchant, Next.js for marketing only. `12` is the later, more specific "Locked Stack" and wins.
-4. **Document 11 does not exist.** Numbering gap, not a missing dependency.
+4. **Document 11 does not exist.** Numbering gap, not a missing dependency. **Document 564 does exist** — an earlier pass reported it missing; that was wrong.
+
+5. **Conflicts are catalogued** in `docs/DOCUMENT_CONFLICTS.md` (C-1 … C-5) with resolutions in `docs/ARCHITECTURE_DECISIONS.md` (ADR-001 … ADR-005). Check there before re-investigating.
 
 # Workflow
 

@@ -40,11 +40,13 @@ Give one cheap, repeatable answer to "what is this repo and what already exists?
 
 # The Documentation Tier Map
 
-565 files in `docs/`, numbered 0–564 (11 is absent). They are **not** uniformly useful:
+564 numbered documents in `docs/` (0–564; **11 is the only one absent**). They are **not** uniformly useful — verified by structural signature clustering, see `docs/DOCUMENT_AUDIT.md`:
 
-- **Tier A — substantive (`00`–`190`).** Real decisions: schemas, state machines, formulas, event names. Read these.
-- **Tier B — thin but specific (`245`–`364`).** One real Objective line plus generic requirements. Read the Objective; skim the rest.
-- **Tier C — template boilerplate (`191`–`244`, `365`–`564`).** ~240 files sharing near-identical Rules / Implementation Tasks / Acceptance Criteria text. **Their only unique content is the title and a one-sentence Objective.** Use them as a topic index — never read them in bulk expecting specification detail.
+- **Tier A — substantive (`000`–`190`).** 190 docs, 28,321 words. Real decisions: schemas, state machines, formulas, event names. Read these.
+- **Tier B — thin restatement (`191`–`204`).** 14 docs, 105–338 words each. Read the Objective; expect no depth.
+- **Tier C — template boilerplate (`205`–`564`).** **360 docs, 109,600 words, in nine batches of exactly 40** — each batch sharing one section-header signature and near-identical body text. Within a batch, only the title and a one-sentence Objective vary. Use as a topic index; never read in bulk expecting specification detail.
+
+Tier C is 78% of the words and almost none of the information.
 
 Practical consequence: to learn what the platform *does*, read Tier A. To learn what still needs *building*, scan Tier C titles.
 
