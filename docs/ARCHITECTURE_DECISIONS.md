@@ -144,3 +144,136 @@ is the check that catches it — which is why build stays a required CI step
 rather than an optional one.
 
 **Affects:** `apps/*-mobile`, `apps/admin-dashboard`, `packages/*`, CI.
+
+---
+
+## ADR-007 — Go is authoritative for the wire contract; TypeScript is generated
+
+**Date:** 2026-08-28 · **Status:** Accepted · **Resolves:** B-2
+
+**Context:** `023` specifies `@platform/types` for shared types and
+`@platform/validation` for Zod schemas; `025` specifies Go domain entities.
+Neither says how the two stay in sync. Phase 1 shipped with the consequence:
+one error taxonomy existed three times — Go constants in `pkg/httpx`, a
+TypeScript union in `@platform/types`, a Zod enum in `@platform/validation` —
+each hand-maintained, with no domain payloads yet. Three copies of one envelope
+before the first endpoint. B-2.
+
+**Decision:** The Go types in `services/api` are the single source of truth for
+every shape the API puts on the wire. `packages/types/src/generated.ts` and
+`packages/validation/src/generated.ts` are generated from them by
+`services/api/cmd/contractgen`, which reflects over the registered Go structs.
+`make contracts` regenerates; `make contracts-check` fails when the checked-in
+output is stale and runs inside `make verify`.
+
+Hand-written TypeScript may not declare a wire shape. It may add what
+generation cannot: runtime guards over generated values, and display
+formatting.
+
+**Why generate from Go rather than from OpenAPI.** OpenAPI would be a third
+artifact to keep true, and its guarantee is only as good as the hand-written
+spec. The Go type is what actually serializes the response — generating from it
+means the emitted TypeScript cannot describe a shape the server does not serve.
+Drift is not detected; it is unrepresentable.
+
+**Why reflection rather than a code-generation framework.** The registry is one
+Go file with no dependencies outside the standard library. It understands the
+shapes this platform puts on the wire and **fails generation** on anything else,
+so an unmappable type is a build error rather than an approximation. The
+execution policy forbids speculative infrastructure; a schema compiler for a
+contract of nine types would be exactly that.
+
+**Alternatives:** (a) Keep three hand-maintained copies — the status quo that
+produced this ADR; drift in a financial or dispatch payload is expensive and
+silent. (b) OpenAPI as the contract, generating both sides — the strongest
+guarantee on paper, but the largest setup and a third artifact that can itself
+be wrong. Revisit if the API is ever consumed by a client outside this
+repository, which is the case OpenAPI actually answers.
+
+**Consequences:** A contract change is a Go change plus `make contracts`. The
+registration list in `cmd/contractgen` is still written by hand and is
+guarded by tests that fail when a Go constant is added without being
+registered. Clients cannot introduce a payload type unilaterally — correct, as
+the backend is authoritative for every contract.
+
+**Affects:** `services/api/pkg/contract`, `services/api/cmd/contractgen`,
+`packages/types`, `packages/validation`, `Makefile`, CI.
+
+---
+
+## ADR-008 — Money is an integer count of minor units, bounded by JavaScript's safe range
+
+**Date:** 2026-08-28 · **Status:** Accepted · **Implements:** BD-07
+
+**Context:** BD-07 is classified `TECHNICAL_DEFAULT` and recommends integer
+minor units in a single currency, rounded once at the final customer-facing
+amount, half-up. It is due before any code touches an amount. `019` shows whole
+rupees and states no representation; `451` is Tier C and states nothing.
+
+**Decision:** Adopt the register's recommendation, explicitly.
+`services/api/pkg/money` holds `Amount{Minor int64, Currency}`. No float64
+appears in any monetary path. Rounding happens in exactly one place —
+`ApplyRate`, which takes a rate as an integer numerator and denominator and
+rounds half away from zero — so "round once, at the end" is enforceable rather
+than aspirational. `Allocate` splits an amount so the parts sum to exactly the
+whole, because a remainder dropped in a ledger is an unexplained imbalance.
+
+Amounts are additionally bounded to ±`MaxSafeMinor`
+(9,007,199,254,740,991 — JavaScript's `Number.MAX_SAFE_INTEGER`), on both
+sides of the wire. Beyond it a TypeScript client silently loses precision on a
+value the server still holds exactly; rejecting is the only behaviour that
+keeps the two in agreement. The bound is ~90 trillion PKR and constrains
+nothing real.
+
+**Clients do no money arithmetic.** `@platform/types` exports the generated
+`Money` type and `formatMoney` for display, and nothing else. A fare added up
+in a browser is a second implementation of a rule that already lives on the
+server.
+
+**Alternatives:** (a) Decimal string on the wire — avoids the JS bound entirely
+but makes every client parse before it can compare, and invites a float on the
+other side of that parse. (b) `numeric` all the way through with a big-decimal
+type — heavier than a single-currency platform in paisa needs. (c) Serialise
+the integer as a string — safe past the bound, at the cost of every consumer
+converting; the bound makes it unnecessary.
+
+**Consequences:** Currency is carried on every amount even though the platform
+is single-currency, so a second currency is a schema change rather than a
+silent reinterpretation of every stored integer. Rates are integers: a 12.5%
+commission is `ApplyRate(125, 1000)`, never `0.125`. This ADR fixes the
+representation only — **no rate, fee, commission or fare value is encoded
+anywhere.** BD-01, BD-02, BD-05 and BD-13 remain open.
+
+**Affects:** `services/api/pkg/money`, `packages/types`, `packages/validation`,
+and every phase from 7 onward that touches an amount.
+
+---
+
+## ADR-009 — List responses are cursor-paginated
+
+**Date:** 2026-08-28 · **Status:** Accepted
+
+**Context:** The Phase 2 roadmap requires pagination conventions. No Tier A
+document specifies a pagination strategy — `178` names pagination only as a
+testing topic. This is an engineering decision with no documented answer, so it
+is recorded rather than assumed.
+
+**Decision:** List responses carry `PageInfo{next_cursor, limit}`. The cursor is
+opaque: clients pass it back unmodified and never construct or parse one.
+`limit` defaults to 25 and is capped at 100; a request above the cap is clamped
+rather than rejected.
+
+**Why cursor rather than offset.** The platform's lists are time-ordered and
+actively written to — jobs, driver locations, ledger entries. An offset into a
+list that is growing at the head skips and repeats rows as it shifts, which for
+a ledger means an operator paging through entries can miss one. A cursor does
+not have that failure mode.
+
+**Alternatives:** Offset/limit — simpler to implement and to jump within, and
+wrong for exactly the lists that matter most here.
+
+**Consequences:** Endpoints cannot cheaply offer "jump to page N". No list
+endpoint exists yet, so nothing is migrated. Cursor encoding is decided by the
+first list endpoint, in Phase 3 or later; only the envelope is fixed here.
+
+**Affects:** `services/api/pkg/httpx`, `packages/types`, every list endpoint.

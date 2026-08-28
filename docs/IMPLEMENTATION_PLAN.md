@@ -4,6 +4,17 @@ Derived from Tier A architecture, **not** from document numbering. Documents `36
 dependency graph, phase list, and work queue but contain none (ADR-005, B-1) — this file is the
 working substitute.
 
+> **Phase ordering is now governed by `MASTER_IMPLEMENTATION_ROADMAP.md`.** The dependency
+> spine below remains the reasoning behind it; the roadmap holds the executed order and a
+> translation table between the two numberings.
+>
+> Two things below are superseded by owner decisions of 2026-08-28 (C-6 / R-2, R-5):
+> **pricing has no phase of its own** — it is a shared capability (CAP-1) whose boundary is
+> created by the ride slice; and the "clients grow alongside the slices" principle is
+> **upheld**, with Phases 12 and 13 acting as consolidation phases rather than horizontal
+> builds. Four further capabilities — maps/ETA, safety/fraud, notifications, analytics — are
+> staged as cross-cutting tracks (CAP-2 … CAP-5) inside the existing 15 phases.
+
 ## Sequencing Principle
 
 Build vertical slices. One working path through database → backend → API → realtime → client →
@@ -65,6 +76,10 @@ billing. This is external to the repository. Under
 `IMPLEMENTATION_EXECUTION_POLICY.md` it does not block implementation; remote CI
 verification is a milestone activity, not a per-change gate.
 
+**Roadmap Phase 2 (contracts) completed 2026-08-28** — B-2 closed by ADR-007, BD-07
+implemented as ADR-008, CAP-5 envelope in place. Next is roadmap Phase 3 (identity
+and auth). The paragraph below describes the same work under the old numbering.
+
 **Next: Phase 3 — backend foundation.** Phase 2 as originally drawn was
 infrastructure hardening; its local half landed inside Phase 1 (Docker, health,
 observability, error taxonomy, migration mechanism) and its cloud half belongs
@@ -114,8 +129,9 @@ assignment, auth, or concurrency is touched — regardless of how small the diff
 
 | Item | Due by | Tracked in |
 |---|---|---|
-| Go ↔ TypeScript shared type strategy | **now** — one contract is already duplicated | B-2 |
+| ~~Go ↔ TypeScript shared type strategy~~ | **resolved 2026-08-28** | ADR-007 |
 | Backend module list reconciliation | first domain module (Phase 5) | ADR-004, C-5 |
-| Money representation and rounding | before any financial code (Phase 3) | BD-07 |
+| ~~Money representation and rounding~~ | **resolved 2026-08-28** | ADR-008 |
 | Ride commercial rules | Phase 9 | BD-01 … BD-06 |
+| Messaging/OTP capability | **roadmap Phase 3 — required by `020`/`028`** | CAP-4, C-6 |
 | Retention policies | before production launch | BD-15, BD-16 |

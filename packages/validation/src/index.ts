@@ -1,42 +1,20 @@
 /**
- * Zod schemas shared across clients (document 23).
+ * Runtime validation for the wire contract (document 23).
  *
- * Phase 1 covers only the transport envelopes the Go API actually serves today:
- * the error envelope and the health response. Domain schemas belong to Phase 5.
+ * Every schema is generated from the same Go types as `@platform/types`
+ * (ADR-007), so a schema cannot describe a shape the types do not, or a shape
+ * the server does not serve. Do not hand-write a schema for an API payload —
+ * change the Go type and run `make contracts`.
  *
- * These schemas are the third hand-maintained copy of one contract — Go structs
- * in `services/api/pkg/httpx`, TypeScript types in `@platform/types`, Zod here.
- * Choosing a single source of truth is B-2 in docs/BLOCKED_TASKS.md and is due
- * before any domain payload is added.
+ * The division of labour: `@platform/types` is compile-time shape,
+ * `@platform/validation` is the runtime check at the boundary where untyped
+ * data arrives. Both come from one source.
  */
-import { z } from 'zod';
-import { ERROR_CODES } from '@platform/types';
+export * from './generated.js';
 
-export const errorCodeSchema = z.enum(ERROR_CODES);
-
-export const apiErrorBodySchema = z.object({
-  code: errorCodeSchema,
-  message: z.string(),
-  request_id: z.string(),
-  details: z.record(z.string(), z.string()).optional(),
-});
-
-export const healthStatusSchema = z.enum(['healthy', 'degraded', 'unhealthy']);
-
-export const dependencyHealthSchema = z.object({
-  name: z.string(),
-  status: healthStatusSchema,
-  latency_ms: z.number(),
-  error: z.string().optional(),
-});
-
-export const healthResponseSchema = z.object({
-  status: healthStatusSchema,
-  service: z.string(),
-  version: z.string(),
-  checked_at: z.string(),
-  dependencies: z.array(dependencyHealthSchema),
-});
+import type { apiErrorBodySchema, healthResponseSchema, moneySchema } from './generated.js';
+import type { z } from 'zod';
 
 export type ApiErrorBodyInput = z.infer<typeof apiErrorBodySchema>;
 export type HealthResponseInput = z.infer<typeof healthResponseSchema>;
+export type MoneyInput = z.infer<typeof moneySchema>;
