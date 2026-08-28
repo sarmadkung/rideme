@@ -613,10 +613,13 @@ Documents 163–176, 301.
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Production container | IMPLEMENTED | multi-stage, distroless, non-root, static binary; migrations travel with the binary that applies them |
+| Production container | IMPLEMENTED, **NOT BUILT** | multi-stage, distroless, non-root, static binary; migrations travel with the binary that applies them. The local build reached stage 4 of 6 and timed out in `go mod download` — the base image pulls under emulation on Apple Silicon. **The image has never been built end to end**, so the Dockerfile is unverified beyond its first four stages |
 | Migrations never run at startup | VERIFIED | separate `migrate` command, so a rolling deploy cannot have two instances migrating at once |
 | **Contract gate in CI** (ADR-007) | IMPLEMENTED | a Go type changed without regenerating fails the build instead of shipping a client describing a response the server no longer sends |
 | Structured logging, tracing, health probes | VERIFIED | Phase 1; unchanged |
+
+**Also unverified.** The container image itself — see above. It should be built in CI, where
+the base images are native, before anyone relies on it.
 
 **Not built.** Terraform, AWS networking, ECS services and scaling, production Postgres/Redis
 operations, secrets management, monitoring and alerting, backups and disaster recovery, CDN.
