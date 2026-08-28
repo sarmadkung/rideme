@@ -1,8 +1,8 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–7 are complete and verified.** A customer can be quoted, book a ride, track it and
-cancel it; a driver can run the trip to completion. Dispatch is Phase 8.
+**Phases 1–8 are complete and verified.** The ride vertical slice now runs end to end:
+quote → book → dispatch → accept → track → complete. One product decision (BD-04) is open.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -367,7 +367,67 @@ assigns drivers; `StartSearching` is the handoff. Cancellation **fees** and driv
 compensation are unwired (BD-01). No payment capture at completion — Phase 11. Parcel, cargo
 and grocery are refused rather than priced by the ride rule set; they arrive with their slices.
 
-## Phase 8+ — Not Started
+## Phase 8 — Dispatch Engine
+
+Verified 2026-08-28. Documents 05, 38, 39, 40, 42, 43, 44, 45, 46, 49.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Migration `000007` | VERIFIED | n/a | YES | up → down → up observed |
+| Candidate pipeline (`039`) | VERIFIED | n/a | YES | geo → availability → capability → vehicle → freshness → eligibility → scoring, in cost order |
+| **Eligibility is the Phase 5 implementation** | VERIFIED | n/a | YES | dispatch calls `eligibility.Evaluate`; it has no copy of the rules |
+| Expanding radius rings (`039`, `044`) | VERIFIED | 1 | YES | configurable rings, bounded attempts |
+| Weighted scoring (`040`) | VERIFIED | 11 | YES | every term in `040`'s formula, normalised before combination |
+| ETA preferred over distance (`040`) | VERIFIED | 1 | YES | a driver across a river is close in metres and far in minutes |
+| Unknown ETA is not instant | VERIFIED | 1 | YES | scoring a missing ETA as zero would make every unroutable driver the best candidate |
+| New drivers not punished (`040`) | VERIFIED | 1 | YES | no history scores neutral; a driver punished for having no record never gets one |
+| Fairness term (`040`) | VERIFIED | 1 | YES | idle time breaks ties, so the best drivers do not take every job |
+| Weights are configuration (BD-03) | VERIFIED | 2 | YES | `dispatch_config`; changing them changes the ranking, proven |
+| Scoring deterministic (`039`) | VERIFIED | 1 | YES | stable across 20 runs; ties break by id |
+| **Explainability (`040`)** | VERIFIED | 2 | YES | every factor, weight and version stored with the decision — the inputs are volatile and gone by the time anyone asks |
+| **One live assignment per job (`046`)** | VERIFIED | 2 | YES | asserted against **raw SQL**, so it holds for code that bypasses the application |
+| **One active reservation per driver (`046`)** | VERIFIED | 1 | YES | 8 concurrent reservations of one driver → exactly 1 |
+| **Atomic acceptance (`043`)** | VERIFIED | 2 | YES | verify offer → verify reservation → verify eligibility → assign → consume, all conditional writes in one transaction |
+| Concurrent acceptance | VERIFIED | 1 | YES | 10 racers → 1 winner, 1 accepted assignment, job holds the winner |
+| Expired offers cannot be accepted (`043`) | VERIFIED | 1 | YES | |
+| Authoritative re-check at accept (`043`) | VERIFIED | 1 | YES | a driver suspended between offer and tap does not win, and the job is not left assigned |
+| Rejection returns the job (`045`) | VERIFIED | 1 | YES | driver freed, job back to SEARCHING, **assignment history preserved** |
+| Expiry sweep (`043`) | VERIFIED | 1 | YES | offer → EXPIRED, reservation → RELEASED, job → SEARCHING; durable, not a process timer |
+| Event deduplication (`046`) | VERIFIED | 2 | YES | per consumer, durable; 8 concurrent deliveries → 1 processor |
+| Outbox for atomic state + event (`046`) | VERIFIED | n/a | YES | written in the caller's transaction; an event cannot describe a rolled-back state |
+| **Concurrency tests repeat (`046`)** | VERIFIED | n/a | YES | `-count=5` on every race test, green |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 252 Go test functions · 19 unit packages ok
+go test -tags=integration                    88 tests, ok
+go test -tags=integration -count=5 (races)   ok — document 046's "repeatedly under parallel execution"
+migrate up → down → up                       version 7
+```
+
+**Verification level: 5**, mandatory — dispatch assignment and concurrency both trigger it.
+
+**A defect the tests caught.** `Reserve` updated `dispatch_attempts` unconditionally, casting
+an empty attempt id to `uuid` and aborting the whole transaction. Every direct reservation
+failed with "commit unexpectedly resulted in rollback" — a transaction that silently poisoned
+itself rather than reporting the real error.
+
+**A test that could not be written, which is the point.** An attempt to fabricate two live
+offers for one job — simulating a defect elsewhere — was refused by the partial unique index.
+The test now asserts that refusal directly, against raw SQL, because the guarantee has to hold
+for a migration or an operator script as much as for this code.
+
+**BD-04 is open and blocks going live with dispatch** — recorded as B-5. Retries are bounded
+and the engine reports `ErrNoSupply` when the rings are exhausted; it deliberately does not
+expire the job, because how long to search and what the customer sees are product decisions
+document 044 leaves open.
+
+**Not done, deliberately:** no NATS publication loop yet — the outbox is written, the publisher
+is a worker. No batch offers (`043`: MVP prefers one driver at a time). No zone restrictions
+(`039`'s service zones) — zones are a Phase 14 capability. No operator escalation path (BD-04).
+
+## Phase 9+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.

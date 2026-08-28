@@ -133,3 +133,36 @@ messaging capability is required at **Phase 3**, not Phase 7. Phase 3 scope and 
 updated accordingly.
 
 **Status:** **CLOSED — RESOLVED 2026-08-28.** Blocks nothing.
+
+
+---
+
+## B-5 — BD-04: what happens when dispatch finds nobody · **OPEN**
+
+**Task:** Terminate a job that no driver will take.
+
+**Reason:** The dispatch engine is built and bounded — document 044 requires retries be finite,
+and they are: configurable rings, a configurable attempt cap, and `ErrNoSupply` when they are
+exhausted. What is *not* decided is what the customer sees at that point.
+
+Document 015 gives `EXPIRED` as a terminal state, so the shape exists. Document 044 says to
+"keep job searching where appropriate, notify customer, provide cancellation option, escalate
+to operations for exceptional cargo" — four behaviours, with no rule for choosing between them
+and no durations attached to any of them.
+
+**What was built anyway.** The engine stops after the configured attempts and reports
+`ErrNoSupply`. It deliberately does **not** expire the job: choosing that timeout would be
+inventing the customer-facing rule. Everything up to the decision point works and is tested;
+only the decision is absent.
+
+**Decision required:**
+
+- How long should a job keep searching before it stops?
+- On exhaustion: expire the job, keep searching at a slower cadence, or escalate to an operator?
+- What does the customer see while searching, and when it stops?
+- Does the answer differ by service — a cargo job may warrant escalation where a ride does not?
+
+**Recommendation:** the search window and retry cadence can be configuration with sensible
+starting values. The customer-facing behaviour cannot, and is the actual question.
+
+**Status:** OPEN — **does not block Phases 9–11.** It blocks going live with dispatch.
