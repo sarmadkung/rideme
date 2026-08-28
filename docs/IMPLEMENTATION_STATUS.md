@@ -613,13 +613,16 @@ Documents 163–176, 301.
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Production container | IMPLEMENTED, **NOT BUILT** | multi-stage, distroless, non-root, static binary; migrations travel with the binary that applies them. The local build reached stage 4 of 6 and timed out in `go mod download` — the base image pulls under emulation on Apple Silicon. **The image has never been built end to end**, so the Dockerfile is unverified beyond its first four stages |
+| Production container | IMPLEMENTED, **BUILD FAILS** | multi-stage, distroless, non-root, static binary; migrations travel with the binary that applies them. The build **fails at `go mod download`** (stage 4 of 6) — one run exited 1, others hung until killed. The cause is **not established**: it is plausibly the emulated amd64 Alpine layer and network on this machine, but that is a guess and nothing rules out a defect in the Dockerfile. **The image has never been built end to end and must not be relied on until it builds in CI on a native runner.** |
 | Migrations never run at startup | VERIFIED | separate `migrate` command, so a rolling deploy cannot have two instances migrating at once |
 | **Contract gate in CI** (ADR-007) | IMPLEMENTED | a Go type changed without regenerating fails the build instead of shipping a client describing a response the server no longer sends |
 | Structured logging, tracing, health probes | VERIFIED | Phase 1; unchanged |
 
-**Also unverified.** The container image itself — see above. It should be built in CI, where
-the base images are native, before anyone relies on it.
+**Also unverified — and worse than unverified.** The container image does not currently build:
+`go mod download` fails inside the build. I could not establish why on this machine, and I am
+not claiming it is only an emulation artefact. Building it on a native CI runner is the next
+step, and until that passes the Dockerfile should be treated as untested code, not as
+infrastructure.
 
 **Not built.** Terraform, AWS networking, ECS services and scaling, production Postgres/Redis
 operations, secrets management, monitoring and alerting, backups and disaster recovery, CDN.
