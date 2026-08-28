@@ -36,7 +36,7 @@ later costs nothing and is more accurate once real dependencies are observed.
 
 ---
 
-## B-2 — Go ↔ TypeScript shared type strategy
+## B-2 — Go ↔ TypeScript shared type strategy · **CLOSED**
 
 **Task:** Share domain types between the Go backend and TypeScript clients.
 
@@ -52,7 +52,7 @@ and re-expressed a third time as Zod in `packages/validation`. Three hand-kept
 copies of one contract, today, with no domain payloads yet. Each is marked with a
 pointer back to this item.
 
-**Relevant documents:** `023`, `025`, `193`, `331`, `014-api-specification`
+**Relevant documents:** `023`, `025`, `193`, `331`, `14-api-specification`
 
 **Decision required:** The source of truth for the API contract, and the generation direction.
 
@@ -66,8 +66,15 @@ pointer back to this item.
 deciding late is that every duplicated contract has to be migrated, and the
 duplication only grows.
 
-**Status:** OPEN — **due immediately.** Phase 1 shipped without it, as planned,
-but three copies of one envelope already exist.
+**Resolution (2026-08-28, Phase 2):** **Go is the single source of truth.**
+`packages/types/src/generated.ts` and `packages/validation/src/generated.ts` are
+generated from the Go types by `services/api/cmd/contractgen`, which reflects
+over the registered structs. `make contracts` regenerates; `make contracts-check`
+fails on stale output and runs inside `make verify`. Hand-written TypeScript may
+no longer declare a wire shape — the three duplicated copies were deleted and
+replaced by generated output. Recorded as **ADR-007**.
+
+**Status:** **CLOSED — RESOLVED 2026-08-28.** Blocks nothing.
 
 ---
 
@@ -84,3 +91,45 @@ weights, commission rates, refund policy, rounding rules, retention periods, and
 
 **Status:** OPEN — **does not block Phase 1 through Phase 3.** Each item is classified in the
 register by when it actually becomes blocking. Six become blocking at the first vertical slice.
+
+---
+
+## B-4 — Four documented domains have no phase in the master roadmap · **CLOSED**
+
+**Task:** Build maps/routing/ETA, safety/trust/fraud, notifications/chat/support, and analytics.
+
+**Reason:** The 15-phase master roadmap covers none of them, yet each owns a substantial Tier A
+band:
+
+| Domain | Tier A documents | Where it bites |
+|---|---|---|
+| Maps, routing, ETA | `93`–`106` | **Most serious.** ETA is a term in the `005` dispatch scoring formula and in customer tracking — Phases 6, 7 and 8 all need it. |
+| Safety, trust, fraud | `107`–`120` | SOS, trip sharing, ratings, fraud engine, enforcement. |
+| Notifications, chat, support | `121`–`134` | Phases 7, 10 and 12 name "notifications" with no phase that builds the notification system. |
+| Analytics and BI | `149`–`162` | No phase at all. |
+
+**Decision required:** Whether these become Phases 16+, are folded into existing phases as
+scope, or are explicitly out of the initial launch.
+
+**Interim position (does not block Phase 2):** build the minimum each phase genuinely requires
+and no more — a routing/ETA provider abstraction in Phase 6 (`95`, `96`), a notification
+dispatch interface where Phases 7 and 10 need one — and record each as an explicit partial.
+Do not build these domains out speculatively.
+
+**Recommended:** fold maps/routing/ETA into Phase 6 as named scope (it is a hard dependency of
+Phases 7 and 8); decide the other three separately, as they are closer to launch scope than to
+dependency.
+
+**Resolution (owner decision, 2026-08-28):** resolved as **four cross-cutting capability
+tracks inside the existing 15 phases** — no new phases, no renumbering. CAP-2 maps/routing/ETA
+(boundary Phase 6), CAP-3 safety/trust/fraud (Phase 3 device trust · Phase 5 verification ·
+Phase 8 ratings · Phase 11 fraud engine), CAP-4 notifications/chat/support (**boundary Phase 3,
+mandatory**), CAP-5 analytics (envelope Phase 2, pipeline Phase 14). Staged in full in
+`MASTER_IMPLEMENTATION_ROADMAP.md` → Cross-Cutting Capabilities.
+
+Dependency analysis also corrected a real sequencing defect: `020` and `028` make phone OTP the
+initial authentication method and require the OTP provider to sit behind an interface, so a
+messaging capability is required at **Phase 3**, not Phase 7. Phase 3 scope and acceptance were
+updated accordingly.
+
+**Status:** **CLOSED — RESOLVED 2026-08-28.** Blocks nothing.

@@ -64,6 +64,20 @@ api-lint: ## gofmt and go vet
 	@cd $(API) && test -z "$$(gofmt -l .)" || (gofmt -l . && echo "run gofmt -w ." && exit 1)
 	cd $(API) && go vet ./...
 
+# --- contracts ---------------------------------------------------------------
+
+contracts: ## Regenerate the TypeScript contract from the Go types (ADR-007)
+	cd $(API) && go run ./cmd/contractgen -root ../..
+	pnpm exec prettier --write packages/types/src/generated.ts packages/validation/src/generated.ts
+
+contracts-check: contracts ## Fail if the checked-in contract is stale
+	@git diff --quiet -- packages/types/src/generated.ts packages/validation/src/generated.ts \
+		|| (echo "" && \
+		    echo "The generated contract is out of date." && \
+		    echo "A Go type changed without 'make contracts' being run." && \
+		    echo "The regenerated files are in your working tree; commit them." && \
+		    exit 1)
+
 # --- javascript workspace ----------------------------------------------------
 
 install: ## Install workspace dependencies
@@ -86,4 +100,4 @@ build: ## Build the workspace
 
 # --- everything --------------------------------------------------------------
 
-verify: api-lint api-test lint typecheck test build ## Run every quality gate, both toolchains
+verify: api-lint api-test contracts-check lint typecheck test build ## Run every quality gate, both toolchains

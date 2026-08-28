@@ -1,12 +1,13 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phase 1 is complete and verified. No product functionality exists.**
+**Phases 1 and 2 are complete and verified. No product functionality exists** — Phase 2
+established contracts, not domains.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
 
-**Last updated:** 2026-08-27
+**Last updated:** 2026-08-28
 
 ## Legend
 
@@ -62,7 +63,59 @@ NATS subject, WebSocket, native module, E2E harness or Terraform exists.
 36 TypeScript tests across 10 packages · 3 integration tests behind a build tag ·
 0 E2E, by design.
 
-## Phase 2+ — Not Started
+## Phase 2 — Contracts and Core Platform Foundation
+
+Roadmap numbering (`MASTER_IMPLEMENTATION_ROADMAP.md`). Verified 2026-08-28
+against the Phase 2 acceptance criteria.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| B-2 — contract source of truth (ADR-007) | VERIFIED | 7 | YES | Go authoritative; `pkg/contract` reflects registered structs into TS + Zod |
+| Contract generator `cmd/contractgen` | VERIFIED | 7 | YES | emits `packages/{types,validation}/src/generated.ts`; fails generation on an unmappable type |
+| Drift gate `make contracts-check` | VERIFIED | n/a | YES | proved by injecting a Go constant without regenerating: gate failed, message names the cause; reverted |
+| Three hand-kept copies removed | VERIFIED | n/a | YES | `types/src/errors.ts` and `health.ts` deleted; hand-written Zod schemas replaced by generated |
+| BD-07 — money representation (ADR-008) | VERIFIED | 13 | YES | `pkg/money`; integer minor units, no float in any path |
+| Money rounding — half away from zero | VERIFIED | 8 cases | YES | single rounding entry point `ApplyRate(num, den)`; rates are integers |
+| Money allocation conserves every unit | VERIFIED | 2006 cases | YES | 6 table cases + 2000 randomised splits; parts always sum to the whole |
+| Money JSON is deterministic and strict | VERIFIED | 7 | YES | rejects fractional, exponent, quoted, out-of-range and unknown-currency amounts |
+| CAP-5 — event envelope (`150`) | VERIFIED | 9 | YES | `pkg/events`; documented fields only, UTC enforced, name shape validated |
+| Pagination conventions (ADR-009) | VERIFIED | 1 | YES | cursor-based `PageInfo`; `ClampLimit` bounds 25/100 |
+| API version prefix + idempotency header | VERIFIED | n/a | YES | `APIVersionPrefix`, `IdempotencyKeyHeader` from `14`/`185`; contract only, no middleware |
+| Client-side money formatting | VERIFIED | 3 | YES | `formatMoney` in `@platform/types`; asserted against the Go formatter's cases |
+| No client-side money arithmetic | VERIFIED | n/a | YES | deliberate — server is authoritative; recorded in ADR-008 |
+
+**Verification evidence (all observed, 2026-08-28):**
+
+```text
+gofmt -l .                 clean
+go vet ./...               ok
+go test ./...              9 packages ok, 62 test functions
+                           (51 run-cases across the four Phase 2 packages)
+pnpm typecheck             17/17 tasks
+pnpm lint                  10/10 tasks
+pnpm test                  17/17 tasks, 49 tests
+pnpm build                 10/10 tasks
+pnpm format:check          clean
+make contracts-check       in sync
+```
+
+**Verification level:** 5 for money and the contract boundary, as
+`verification-lite` requires for anything touching money — mandatory regardless
+of diff size. No E2E introduced. No remote CI run.
+
+**A defect the tests caught:** the first money decoder accepted the JSON string
+`"10"` as an amount, because `json.Number` is a string type underneath.
+`TestUnmarshalRejectsInvalidAmounts` failed on it. Fixed by parsing the raw
+literal, which rejects quoted, fractional and exponent forms in one step.
+
+**Not done, deliberately:** no endpoint, no middleware, no domain type, no
+event producer, no analytics collection. `services/api/internal/` is still
+empty. Phase 2 is contracts; domains start at Phase 3.
+
+## Phase 3+ — Not Started
+
+Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
+`MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
 
 | Phase | Status | Notes |
 |---|---|---|
@@ -86,8 +139,10 @@ NATS subject, WebSocket, native module, E2E harness or Terraform exists.
 | Item | Blocks | Tracked |
 |---|---|---|
 | B-1 — control docs 366/367/368 empty | AGENT.md protocol as written | mitigated by `IMPLEMENTATION_PLAN.md`; **Phase 1 unaffected** |
-| B-2 — Go ↔ TS type strategy | first endpoint (Phase 3) | `BLOCKED_TASKS.md` — now concrete: the error taxonomy is hand-duplicated in `pkg/httpx/errors.go` and `packages/types/src/errors.ts` |
-| B-3 — 19 business rules | Phase 3 onward | `BUSINESS_DECISION_REGISTER.md` |
+| ~~B-2 — Go ↔ TS type strategy~~ | — | **CLOSED 2026-08-28** — ADR-007; Go authoritative, TypeScript generated |
+| B-3 — 19 business rules | Phase 7 onward (roadmap numbering) | `BUSINESS_DECISION_REGISTER.md`; BD-07 now implemented as ADR-008 |
+| ~~B-4 — four domains without a phase~~ | — | **CLOSED 2026-08-28** — resolved as CAP-2…CAP-5 |
+| B-4 — maps/ETA, safety, notifications, analytics have no roadmap phase | Phase 6 onward | `BLOCKED_TASKS.md`; C-6 / R-6 in `DOCUMENT_CONFLICTS.md` |
 
 ## CI Execution Attempt
 
@@ -129,3 +184,16 @@ milestone rather than blocking implementation.
 | Error taxonomy duplicated across Go and TypeScript | Two hand-maintained lists that must agree. Harmless now, expensive when a payment payload drifts. B-2. |
 | `postgis/postgis:16-3.4` is amd64-only | Runs under emulation on Apple Silicon. Works, but slower; a multi-arch image is worth evaluating if it bites. |
 | MinIO runs with no consumer | Deliberate — the local environment should match the deployed one — but nothing verifies it beyond the container health check. |
+
+
+## Remaining Non-Blocking Work
+
+Carried out of Phase 2. None blocks Phase 3.
+
+| Item | Why it is open | Due |
+|---|---|---|
+| Event name versioning scheme | Document `150` states that event names are versioned but specifies no scheme. None was invented. The `domain.action` shape is validated; the version convention is not. | Before the first event producer (Phase 4 at the earliest) |
+| Event `properties` has no schema | No event has a documented property schema, so `properties` is `Record<string, unknown>`. Constraining it now would be authoring specification. A monetary value inside it must use the `Money` type — BD-07 admits no exception. | With the first events that carry properties |
+| Cursor encoding | ADR-009 fixes the pagination envelope, not how a cursor is built. No list endpoint exists yet. | First list endpoint |
+| `contractgen` registration list is hand-written | Generation removes hand-maintained *shapes*; the list of registered types is still hand-maintained. Guarded by tests that fail when a Go constant is added without registration — a smaller surface than three duplicated files, not zero. | Ongoing |
+| Remote CI has still never executed | Account billing lock, external to the repository. Unchanged since 2026-08-27. `make contracts-check` now runs inside `make verify`, so CI will enforce the contract gate once it can run at all. | Phase 15, or sooner if billing is restored |

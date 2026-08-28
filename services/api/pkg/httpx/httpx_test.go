@@ -106,3 +106,19 @@ func TestNotFoundHandlerUsesThePlatformEnvelope(t *testing.T) {
 		t.Errorf("content type = %q", ct)
 	}
 }
+
+func TestClampLimit(t *testing.T) {
+	cases := map[int]int{
+		0:    DefaultPageLimit,
+		-1:   DefaultPageLimit,
+		1:    1,
+		25:   25,
+		100:  MaxPageLimit,
+		1000: MaxPageLimit,
+	}
+	for requested, want := range cases {
+		if got := ClampLimit(requested); got != want {
+			t.Errorf("ClampLimit(%d) = %d, want %d", requested, got, want)
+		}
+	}
+}
