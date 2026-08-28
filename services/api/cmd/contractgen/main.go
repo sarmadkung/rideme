@@ -35,6 +35,7 @@ func Registry() *contract.Registry {
 		string(httpx.CodeForbidden),
 		string(httpx.CodeConflict),
 		string(httpx.CodeValidation),
+		string(httpx.CodeRateLimited),
 		string(httpx.CodeUnavailable),
 		string(httpx.CodeInternal),
 	)

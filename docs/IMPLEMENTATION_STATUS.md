@@ -1,8 +1,8 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1 and 2 are complete and verified. No product functionality exists** — Phase 2
-established contracts, not domains.
+**Phases 1–3 are complete and verified.** Phase 3 is the first phase with product
+functionality: a caller can now authenticate.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -112,7 +112,64 @@ literal, which rejects quoted, fractional and exponent forms in one step.
 event producer, no analytics collection. `services/api/internal/` is still
 empty. Phase 2 is contracts; domains start at Phase 3.
 
-## Phase 3+ — Not Started
+## Phase 3 — Identity, Authentication and Authorization
+
+Verified 2026-08-28 against the Phase 3 acceptance criteria. Documents 20, 28, 116, 123.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Schema — users, roles, devices, sessions, OTP, audit | VERIFIED | n/a | YES | migration `000002`; up/down/up applied against local Postgres |
+| One user, many roles (`28`) | VERIFIED | 2 | YES | `user_roles` table; a driver who orders groceries is one account |
+| Phone normalisation to E.164 | VERIFIED | 4 | YES | 10 input forms resolve to one number; idempotent |
+| OTP request → verify → resolve/create → tokens | VERIFIED | 3 | YES | full documented flow end to end against the database |
+| OTP never stored in plaintext (`28`, `123`) | VERIFIED | 1 | YES | asserted against the stored bytes: 32-byte keyed HMAC, code absent |
+| OTP single-use — including under concurrency | VERIFIED | 2 | YES | 8 concurrent verifications of one code → exactly 1 login |
+| OTP attempt limit and expiry | VERIFIED | 2 | YES | correct code fails after the limit; expired code rejected |
+| OTP purpose-bound (`123`) | VERIFIED | 1 | YES | a LOGIN code does not verify against PHONE_CHANGE |
+| Account enumeration prevented (`28`) | VERIFIED | 1 | YES | known and unknown numbers return identical expiry and error code |
+| Refresh rotation (`28`) | VERIFIED | 2 | YES | old token dies on rotation; 6 concurrent refreshes → exactly 1 |
+| **Refresh reuse detection** | VERIFIED | 1 | YES | replaying a rotated token revokes every session; see the defect note |
+| Logout and logout-all (`116`) | VERIFIED | 2 | YES | refresh stops after each |
+| Session expiry | VERIFIED | 1 | YES | an expired session cannot refresh |
+| Role authorization middleware | VERIFIED | 2 | YES | bearer-token forms; anonymous callers refused before the handler |
+| Resource authorization (`28`) | VERIFIED | 1 | YES | another DRIVER cannot touch a driver's record — role alone would allow it |
+| Roles re-read on refresh | VERIFIED | 1 | YES | a revoked role does not survive the next refresh |
+| Suspended accounts cannot authenticate | VERIFIED | 1 | YES | both fresh login and existing refresh are refused |
+| Rate limiting by phone and IP (`20`, `28`) | VERIFIED | 4 | YES | Redis-backed in production, in-process in tests |
+| Security event audit (`28`) | VERIFIED | 2 | YES | login/logout recorded; audit stores a **masked** phone, asserted |
+| CAP-4 — messaging boundary (`121`, `123`) | VERIFIED | n/a | YES | `pkg/notify`; provider replaceable, fallback on failure; API refuses to start in production without a real provider |
+| CAP-3 — device and session trust (`116`) | VERIFIED | n/a | YES | device upsert, first-sighting signal, session listing |
+| `rate_limited` → 429 added to the taxonomy | VERIFIED | n/a | YES | added in Go, propagated to both TypeScript artifacts by `make contracts` |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt -l .                     clean
+go vet ./...                   ok
+go test ./...                  12 packages ok
+go test -tags=integration      25 tests, ok — against real Postgres and Redis
+pnpm typecheck                 17/17      pnpm lint    10/10
+pnpm test                      17/17      pnpm build   10/10
+pnpm format:check              clean      contracts    in sync
+```
+
+**Verification level:** 5 throughout — `verification-lite` escalates auth regardless of
+diff size. The concurrency properties are tested against the real database because they are
+enforced by SQL; a mocked store would assert nothing about them.
+
+**A defect the tests caught.** Refresh-token *reuse* was not actually detected. Rotation
+removed the old hash from `sessions`, so a replayed token simply missed the lookup and was
+refused like any random string — the theft signal document 28 calls for was silently lost.
+Fixed by recording superseded hashes in `refresh_token_history` inside the same transaction
+as the rotation, so a token can never be retired without becoming detectable. A second
+defect — a `u.` table alias in a column list shared with `INSERT ... RETURNING` — was caught
+by the same suite.
+
+**Not done, deliberately:** no phone-change flow (needs step-up verification, document 20),
+no step-up on sensitive actions, no Google/Apple providers (`20`: "later"), no real SMS
+provider, no mobile secure-storage integration (that is client work, Phase 12).
+
+## Phase 4+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.

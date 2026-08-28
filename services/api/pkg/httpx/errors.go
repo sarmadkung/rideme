@@ -22,6 +22,7 @@ const (
 	CodeForbidden    Code = "forbidden"
 	CodeConflict     Code = "conflict"
 	CodeValidation   Code = "validation"
+	CodeRateLimited  Code = "rate_limited"
 	CodeUnavailable  Code = "unavailable"
 	CodeInternal     Code = "internal"
 )
@@ -60,6 +61,7 @@ var (
 	ErrForbidden    = &Error{Code: CodeForbidden, Message: "not permitted"}
 	ErrConflict     = &Error{Code: CodeConflict, Message: "conflicting state"}
 	ErrValidation   = &Error{Code: CodeValidation, Message: "invalid request"}
+	ErrRateLimited  = &Error{Code: CodeRateLimited, Message: "too many requests"}
 	ErrUnavailable  = &Error{Code: CodeUnavailable, Message: "service unavailable"}
 	ErrInternal     = &Error{Code: CodeInternal, Message: "internal error"}
 )
@@ -79,6 +81,7 @@ func Unauthorized(message string) *Error { return &Error{Code: CodeUnauthorized,
 func Forbidden(message string) *Error    { return &Error{Code: CodeForbidden, Message: message} }
 func Conflict(message string) *Error     { return &Error{Code: CodeConflict, Message: message} }
 func Unavailable(message string) *Error  { return &Error{Code: CodeUnavailable, Message: message} }
+func RateLimited(message string) *Error  { return &Error{Code: CodeRateLimited, Message: message} }
 func Internal(message string) *Error     { return &Error{Code: CodeInternal, Message: message} }
 
 func Validation(message string, details map[string]string) *Error {
@@ -103,6 +106,11 @@ func StatusFor(code Code) int {
 		return http.StatusConflict
 	case CodeValidation:
 		return http.StatusUnprocessableEntity
+	case CodeRateLimited:
+		// Document 20 requires rate limiting on authentication. 429 is the
+		// status a client can act on — back off and retry — where 409 would
+		// tell it to change the request.
+		return http.StatusTooManyRequests
 	case CodeUnavailable:
 		return http.StatusServiceUnavailable
 	default:

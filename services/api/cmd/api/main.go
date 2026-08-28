@@ -17,12 +17,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sarmadkung/rideme/services/api/internal/identity"
+	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/cache"
 	"github.com/sarmadkung/rideme/services/api/pkg/config"
 	"github.com/sarmadkung/rideme/services/api/pkg/database"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/messaging"
+	"github.com/sarmadkung/rideme/services/api/pkg/notify"
 	"github.com/sarmadkung/rideme/services/api/pkg/observability"
+	"github.com/sarmadkung/rideme/services/api/pkg/ratelimit"
 )
 
 const serviceName = "api"
@@ -104,9 +108,36 @@ func run() error {
 		}},
 	})
 
+	// Identity (documents 20, 28). The messaging boundary is wired first
+	// because authentication cannot ship without it: phone OTP is the initial
+	// authentication method and the provider must sit behind an interface.
+	messenger := notify.NewService(logger)
+	if cfg.Env.IsProduction() {
+		// The development sender logs message bodies, which for an OTP is the
+		// credential itself. Refusing to start is better than starting with a
+		// provider that prints every login code to the log.
+		return fmt.Errorf("no SMS provider is configured for %s: set one before deploying", cfg.Env)
+	}
+	messenger.Register(notify.ChannelSMS, notify.NewLogSender(logger))
+	messenger.Register(notify.ChannelEmail, notify.NewLogSender(logger))
+
+	issuer, err := authn.NewIssuer(cfg.JWTSecret)
+	if err != nil {
+		return fmt.Errorf("token issuer: %w", err)
+	}
+	identityService := identity.NewService(
+		identity.NewStore(pool.Pool),
+		issuer,
+		messenger,
+		ratelimit.NewRedisLimiter(redis.Client),
+		logger,
+		cfg.JWTSecret,
+		identity.Options{},
+	)
+
 	server := &http.Server{
 		Addr:              net.JoinHostPort("", strconv.Itoa(cfg.Port)),
-		Handler:           newRouter(checker, serviceName, version, logger),
+		Handler:           newRouter(checker, identity.NewHandler(identityService), issuer, serviceName, version, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

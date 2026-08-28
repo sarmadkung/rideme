@@ -9,6 +9,7 @@ export const ERROR_CODES = [
   'forbidden',
   'conflict',
   'validation',
+  'rate_limited',
   'unavailable',
   'internal',
 ] as const;

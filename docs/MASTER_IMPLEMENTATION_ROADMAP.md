@@ -1284,7 +1284,7 @@ Phase N — <name>
 |---|---|---|---|---|
 | 1 — Engineering foundation | **VERIFIED** | 2026-08-27 | 2026-08-27 | criterion 12 (remote CI) deferred to Phase 15 |
 | 2 — Contracts and core platform | **VERIFIED** | 2026-08-28 | 2026-08-28 | none — B-2 closed (ADR-007), BD-07 implemented (ADR-008) |
-| 3 — Identity and auth | READY | — | — | none; CAP-4 OTP boundary is in scope |
+| 3 — Identity and auth | **VERIFIED** | 2026-08-28 | 2026-08-28 | none |
 | 4 — Core domain model | NOT_STARTED | — | — | C-5 / ADR-004 to resolve |
 | 5 — Providers, vehicles, eligibility | NOT_STARTED | — | — | BD-14 (list) |
 | 6 — Location and realtime | NOT_STARTED | — | — | BD-15 |
