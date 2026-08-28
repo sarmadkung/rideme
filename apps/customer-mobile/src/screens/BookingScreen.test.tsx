@@ -42,7 +42,8 @@ function booking(overrides: Partial<BookingState> = {}): BookingState & BookingA
 
 describe('BookingScreen', () => {
   it('asks for a price once both ends are chosen', () => {
-    const state = booking({ pickup: PLACES[0].stop, dropoff: PLACES[1].stop });
+    const [first, second] = PLACES;
+    const state = booking({ pickup: first?.stop ?? null, dropoff: second?.stop ?? null });
     render(<BookingScreen booking={state} />);
 
     fireEvent.press(screen.getByTestId('get-quote'));
