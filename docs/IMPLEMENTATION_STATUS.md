@@ -806,3 +806,47 @@ readable.
 **Failing to measure demand is not a reason to refuse a quote.** BD-02's multiplier returns
 neutral on every error path. An unreachable database costs the platform a surge it might have
 charged; it does not cost the customer a fare.
+
+
+---
+
+## Phase 12 — Customer Booking Flow · 2026-08-29
+
+The first product surface over the finished backend: quote → confirm → track →
+cancel, in the customer mobile app.
+
+| Task | Status | Tests | Evidence |
+|---|---|---|---|
+| Booking flow as shared state (`useBooking`) | VERIFIED | 10 | planning → quoted → tracking, one copy for both platforms |
+| Idempotent confirmation | VERIFIED | 2 | one key per quote, reused across confirm attempts; a new quote takes a new key |
+| Quote breakdown on screen | VERIFIED | 6 | every fare line rendered, including BD-02's demand line |
+| Route confidence surfaced | VERIFIED | 2 | document 096 — an estimated route is labelled, a measured one is not |
+| Live job tracking | VERIFIED | 1 | polled every 5s, stops at every terminal state including `EXPIRED` |
+| Cancellation with its fee | VERIFIED | 3 | BD-01's amount is shown; a free cancellation says so explicitly |
+| BD-04 in plain words | VERIFIED | 1 | `EXPIRED` reads "No drivers available … you have not been charged" |
+| Money formatting | VERIFIED | 7 | integer minor units divided once, at display |
+| Sign-in screen | VERIFIED | — | phone → code, over the existing `useAuth` |
+
+**Defect found and fixed.** `QuoteResponse` declared `total_minor` and `currency`;
+the handler wrote an ad-hoc map carrying `total` and `lines`. The generated
+TypeScript client followed the struct, so `client.quote()` would have thrown a
+parse error against a valid response — the endpoint had no client and no
+HTTP-level test, so nothing had exercised the pair. The contract generator
+cannot catch this class of bug: it compares Go structs to TypeScript and never
+sees what a handler writes. `TestTheQuoteEndpointSendsExactlyItsDeclaredShape`
+now decodes a real response with `DisallowUnknownFields`.
+
+### What this deliberately does not do
+
+| Not built | Why |
+|---|---|
+| Map selection | No map provider is integrated (CAP-2). Pickup and destination are chosen from named places rather than a pin. The flow behind the control is the real one. |
+| Navigation stack | The flow is linear with no back destination worth preserving. A navigator before a second flow is scaffolding without a user. |
+| Realtime tracking | The gateway exists; no client transport does. Polling every 5s, stopping at terminal states. |
+| Driver location on a map | Follows map selection. The job's assignment is shown, not its position. |
+| Scheduled rides, fare estimates history, saved places | Not in this slice. |
+
+`EXPO_PUBLIC_CITY` selects the market's tariff and is deliberately **not**
+defaulted: tariffs are per city and the platform ships none, so inventing one
+would ask the server for a fare in a market nobody configured. Unset, quoting
+fails with the server's own "not available here yet".
