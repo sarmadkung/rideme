@@ -18,10 +18,14 @@ import (
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
+	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
+	"github.com/sarmadkung/rideme/services/api/internal/settings"
+	"github.com/sarmadkung/rideme/services/api/internal/sweeper"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/cache"
 	"github.com/sarmadkung/rideme/services/api/pkg/config"
@@ -145,10 +149,14 @@ func run() error {
 	// fare built on a guess is never presented as a measured one.
 	jobStore := jobs.NewStore(pool.Pool)
 	bookingStore := booking.NewStore(pool.Pool)
+	// The values the owner decided (BD-01, BD-02, BD-04, BD-11, BD-12) are
+	// rows, not constants, so every consumer reads them through one store.
+	platformSettings := settings.NewStore(pool.Pool)
 	bookingService := booking.NewService(
 		jobStore, bookingStore,
 		pricing.NewEngine(nil),
 		routing.NewService(),
+		platformSettings,
 		nil,
 	)
 	bookingHandler := booking.NewHandler(bookingService, jobStore, providers.NewStore(pool.Pool))
@@ -162,6 +170,15 @@ func run() error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+
+	// Deadline enforcement (BD-04, BD-12). The values these act on are rows;
+	// this is the thing that acts on them. Without it an unanswered grocery
+	// order and a job that found no driver both wait forever.
+	dispatchRunner := dispatch.NewRunner(nil, jobStore, platformSettings, logger, nil)
+	deadlines := sweeper.New(merchant.NewStore(pool.Pool), dispatchRunner, logger, 0, nil)
+	sweepCtx, stopSweeping := context.WithCancel(context.Background())
+	defer stopSweeping()
+	go deadlines.Run(sweepCtx)
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -182,6 +199,10 @@ func run() error {
 	// jobs and payments exist, killing a request mid-transaction is a real cost.
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancelShutdown()
+
+	// Stop sweeping before draining requests: a pass that starts during
+	// shutdown would hold a transaction open against a closing pool.
+	stopSweeping()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown failed: %w", err)

@@ -99,4 +99,5 @@ export const quoteSchema = z.object({
 export const cancelResultSchema = z.object({
   job: jobSchema,
   cancellation_tier: z.string(),
+  fee: moneySchema,
 });

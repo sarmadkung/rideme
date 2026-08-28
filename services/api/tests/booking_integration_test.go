@@ -13,17 +13,19 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
+	"github.com/sarmadkung/rideme/services/api/internal/settings"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
 	"github.com/sarmadkung/rideme/services/api/pkg/routing"
 )
 
 type bookingHarness struct {
-	service *booking.Service
-	store   *booking.Store
-	jobs    *jobs.Store
-	pool    *pgxpool.Pool
-	clock   time.Time
+	service  *booking.Service
+	store    *booking.Store
+	jobs     *jobs.Store
+	pool     *pgxpool.Pool
+	settings *settings.Store
+	clock    time.Time
 }
 
 func newBookingHarness(t *testing.T) *bookingHarness {
@@ -42,7 +44,8 @@ func newBookingHarness(t *testing.T) *bookingHarness {
 		clock: time.Now().UTC(),
 	}
 	now := func() time.Time { return h.clock }
-	h.service = booking.NewService(h.jobs, h.store, pricing.NewEngine(now), routing.NewService(), now)
+	h.settings = settings.NewStore(pool)
+	h.service = booking.NewService(h.jobs, h.store, pricing.NewEngine(now), routing.NewService(), h.settings, now)
 	return h
 }
 
@@ -58,7 +61,10 @@ func (h *bookingHarness) aUser(t *testing.T) string {
 }
 
 // aTariff installs test pricing configuration. These numbers exist only in the
-// test: BD-01, BD-02 and BD-05 are unresolved and the platform ships no rates.
+// test: the platform ships no tariffs, because rates are the owner's per
+// market. What BD-01, BD-02 and BD-05 decided are the platform-wide rules —
+// the cancellation fee, the surge ceiling and the commission — not these
+// per-city fares.
 func (h *bookingHarness) aTariff(t *testing.T, city string) {
 	t.Helper()
 	if _, err := h.store.SaveTariff(context.Background(), pricing.Tariff{
@@ -318,9 +324,9 @@ func TestCancellationTiersFollowDocument005(t *testing.T) {
 	}
 }
 
-func TestCancellationRecordsTheTierAndNoInventedFee(t *testing.T) {
-	// BD-01 is a commercial decision. Recording a fee here would charge real
-	// customers a number nobody chose.
+func TestCancellingBeforeAnyDriverIsAssignedIsFree(t *testing.T) {
+	// BD-01: the grace window starts at driver acceptance, so a customer whose
+	// request never found a driver is never charged, however long they waited.
 	h := newBookingHarness(t)
 	ctx := context.Background()
 	city := "LHR-" + time.Now().Format("150405.000000")
@@ -335,25 +341,32 @@ func TestCancellationRecordsTheTierAndNoInventedFee(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cancelled, tier, err := h.service.Cancel(ctx, job.ID, userID, jobs.ActorCustomer, "changed my mind")
+	cancelled, outcome, err := h.service.Cancel(ctx, job.ID, userID, jobs.ActorCustomer, "changed my mind")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cancelled.Status != jobs.StatusCancelled {
 		t.Fatalf("status = %s", cancelled.Status)
 	}
-	if tier != booking.TierBeforeAssignment {
-		t.Fatalf("tier = %s", tier)
+	if outcome.Tier != booking.TierBeforeAssignment {
+		t.Fatalf("tier = %s", outcome.Tier)
+	}
+	if !outcome.Fee.IsZero() {
+		t.Fatalf("a customer whose job never found a driver was charged %s", outcome.Fee)
 	}
 
-	var fee, compensation *int64
+	// The zero is stored rather than left null: "this was free" and "nobody
+	// decided yet" must not read the same in the ledger of cancellations.
+	var fee *int64
 	if err := h.pool.QueryRow(ctx,
-		`SELECT fee_minor, compensation_minor FROM job_cancellations WHERE job_id = $1`,
-		job.ID).Scan(&fee, &compensation); err != nil {
+		`SELECT fee_minor FROM job_cancellations WHERE job_id = $1`, job.ID).Scan(&fee); err != nil {
 		t.Fatal(err)
 	}
-	if fee != nil || compensation != nil {
-		t.Fatalf("an amount was invented: fee=%v compensation=%v", fee, compensation)
+	if fee == nil {
+		t.Fatal("the cancellation fee was left null rather than recorded as zero")
+	}
+	if *fee != 0 {
+		t.Fatalf("stored fee = %d minor units, want 0", *fee)
 	}
 }
 
@@ -557,5 +570,115 @@ func TestAServiceWithNoTariffIsRefusedNotGuessed(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("a job was priced with no tariff configured")
+	}
+}
+
+// --- cancellation fees (BD-01) -----------------------------------------------
+
+// anAcceptedJob books a ride and walks it to ACCEPTED with a real driver, so a
+// cancellation has an acceptance timestamp to measure the grace window from.
+func (h *bookingHarness) anAcceptedJob(t *testing.T, city string) (jobs.Job, time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	userID := h.aUser(t)
+	quote := h.quoteFor(t, userID, city)
+
+	job, err := h.service.Create(ctx, booking.CreateRequest{
+		QuoteID: quote.ID, RequesterID: userID, JobType: jobs.TypeRide, Stops: rideStops(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var driverID string
+	if err := h.pool.QueryRow(ctx,
+		`INSERT INTO drivers (user_id, verification_status, status)
+		 VALUES ($1, 'APPROVED', 'AVAILABLE') RETURNING id::text`, h.aUser(t)).Scan(&driverID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.jobs.Transition(ctx, job.ID, jobs.StatusRequested, jobs.StatusSearching,
+		jobs.Actor{Type: jobs.ActorSystem}, nil); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := h.jobs.Offer(ctx, jobs.Assignment{JobID: job.ID, DriverID: driverID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.jobs.RespondToAssignment(ctx, offer.ID,
+		jobs.AssignmentOffered, jobs.AssignmentAccepted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.jobs.Transition(ctx, job.ID, jobs.StatusSearching, jobs.StatusAssigned,
+		jobs.Actor{Type: jobs.ActorSystem}, nil); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := h.jobs.Transition(ctx, job.ID, jobs.StatusAssigned, jobs.StatusAccepted,
+		jobs.Actor{Type: jobs.ActorDriver, ID: driverID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	live, err := h.jobs.LiveAssignment(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.AcceptedAt == nil {
+		t.Fatal("the assignment records no acceptance time")
+	}
+	return moved, *live.AcceptedAt
+}
+
+func TestCancellingInsideTheFreeWindowCostsNothing(t *testing.T) {
+	// BD-01: two free minutes from the moment the driver accepted.
+	h := newBookingHarness(t)
+	city := "LHR-" + time.Now().Format("150405.000000")
+	h.aTariff(t, city)
+
+	job, acceptedAt := h.anAcceptedJob(t, city)
+	h.clock = acceptedAt.Add(90 * time.Second)
+
+	_, outcome, err := h.service.Cancel(context.Background(), job.ID,
+		job.RequesterUserID, jobs.ActorCustomer, "changed my mind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Tier != booking.TierAfterAssignment {
+		t.Fatalf("tier = %s, want AFTER_ASSIGNMENT", outcome.Tier)
+	}
+	if !outcome.Fee.IsZero() {
+		t.Fatalf("cancelling 90 seconds after acceptance charged %s", outcome.Fee)
+	}
+}
+
+func TestCancellingAfterTheFreeWindowCostsOneHundredRupees(t *testing.T) {
+	h := newBookingHarness(t)
+	ctx := context.Background()
+	city := "LHR-" + time.Now().Format("150405.000000")
+	h.aTariff(t, city)
+
+	job, acceptedAt := h.anAcceptedJob(t, city)
+	h.clock = acceptedAt.Add(5 * time.Minute)
+
+	_, outcome, err := h.service.Cancel(ctx, job.ID,
+		job.RequesterUserID, jobs.ActorCustomer, "changed my mind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Fee.Minor != 10000 {
+		t.Fatalf("fee = %d minor units, want the decided 10000", outcome.Fee.Minor)
+	}
+	if outcome.Fee.Currency != money.PKR {
+		t.Fatalf("fee currency = %s", outcome.Fee.Currency)
+	}
+
+	// What the customer was told and what was recorded must agree.
+	var stored int64
+	if err := h.pool.QueryRow(ctx,
+		`SELECT fee_minor FROM job_cancellations WHERE job_id = $1`, job.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != outcome.Fee.Minor {
+		t.Fatalf("the customer was charged %d but %d was recorded", outcome.Fee.Minor, stored)
 	}
 }

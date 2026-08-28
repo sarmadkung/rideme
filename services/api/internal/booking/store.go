@@ -269,9 +269,13 @@ func (s *Store) ClaimIdempotencyKey(ctx context.Context, scope, key, userID stri
 
 // --- cancellations -----------------------------------------------------------
 
-// RecordCancellation stores which tier applied. The fee is deliberately null:
-// BD-01 is unresolved and no amount is invented here.
-func (s *Store) RecordCancellation(ctx context.Context, jobID, actorType, actorID, reason, tier string) error {
+// RecordCancellation stores which tier applied and what it cost.
+//
+// The fee is stored even when zero. A null fee used to mean "BD-01 is
+// undecided"; now that it is decided, an explicit zero means "this
+// cancellation was free" — a distinction that matters when reading back why a
+// customer was not charged.
+func (s *Store) RecordCancellation(ctx context.Context, jobID, actorType, actorID, reason, tier string, fee money.Amount) error {
 	var actor, reasonText any
 	if actorID != "" {
 		actor = actorID
@@ -280,9 +284,9 @@ func (s *Store) RecordCancellation(ctx context.Context, jobID, actorType, actorI
 		reasonText = reason
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO job_cancellations (job_id, cancelled_by, actor_id, reason, tier)
-		 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`,
-		jobID, actorType, actor, reasonText, tier)
+		`INSERT INTO job_cancellations (job_id, cancelled_by, actor_id, reason, tier, fee_minor, currency)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (job_id) DO NOTHING`,
+		jobID, actorType, actor, reasonText, tier, fee.Minor, string(fee.Currency))
 	if err != nil {
 		return fmt.Errorf("record cancellation: %w", err)
 	}
@@ -304,4 +308,56 @@ func (s *Store) Cancellation(ctx context.Context, jobID string) (tier, reason st
 		reason = *reasonText
 	}
 	return tier, reason, true, nil
+}
+
+// --- demand measurement (BD-02) ----------------------------------------------
+
+// Supply counts what is waiting and what is available around a point.
+//
+// Both halves are measured from Postgres rather than Redis. Redis holds the
+// live GEO index dispatch searches, which is the right structure for "find me
+// the nearest ten drivers" and the wrong one for "how many are there" — and a
+// quote that is a few seconds behind the index is fine, whereas a quote that
+// cannot be produced because Redis is unreachable is not.
+//
+// staleAfter bounds what counts as an available driver: a driver whose last
+// fix is minutes old is not supply, whatever their status column says.
+func (s *Store) Supply(ctx context.Context, lat, lon float64, radiusMeters float64,
+	staleAfter time.Duration, now time.Time) (pricing.Supply, error) {
+
+	var supply pricing.Supply
+	cutoff := now.Add(-staleAfter)
+
+	// Requests waiting: jobs still SEARCHING whose pickup is inside the radius.
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*)
+		   FROM jobs j
+		   JOIN job_stops st ON st.job_id = j.id AND st.type = 'PICKUP'
+		  WHERE j.status = 'SEARCHING'
+		    AND ST_DWithin(st.location, ST_MakePoint($1, $2)::geography, $3)`,
+		lon, lat, radiusMeters).Scan(&supply.WaitingRequests)
+	if err != nil {
+		return pricing.Supply{}, fmt.Errorf("count waiting requests: %w", err)
+	}
+
+	// Drivers available: AVAILABLE, verified, and reporting a recent fix
+	// inside the radius. DISTINCT ON takes each driver's latest position, so a
+	// driver with a hundred fixes counts once.
+	err = s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM (
+		   SELECT DISTINCT ON (l.driver_id) l.driver_id, l.location, l.recorded_at
+		     FROM driver_locations l
+		     JOIN drivers d ON d.id = l.driver_id
+		    WHERE d.status = 'AVAILABLE'
+		      AND d.verification_status = 'VERIFIED'
+		      AND l.recorded_at >= $4
+		    ORDER BY l.driver_id, l.recorded_at DESC
+		 ) latest
+		  WHERE ST_DWithin(latest.location, ST_MakePoint($1, $2)::geography, $3)`,
+		lon, lat, radiusMeters, cutoff).Scan(&supply.AvailableDrivers)
+	if err != nil {
+		return pricing.Supply{}, fmt.Errorf("count available drivers: %w", err)
+	}
+
+	return supply, nil
 }

@@ -89,8 +89,26 @@ weights, commission rates, refund policy, rounding rules, retention periods, and
 
 **Decision required:** Product and commercial decisions from the owner. None can be safely inferred.
 
-**Status:** OPEN — **does not block Phase 1 through Phase 3.** Each item is classified in the
-register by when it actually becomes blocking. Six become blocking at the first vertical slice.
+**Decision — 2026-08-28.** The six decisions that were blocking go-live were answered by the
+owner and are implemented as configuration:
+
+| | Decision | Where it lives |
+|---|---|---|
+| BD-01 | Cancelling is free for 2 minutes after driver acceptance, then PKR 100 | `platform_settings.cancellation.*` |
+| BD-02 | Surge is demand-triggered, capped at 1.5x | `platform_settings.surge.max_bps`, `pricing_tariffs.demand_max_bps` |
+| BD-04 | 3 dispatch rounds over 90s, then `EXPIRED` with `NO_SUPPLY`, no charge | `dispatch_config.max_attempts`, `platform_settings.dispatch.*` |
+| BD-05 | Flat 20% platform commission on every service | `commission_rates` |
+| BD-11 | The customer pays the substitute's actual price, up or down | `order_item_issues`, read by the order total |
+| BD-12 | Merchants have 10 minutes to accept, then the order auto-cancels | `platform_settings.merchant.*`, `merchant_config` |
+
+Every value is a row, not a Go constant, so changing one is an edit with an audit trail rather
+than a deploy. The refusal paths were kept: a service with no configured commission still
+refuses to compute earnings, and a missing settings key is an error rather than a zero — because
+zero is meaningful for most of these, and "absent" must not read as "free".
+
+**Status:** **PARTIALLY CLOSED — 2026-08-28.** The six blocking decisions are resolved. The
+remaining register items (BD-06, BD-09, BD-13, BD-14, BD-15, BD-16) are classified as
+BLOCKING_LATER and block nothing currently built.
 
 ---
 
@@ -137,7 +155,7 @@ updated accordingly.
 
 ---
 
-## B-5 — BD-04: what happens when dispatch finds nobody · **OPEN**
+## B-5 — BD-04: what happens when dispatch finds nobody · **CLOSED**
 
 **Task:** Terminate a job that no driver will take.
 
@@ -165,4 +183,23 @@ only the decision is absent.
 **Recommendation:** the search window and retry cadence can be configuration with sensible
 starting values. The customer-facing behaviour cannot, and is the actual question.
 
-**Status:** OPEN — **does not block Phases 9–11.** It blocks going live with dispatch.
+**Decision — 2026-08-28, by the owner.** Dispatch retries with a widening radius for a bounded
+time, then the job ends as `EXPIRED` with a `NO_SUPPLY` reason and nothing is charged.
+
+Configured as three attempts (`dispatch_config.max_attempts`) over a ninety-second window
+(`platform_settings.dispatch.search_deadline_seconds`). Both bounds are checked, because either
+alone leaves a hole: attempts alone let a job with slow rounds run past its deadline, and the
+deadline alone lets a job that exhausted its rings in two seconds sit idle until the clock
+catches up.
+
+The behaviour is uniform across services. Escalation for exceptional cargo remains open in
+document 044 and is not implemented; it is a separate operational feature rather than a
+precondition for dispatch going live.
+
+**What this required.** `jobs.Store.ExpireSearch` (compare-and-set on `SEARCHING`, so a driver
+accepting at the same moment wins cleanly), `dispatch.Runner` for the policy, and a sweeper that
+expires searches whose worker died. Verified: `TestAJobThatFindsNobodyExpiresWithNoSupply`,
+`TestADriverAcceptingBeatsTheExpiryRunningAtTheSameMoment`,
+`TestNothingIsChargedForAJobThatFoundNoDriver`, `TestTheSweepExpiresOnlyJobsPastTheirDeadline`.
+
+**Status:** **CLOSED — RESOLVED 2026-08-28.** Blocks nothing.

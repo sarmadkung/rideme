@@ -103,4 +103,5 @@ export interface Quote {
 export interface CancelResult {
   job: Job;
   cancellation_tier: string;
+  fee: Money;
 }

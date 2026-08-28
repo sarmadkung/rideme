@@ -19,6 +19,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/eligibility"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
+	"github.com/sarmadkung/rideme/services/api/internal/settings"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
 	"github.com/sarmadkung/rideme/services/api/pkg/routing"
@@ -87,14 +88,17 @@ type Service struct {
 	quotes  *Store
 	pricing *pricing.Engine
 	routes  *routing.Service
-	now     func() time.Time
+	// settings supplies the values BD-01 decided. It is a dependency rather
+	// than a package-level lookup so a test can drive the policy directly.
+	settings *settings.Store
+	now      func() time.Time
 }
 
-func NewService(jobStore *jobs.Store, quoteStore *Store, engine *pricing.Engine, routes *routing.Service, now func() time.Time) *Service {
+func NewService(jobStore *jobs.Store, quoteStore *Store, engine *pricing.Engine, routes *routing.Service, platformSettings *settings.Store, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{jobs: jobStore, quotes: quoteStore, pricing: engine, routes: routes, now: now}
+	return &Service{jobs: jobStore, quotes: quoteStore, pricing: engine, routes: routes, settings: platformSettings, now: now}
 }
 
 var (
@@ -146,6 +150,12 @@ func (s *Service) Quote(ctx context.Context, req QuoteRequest) (Quote, error) {
 		return Quote{}, httpx.Internal("could not load pricing").WithCause(err)
 	}
 
+	// Demand (BD-02). Measured around the pickup, capped by the tariff and by
+	// the platform ceiling. A failure here returns neutral rather than an
+	// error: not being able to measure demand is a reason to charge the base
+	// fare, never a reason to refuse to quote.
+	demandBPS := s.demandBPS(ctx, req.Stops[0].Location.Latitude, req.Stops[0].Location.Longitude)
+
 	requirements := requirementMap(req.Requirements)
 	priced, err := s.pricing.Quote(pricing.Request{
 		JobType:         string(req.JobType),
@@ -154,6 +164,7 @@ func (s *Service) Quote(ctx context.Context, req QuoteRequest) (Quote, error) {
 		DistanceMeters:  route.DistanceMeters,
 		DurationSeconds: route.DurationSeconds,
 		WeightKG:        weightOf(requirements),
+		DemandBPS:       demandBPS,
 		RouteConfidence: route.Confidence,
 		RequestedBy:     req.RequestedBy,
 	}, tariff)
@@ -254,40 +265,82 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (jobs.Job, erro
 	return job, nil
 }
 
-// Cancel ends a job and records which cancellation tier applied.
+// Cancel ends a job, records which tier applied, and charges the configured
+// fee (BD-01).
 //
-// It records the tier and leaves the fee null. BD-01 is a commercial decision
-// the documentation does not make, and inventing an amount here would charge
-// real customers a number nobody chose.
-func (s *Service) Cancel(ctx context.Context, jobID, actorID string, actorType jobs.ActorType, reason string) (jobs.Job, CancellationTier, error) {
+// The fee is computed from the job's acceptance time rather than from the tier
+// alone. The tier says a driver had been assigned; only the acceptance
+// timestamp says how long ago, and the two-minute grace window is measured
+// from that moment.
+func (s *Service) Cancel(ctx context.Context, jobID, actorID string, actorType jobs.ActorType, reason string) (jobs.Job, Cancellation, error) {
 	job, err := s.jobs.ByID(ctx, jobID)
 	if err != nil {
-		return jobs.Job{}, "", httpx.NotFound("job not found")
+		return jobs.Job{}, Cancellation{}, httpx.NotFound("job not found")
 	}
 	if actorType == jobs.ActorCustomer && job.RequesterUserID != actorID {
-		return jobs.Job{}, "", httpx.Forbidden("not permitted")
+		return jobs.Job{}, Cancellation{}, httpx.Forbidden("not permitted")
 	}
 	if !Cancellable(job.Status) {
-		return jobs.Job{}, "", httpx.Conflict(fmt.Sprintf("a job that is %s cannot be cancelled", job.Status))
+		return jobs.Job{}, Cancellation{}, httpx.Conflict(fmt.Sprintf("a job that is %s cannot be cancelled", job.Status))
 	}
 
 	tier := TierFor(job.Status)
+
+	// The fee is decided before the transition, while the assignment is still
+	// readable. Cancelling clears nothing, but reading first keeps the fee a
+	// function of the job as the customer left it.
+	fee, err := s.cancellationFee(ctx, jobID, tier)
+	if err != nil {
+		return jobs.Job{}, Cancellation{}, httpx.Internal("could not determine the cancellation fee").WithCause(err)
+	}
+
 	cancelled, err := s.jobs.Transition(ctx, jobID, job.Status, jobs.StatusCancelled,
 		jobs.Actor{Type: actorType, ID: actorID},
-		map[string]any{"reason": reason, "tier": string(tier)})
+		map[string]any{"reason": reason, "tier": string(tier), "fee_minor": fee.Minor})
 	if err != nil {
 		if errors.Is(err, jobs.ErrStaleTransition) {
 			// The job moved while we were deciding — most often a driver
 			// accepting as the customer cancels.
-			return jobs.Job{}, "", httpx.Conflict("the job changed, please retry")
+			return jobs.Job{}, Cancellation{}, httpx.Conflict("the job changed, please retry")
 		}
-		return jobs.Job{}, "", httpx.Internal("could not cancel the job").WithCause(err)
+		return jobs.Job{}, Cancellation{}, httpx.Internal("could not cancel the job").WithCause(err)
 	}
 
-	if err := s.quotes.RecordCancellation(ctx, jobID, string(actorType), actorID, reason, string(tier)); err != nil {
-		return jobs.Job{}, "", httpx.Internal("could not record the cancellation").WithCause(err)
+	if err := s.quotes.RecordCancellation(ctx, jobID, string(actorType), actorID, reason, string(tier), fee); err != nil {
+		return jobs.Job{}, Cancellation{}, httpx.Internal("could not record the cancellation").WithCause(err)
 	}
-	return cancelled, tier, nil
+	return cancelled, Cancellation{Tier: tier, Fee: fee}, nil
+}
+
+// Cancellation is what a cancellation cost and why.
+type Cancellation struct {
+	Tier CancellationTier
+	Fee  money.Amount
+}
+
+// cancellationFee applies the configured policy to one job.
+//
+// A cancellation before assignment never reaches the assignment lookup or the
+// settings table: there is no driver to compensate, so there is nothing to
+// configure and nothing that can fail.
+func (s *Service) cancellationFee(ctx context.Context, jobID string, tier CancellationTier) (money.Amount, error) {
+	if tier == TierBeforeAssignment {
+		return money.Zero(money.PKR)
+	}
+	policy, err := LoadCancellationPolicy(ctx, s.settings)
+	if err != nil {
+		return money.Amount{}, err
+	}
+	assignment, err := s.jobs.LiveAssignment(ctx, jobID)
+	if err != nil {
+		if errors.Is(err, jobs.ErrNotFound) {
+			// The tier says a driver was assigned but no live assignment
+			// remains — a rejected or expired offer. Nobody is owed anything.
+			return money.Zero(money.PKR)
+		}
+		return money.Amount{}, err
+	}
+	return policy.FeeFor(tier, assignment.AcceptedAt, s.now())
 }
 
 // StartSearching moves a confirmed job into dispatch.
@@ -433,4 +486,31 @@ func fingerprintOf(req CreateRequest) []byte {
 	}{req.QuoteID, req.JobType, req.Stops, req.Requirements, req.ScheduledAt})
 	sum := sha256.Sum256(payload)
 	return sum[:]
+}
+
+// DemandRadiusMeters is the area a quote measures demand over.
+//
+// It matches dispatch's first search ring: the drivers who would actually be
+// offered this job are the ones whose scarcity should move its price.
+const DemandRadiusMeters = 2000
+
+// DemandLocationMaxAge bounds what counts as a live driver position.
+const DemandLocationMaxAge = 2 * time.Minute
+
+// demandBPS measures demand around a pickup and turns it into a multiplier.
+//
+// Every failure path returns neutral. Demand is an adjustment to a fare that is
+// already correct without it, so an unreachable database or an unreadable
+// settings row should cost the platform a surge it might have charged — not
+// cost the customer a quote.
+func (s *Service) demandBPS(ctx context.Context, lat, lon float64) int {
+	policy, err := pricing.LoadDemandPolicy(ctx, s.settings)
+	if err != nil {
+		return pricing.NeutralBPS
+	}
+	supply, err := s.quotes.Supply(ctx, lat, lon, DemandRadiusMeters, DemandLocationMaxAge, s.now())
+	if err != nil {
+		return pricing.NeutralBPS
+	}
+	return policy.MultiplierBPS(supply)
 }

@@ -169,10 +169,28 @@ func (s *Store) AddItem(ctx context.Context, orderID, productID, variantID strin
 func recomputeTotal(ctx context.Context, tx pgx.Tx, orderID string) error {
 	// Summed in the database from the stored line snapshots, so the total and
 	// the lines cannot disagree.
+	// A settled substitution changes what the line costs without changing the
+	// line: document 74 forbids mutating the original, so the substitute price
+	// is read from the issue row instead of written onto the item.
+	//
+	// The lateral takes the most recent settled substitution per line, so an
+	// item substituted twice is charged at what was finally supplied rather
+	// than at the first proposal.
 	_, err := tx.Exec(ctx,
 		`UPDATE orders SET items_total_minor = COALESCE((
-		   SELECT sum(unit_price_minor * quantity) FROM order_items
-		    WHERE order_id = $1 AND status NOT IN ('REMOVED', 'UNAVAILABLE')), 0),
+		   SELECT sum(COALESCE(settled.substitute_unit_price_minor, i.unit_price_minor) * i.quantity)
+		     FROM order_items i
+		     LEFT JOIN LATERAL (
+		       SELECT iss.substitute_unit_price_minor
+		         FROM order_item_issues iss
+		        WHERE iss.order_item_id = i.id
+		          AND iss.action = 'SUBSTITUTE'
+		          AND iss.substitute_unit_price_minor IS NOT NULL
+		          AND iss.resolution IN ('CUSTOMER_ACCEPTED', 'AUTO_APPLIED')
+		        ORDER BY iss.created_at DESC
+		        LIMIT 1
+		     ) settled ON true
+		    WHERE i.order_id = $1 AND i.status NOT IN ('REMOVED', 'UNAVAILABLE')), 0),
 		   updated_at = now()
 		 WHERE id = $1`, orderID)
 	if err != nil {
@@ -206,10 +224,20 @@ func (s *Store) Place(ctx context.Context, orderID string, now time.Time) (Order
 		return Order{}, errors.New("merchant: an empty cart cannot be placed")
 	}
 
+	// The merchant's own window if it set one, otherwise the platform default
+	// BD-12 decided: ten minutes.
+	//
+	// COALESCE across the two sources in one query rather than two round
+	// trips. The refusal below is still reachable — it fires when the platform
+	// row is missing too, which is a misconfigured deployment rather than an
+	// undecided business question, and is still not something to paper over
+	// with a guessed duration.
 	var timeoutSeconds *int
 	if err := tx.QueryRow(ctx,
-		`SELECT accept_timeout_seconds FROM merchant_config WHERE merchant_id = $1`, merchantID).
-		Scan(&timeoutSeconds); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		`SELECT COALESCE(
+		          (SELECT accept_timeout_seconds FROM merchant_config WHERE merchant_id = $1),
+		          (SELECT value::integer FROM platform_settings WHERE key = 'merchant.accept_timeout_seconds'))`,
+		merchantID).Scan(&timeoutSeconds); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, fmt.Errorf("load merchant config: %w", err)
 	}
 	if timeoutSeconds == nil {
@@ -385,11 +413,22 @@ func (s *Store) ItemsOf(ctx context.Context, orderID string, currency money.Curr
 
 // --- item issues (document 74) -----------------------------------------------
 
-// RecordIssue stores an item problem and its resolution.
+// RecordIssue stores an item problem, its resolution, and its price effect.
 //
-// The original order line is never mutated (document 74). Its status changes to
-// SUBSTITUTED or REMOVED, and the substitute lives in the issue row — so what
-// the customer ordered stays readable after what they received changed.
+// BD-11, resolved on 2026-08-28: the customer pays what the substitute
+// actually costs, up or down. So an accepted substitution reprices its line —
+// otherwise the order total would still say what the customer ordered while
+// the shopper bought something else.
+//
+// Document 74's requirement that the original line survive is kept. The
+// original price moves to original_unit_price_minor rather than being
+// overwritten, and the issue row records the substitute and the difference, so
+// what was ordered, what was supplied and what it cost are all readable side
+// by side.
+//
+// Only an accepted substitution reprices. A PENDING one is a question the
+// customer has not answered yet, and charging for a proposal would bill them
+// for something they might decline.
 func (s *Store) RecordIssue(ctx context.Context, issue Issue, itemStatus string) (Issue, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -545,4 +584,72 @@ func nullableUUID(id string) any {
 		return nil
 	}
 	return id
+}
+
+// --- acceptance timeout sweep (BD-12) ----------------------------------------
+
+// ExpireOverdue cancels orders whose acceptance deadline has passed.
+//
+// BD-12: ten minutes, then the order cancels itself and the customer is not
+// charged. Without this the deadline is a timestamp nobody acts on, and an
+// order sent to a closed store waits forever.
+//
+// The cancellation is compare-and-set on PLACED, so a merchant accepting in
+// the same instant wins or loses cleanly rather than both happening: whichever
+// transaction commits first moves the order out of PLACED, and the other
+// matches no rows. limit bounds one pass so a large backlog is worked through
+// in batches rather than in one long transaction.
+func (s *Store) ExpireOverdue(ctx context.Context, now time.Time, limit int) ([]Order, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
+		`UPDATE orders SET status = 'CANCELLED',
+		                   cancelled_by = 'SYSTEM',
+		                   cancelled_reason = 'MERCHANT_ACCEPT_TIMEOUT',
+		                   updated_at = now()
+		  WHERE id IN (
+		    SELECT id FROM orders
+		     WHERE status = 'PLACED'
+		       AND accept_deadline IS NOT NULL
+		       AND accept_deadline <= $1
+		     ORDER BY accept_deadline
+		     LIMIT $2
+		     FOR UPDATE SKIP LOCKED
+		  )
+		  RETURNING `+orderColumns, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("expire overdue orders: %w", err)
+	}
+
+	var expired []Order
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		expired = append(expired, order)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read expired orders: %w", err)
+	}
+
+	for _, order := range expired {
+		if err := appendOrderHistory(ctx, tx, order.ID, StatusPlaced, StatusCancelled,
+			"SYSTEM", "", map[string]any{"reason": "MERCHANT_ACCEPT_TIMEOUT"}); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return expired, nil
 }

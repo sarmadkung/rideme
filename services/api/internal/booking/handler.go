@@ -9,6 +9,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
+	"github.com/sarmadkung/rideme/services/api/pkg/money"
 )
 
 // Handler serves the customer and driver surfaces from documents 14 and 35.
@@ -265,17 +266,16 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, tier, err := h.service.Cancel(r.Context(), r.PathValue("id"),
+	job, cancellation, err := h.service.Cancel(r.Context(), r.PathValue("id"),
 		principal.UserID, jobs.ActorCustomer, body.Reason)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"job": toJobResponse(job),
-		// The tier is reported; the fee it implies is BD-01 and unresolved, so
-		// no amount is returned.
-		"cancellation_tier": tier,
+	httpx.WriteJSON(w, r, http.StatusOK, CancelResponse{
+		Job:              toJobResponse(job),
+		CancellationTier: string(cancellation.Tier),
+		Fee:              cancellation.Fee,
 	})
 }
 
@@ -366,9 +366,11 @@ type QuoteResponse struct {
 
 // CancelResponse reports the outcome of a cancellation.
 //
-// It carries the tier and no amount: BD-01 is unresolved, and a fee field that
-// is always zero would read as "free" rather than "undecided".
+// The fee is always present, including when it is zero. A customer who
+// cancelled inside the free window is told they were charged nothing, rather
+// than being left to infer it from a missing field.
 type CancelResponse struct {
-	Job              JobResponse `json:"job"`
-	CancellationTier string      `json:"cancellation_tier"`
+	Job              JobResponse  `json:"job"`
+	CancellationTier string       `json:"cancellation_tier"`
+	Fee              money.Amount `json:"fee"`
 }

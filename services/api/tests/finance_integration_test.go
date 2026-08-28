@@ -442,30 +442,52 @@ func TestConcurrentWebhookDeliveriesAdmitOneProcessor(t *testing.T) {
 	}
 }
 
-func TestEarningsCannotBeComputedWithoutAConfiguredCommission(t *testing.T) {
-	// BD-05 is a PRODUCT_DECISION. A guessed rate pays every driver the wrong
-	// amount, retroactively.
+func TestTheConfiguredCommissionIsTwentyPercentOnEveryService(t *testing.T) {
+	// BD-05, resolved on 2026-08-28: a flat 20% platform commission.
 	h := newFinanceHarness(t)
 	ctx := context.Background()
 
-	if _, err := h.store.CommissionRateFor(ctx, "CARGO", finance.SubjectDriver); !errors.Is(err, finance.ErrNoCommission) {
-		t.Fatalf("a commission rate appeared from nowhere: %v", err)
+	for _, jobType := range []string{"RIDE", "PARCEL", "GROCERY", "CARGO", "FREIGHT"} {
+		rate, err := h.store.CommissionRateFor(ctx, jobType, finance.SubjectDriver)
+		if err != nil {
+			t.Fatalf("%s has no commission rate: %v", jobType, err)
+		}
+		if rate.RateBPS != 2000 {
+			t.Fatalf("%s commission = %d bps, want the decided 2000", jobType, rate.RateBPS)
+		}
+	}
+}
+
+func TestAServiceWithNoConfiguredCommissionStillRefuses(t *testing.T) {
+	// The refusal is the part worth keeping. BD-05 set rates for the five
+	// services that exist; a sixth added tomorrow must not silently inherit
+	// one, because a guessed rate pays every driver the wrong amount and does
+	// it retroactively.
+	h := newFinanceHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.store.CommissionRateFor(ctx, "CARGO", finance.SubjectMerchant); !errors.Is(err, finance.ErrNoCommission) {
+		t.Fatalf("a merchant commission rate appeared from nowhere: %v", err)
 	}
 
 	// Once configured, it is used.
 	if err := h.store.SetCommissionRate(ctx, finance.CommissionRate{
-		JobType: "CARGO", SubjectType: finance.SubjectDriver, RateBPS: 1500, Version: 1,
+		JobType: "CARGO", SubjectType: finance.SubjectMerchant, RateBPS: 1500, Version: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rate, err := h.store.CommissionRateFor(ctx, "CARGO", finance.SubjectDriver)
+	rate, err := h.store.CommissionRateFor(ctx, "CARGO", finance.SubjectMerchant)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rate.RateBPS != 1500 {
 		t.Fatalf("rate = %d bps", rate.RateBPS)
 	}
-	if _, err := h.pool.Exec(ctx, `DELETE FROM commission_rates WHERE job_type = 'CARGO'`); err != nil {
+	// Scoped to the row this test added. Deleting every CARGO rate would take
+	// the seeded driver commission with it and leave the platform unable to
+	// pay anyone for cargo — on a shared database, for every later run.
+	if _, err := h.pool.Exec(ctx,
+		`DELETE FROM commission_rates WHERE job_type = 'CARGO' AND subject_type = 'MERCHANT'`); err != nil {
 		t.Fatal(err)
 	}
 }

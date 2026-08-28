@@ -7,7 +7,9 @@ grocery — runs through one job core, one dispatch engine, one pricing engine a
 **Phases 12–15 are PARTIAL.** Their foundations are built and tested; the product surfaces
 they call for are not. See each phase below for exactly what exists.
 
-Five product decisions are open and blocking: BD-04, BD-05, BD-11, BD-12, BD-01/BD-02.
+All six blocking product decisions were answered by the owner on 2026-08-28 — BD-01, BD-02,
+BD-04, BD-05, BD-11, BD-12 — and are implemented as configuration. See "Business Decisions
+Resolved" below.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -334,7 +336,7 @@ Verified 2026-08-28. Documents 05, 15, 34, 35, 36.
 | Document `034` breakdown complete | VERIFIED | 3 | YES | lines always sum to the total — asserted on every quote in every pricing test |
 | Rounds once, half away from zero | VERIFIED | 2 | YES | rational arithmetic throughout; 3,333 successive quotes accumulate without drift |
 | Minimum fare tops up, never reduces | VERIFIED | 2 | YES | applied before demand and tax |
-| Demand inert by default (BD-02) | VERIFIED | 1 | YES | term present, adjustment zero |
+| Demand computed and capped (BD-02) | VERIFIED | 7 | YES | ratio of waiting requests to available drivers, clamped to 1.5x by both the tariff and the platform ceiling |
 | **Demand bounded by tariff** (`034`) | VERIFIED | 1 | YES | 3× against a 1.5× cap is refused; so is 0.5× — surge must not become a silent discount |
 | Tax applies last | VERIFIED | 1 | YES | on what the customer actually pays |
 | Discount never makes a fare negative | VERIFIED | 1 | YES | the platform would owe money for a ride |
@@ -344,7 +346,7 @@ Verified 2026-08-28. Documents 05, 15, 34, 35, 36.
 | Quote is single-use | VERIFIED | 1 | YES | two jobs must not share one locked price |
 | **Idempotent create** (`035`, `185`) | VERIFIED | 2 | YES | a retry returns the same job; exactly one row exists |
 | Key reused with different content refused | VERIFIED | 1 | YES | replaying the first response would discard the second request |
-| Cancellation tiers follow `005` | VERIFIED | 2 | YES | tier recorded, **fee left null** — BD-01 is not the platform's to invent |
+| Cancellation tiers follow `005`, fee charged (BD-01) | VERIFIED | 9 | YES | free for 2 minutes from driver acceptance, then PKR 100; a job that never found a driver is never charged |
 | Cancellation is state-aware (`036`) | VERIFIED | 2 | YES | a trip in progress cannot be cancelled |
 | Concurrent cancellations | VERIFIED | 1 | YES | 6 racers → one cancellation, one history row |
 | Driver commands validate ownership (`035`) | VERIFIED | 1 | YES | a driver cannot command a job they do not hold |
@@ -423,7 +425,9 @@ offers for one job — simulating a defect elsewhere — was refused by the part
 The test now asserts that refusal directly, against raw SQL, because the guarantee has to hold
 for a migration or an operator script as much as for this code.
 
-**BD-04 is open and blocks going live with dispatch** — recorded as B-5. Retries are bounded
+**BD-04 was resolved on 2026-08-28** — B-5 is closed. Three rounds over ninety seconds, then
+the job ends as `EXPIRED` with a `NO_SUPPLY` reason and nothing is charged; a sweeper catches
+searches whose worker died. Retries are bounded
 and the engine reports `ErrNoSupply` when the rings are exhausted; it deliberately does not
 expire the job, because how long to search and what the customer sees are product decisions
 document 044 leaves open.
@@ -490,7 +494,7 @@ Verified 2026-08-28. Documents 65–78.
 | Order state machine (`070`) | VERIFIED | 2 | YES | documented flow walkable; skipping fulfilment refused |
 | Merchant rejection before preparation only | VERIFIED | 1 | YES | after picking starts, stock and staff time are consumed |
 | Customer cancellation is state-aware | VERIFIED | 1 | YES | |
-| **BD-12 fails loudly, never defaults** | VERIFIED | 2 | YES | placing an order against a merchant with no configured timeout is refused; the deadline comes from that value |
+| **BD-12: 10 minutes, then auto-cancel** | VERIFIED | 4 | YES | platform default with a per-merchant override; a sweeper cancels unanswered orders, compare-and-set against a merchant accepting at the same moment |
 | Acceptance timeout sweep | VERIFIED | 2 | YES | enforces the merchant's own configured deadline; an accepted order is not swept |
 | Merchant timestamps (`072`) | VERIFIED | 1 | YES | `accepted_at`, `preparation_started_at`, `ready_at` set by the transitions that earn them |
 | **Price snapshot on order lines (`068`)** | VERIFIED | 2 | YES | doubling a catalogue price does not move a stored line — referencing the live price would rewrite every past receipt |
@@ -502,7 +506,7 @@ Verified 2026-08-28. Documents 65–78.
 | `ASK_ME` becomes a question, not a decision | VERIFIED | 1 | YES | removal still needs no permission |
 | **Original order lines never mutated (`074`)** | VERIFIED | 2 | YES | name and price survive a substitution; the line is marked, not deleted |
 | Removed items leave the total | VERIFIED | 1 | YES | the total stops including what nobody received |
-| **BD-11 unwired** | VERIFIED | 1 | YES | asserted that a substitution's price difference is recorded and **changes no total** |
+| **BD-11: customer pays the substitute's price** | VERIFIED | 5 | YES | both directions; only settled substitutions reprice; the original order line is never mutated (`074`) — the total reads the substitute price from the issue row |
 | Store hours decide availability | VERIFIED | 2 | YES | closing time exclusive; **no configured hours means closed**, because a store that has not said it is open should not take orders |
 | Concurrent order transitions | VERIFIED | 1 | YES | 6 racers → exactly 1 |
 
@@ -544,7 +548,7 @@ Verified 2026-08-28. Documents 19, 51–64. **Level 5 throughout, mandatory.**
 | **Webhook signatures verified (`058`)** | VERIFIED | 1 | YES | constant-time; tampered payload, wrong secret and empty signature all refused |
 | Webhook deduplication is durable (`052`) | VERIFIED | 2 | YES | 8 concurrent deliveries → 1 processor; an in-memory set forgets exactly when providers replay |
 | Capture and ledger commit together | VERIFIED | n/a | YES | a captured payment with no ledger entry is money the books do not know about |
-| **BD-05: no commission without configuration** | VERIFIED | 1 | YES | `commission_rates` ships empty and earnings refuse — a guessed rate pays every driver wrongly, retroactively |
+| **BD-05: flat 20% commission** | VERIFIED | 2 | YES | seeded for all five services; an unconfigured combination still refuses, so a new service cannot silently inherit a rate |
 | Balances derived, not stored (`053`) | VERIFIED | 1 | YES | a cached balance is a second source of truth that can disagree |
 | One payout per subject per period (`059`) | VERIFIED | 1 | YES | paying a driver twice for one week is found by whoever reconciles the bank |
 | **BD-08: zero tolerance (`058`)** | VERIFIED | 1 | YES | a one-paisa mismatch opens a case and adjusts nothing |
@@ -737,3 +741,68 @@ Carried out of Phase 2. None blocks Phase 3.
 | Cursor encoding | ADR-009 fixes the pagination envelope, not how a cursor is built. No list endpoint exists yet. | First list endpoint |
 | `contractgen` registration list is hand-written | Generation removes hand-maintained *shapes*; the list of registered types is still hand-maintained. Guarded by tests that fail when a Go constant is added without registration — a smaller surface than three duplicated files, not zero. | Ongoing |
 | Remote CI has still never executed | Account billing lock, external to the repository. Unchanged since 2026-08-27. `make contracts-check` now runs inside `make verify`, so CI will enforce the contract gate once it can run at all. | Phase 15, or sooner if billing is restored |
+
+
+---
+
+## Business Decisions Resolved — 2026-08-28
+
+The owner answered the six decisions that were blocking go-live. Every mechanism for them was
+already built and refusing to act; what changed is that the values now exist.
+
+| | Decision | Configured in |
+|---|---|---|
+| BD-01 | Free to cancel for 2 minutes after driver acceptance, then PKR 100 | `platform_settings.cancellation.*` |
+| BD-02 | Surge is demand-triggered, capped at 1.5x | `platform_settings.surge.*`, `pricing_tariffs.demand_max_bps` |
+| BD-04 | 3 dispatch rounds over 90s, then `EXPIRED` / `NO_SUPPLY`, no charge | `dispatch_config.max_attempts`, `platform_settings.dispatch.*` |
+| BD-05 | Flat 20% platform commission on every service | `commission_rates` |
+| BD-11 | Customer pays the substitute's actual price, up or down | `order_item_issues`, read by the order total |
+| BD-12 | Merchants have 10 minutes to accept, then auto-cancel | `platform_settings.merchant.*`, `merchant_config` |
+
+### What was built
+
+| Component | Purpose |
+|---|---|
+| `migrations/000011_business_decisions` | `platform_settings`, the seeded values, and the schema the decisions need |
+| `internal/settings` | Reads platform values with a short cache; a missing key is an error, never a zero |
+| `internal/booking/cancellation.go` | BD-01's policy, measured from driver acceptance |
+| `internal/pricing/demand.go` | BD-02's multiplier, integer basis points, capped twice |
+| `internal/dispatch/runner.go` | BD-04's search policy and its sweep |
+| `internal/sweeper` | Runs BD-04's and BD-12's deadline passes on an interval, wired into the server |
+
+### Verification
+
+| Gate | Result |
+|---|---|
+| `go test ./...` | pass |
+| `go test -tags integration ./tests/` | pass |
+| `go test -race` (unit and integration) | pass, no races reported |
+| Concurrency tests at `-count=3` | pass |
+| `make verify` (both toolchains) | pass |
+| Migration 000011 down/up round trip | pass |
+
+### Design decisions worth recording
+
+**Values are rows, not constants.** Every decided number lives in the database, so changing a
+commission rate is an edit with an audit trail rather than a deploy.
+
+**The refusals were kept.** BD-05's rate table is seeded for the five services that exist, but a
+combination with no row still returns `ErrNoCommission` — a service added later cannot silently
+inherit a rate. A missing settings key is an error rather than a zero, because zero is meaningful
+for most of these: a zero grace window charges every cancellation, a zero timeout cancels every
+order instantly.
+
+**Deadlines needed something to act on them.** BD-04 and BD-12 both set a clock, and a stored
+deadline that nothing sweeps is a timestamp rather than a rule. Both sweeps compare-and-set
+against the state they are ending, so a merchant accepting as its deadline passes — or a driver
+accepting as a search gives up — wins cleanly rather than racing.
+
+**BD-11 versus document 074.** The customer must pay the substitute's price, and the original
+order line must never be mutated. Repricing the line in place satisfied the first and broke the
+second, which an existing test caught. The order total now reads the substitute price from the
+issue row instead, so what was ordered and what was charged live in separate rows and both stay
+readable.
+
+**Failing to measure demand is not a reason to refuse a quote.** BD-02's multiplier returns
+neutral on every error path. An unreachable database costs the platform a surge it might have
+charged; it does not cost the customer a fare.

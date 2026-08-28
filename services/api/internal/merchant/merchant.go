@@ -145,10 +145,9 @@ type Merchant struct {
 // Config holds per-merchant operational settings.
 type Config struct {
 	MerchantID string
-	// AcceptTimeout is BD-12 and unresolved. Nil means unset, and placing an
-	// order against an unset merchant fails rather than defaulting — the
-	// business decision register asks for exactly that: "an explicit unset
-	// state that fails loudly rather than defaulting silently".
+	// AcceptTimeout is this merchant's own acceptance window, if it set one.
+	// Nil means it uses the platform default BD-12 decided (ten minutes);
+	// placing an order resolves the two in the database.
 	AcceptTimeout   *time.Duration
 	DefaultPrepTime *time.Duration
 	AutoAccept      bool
@@ -229,8 +228,11 @@ type Issue struct {
 }
 
 var (
+	// ErrAcceptTimeoutUnset now means a misconfigured deployment rather than
+	// an undecided business question: BD-12 set the platform default, so
+	// reaching this means the platform_settings row is missing entirely.
 	ErrAcceptTimeoutUnset = errors.New(
-		"merchant: no acceptance timeout is configured (BD-12); orders cannot be placed until one is set")
+		"merchant: no acceptance timeout is configured, at the merchant or the platform")
 	ErrNotFound       = errors.New("merchant: not found")
 	ErrNotCancellable = errors.New("merchant: this order can no longer be cancelled")
 	ErrStoreClosed    = errors.New("merchant: the store is not open")
@@ -258,4 +260,41 @@ type Hours struct {
 	Weekday  int
 	OpensAt  int
 	ClosesAt int
+}
+
+// --- substitution pricing (BD-11) --------------------------------------------
+
+// ResolutionAccepted is the resolution that makes a substitution real.
+const (
+	ResolutionPending          = "PENDING"
+	ResolutionCustomerAccepted = "CUSTOMER_ACCEPTED"
+	ResolutionCustomerDeclined = "CUSTOMER_DECLINED"
+	ResolutionAutoApplied      = "AUTO_APPLIED"
+)
+
+// repricesLine reports whether an issue should change what the customer pays.
+//
+// BD-11 charges the customer the substitute's actual price, but only once the
+// substitution is settled: either the customer accepted it, or their standing
+// preference was ALLOW and it applied automatically. A substitution still
+// awaiting an answer changes nothing.
+func repricesLine(issue Issue) bool {
+	if issue.Action != ActionSubstitute || issue.SubstitutePrice == nil {
+		return false
+	}
+	return issue.Resolution == ResolutionCustomerAccepted || issue.Resolution == ResolutionAutoApplied
+}
+
+// PriceDifference is what a substitution changes for the customer.
+//
+// Positive means the substitute costs more and the customer pays more;
+// negative means they pay less. Both directions reach the customer under
+// BD-11 — the platform neither pockets a cheaper substitute nor absorbs a
+// dearer one.
+func PriceDifference(original, substitute money.Amount, quantity int) (money.Amount, error) {
+	perUnit, err := substitute.Sub(original)
+	if err != nil {
+		return money.Amount{}, err
+	}
+	return perUnit.MulInt(int64(quantity))
 }

@@ -19,6 +19,19 @@ commercial, legal, or regulatory, it is marked as requiring a product decision a
 **Phase 1 is not blocked by any item in this register.** The earliest blocking point is the first
 vertical slice (ride), where six items become live.
 
+## Status — 2026-08-28
+
+**Six decisions resolved by the owner: BD-01, BD-02, BD-04, BD-05, BD-11, BD-12.** These were
+the items blocking go-live — commission, cancellation fees, surge, dispatch no-supply behaviour,
+merchant acceptance timeout, and grocery substitution pricing. Each is recorded inline in its own
+section below, and each is implemented as *configuration* (`platform_settings`, `commission_rates`,
+`dispatch_config`, `merchant_config`) rather than as a constant in code, so changing a value is a
+row edit with an audit trail.
+
+**Still open:** BD-03, BD-06, BD-07 (resolved separately as ADR-008), BD-08, BD-09, BD-10, BD-13,
+BD-14, BD-15, BD-16 and the remaining technical defaults. None of them block anything currently
+built.
+
 ---
 
 ## PRODUCT_DECISION (11)
@@ -31,6 +44,13 @@ vertical slice (ride), where six items become live.
 **Proceed without?** No — cancellation cannot ship. The rest of the ride slice can.
 **Recommendation:** None. Amounts are commercial. The *tier structure* from `005` can be implemented as configuration now, with values supplied later.
 
+**RESOLVED — 2026-08-28, by the owner.** Cancelling is free for **2 minutes measured from
+driver acceptance**, and costs **PKR 100** after that. The clock starts at acceptance, not at
+booking: a customer whose request never found a driver has cost nobody anything and is never
+charged, however long they waited. Configured in `platform_settings.cancellation.grace_seconds`
+and `.fee_minor`; applied by `booking.CancellationPolicy`. Driver compensation remains
+unconfigured and is not paid.
+
 ### BD-02 — Surge / demand multiplier behaviour
 **Domain:** pricing
 **Why it matters:** `005` includes `demand` in the ride fare formula but never defines how it is computed, its bounds, or its caps. Uncapped surge is a regulatory and reputational risk.
@@ -39,6 +59,16 @@ vertical slice (ride), where six items become live.
 **Proceed without?** Yes — implement the fare formula with `demand = 1.0` (no surge) and the term present but inert.
 **Recommendation:** Ship without surge. Do not invent a multiplier.
 
+**RESOLVED — 2026-08-28, by the owner.** Surge is **demand-triggered and capped at 1.5x**.
+The multiplier is the ratio of waiting requests to available drivers within the first dispatch
+ring, clamped to `[1.0, 1.5]` and computed in basis points so no float enters a fare. It is
+suppressed entirely when supply is below the configured floor, because one driver online against
+twenty requests is a quiet night or a monitoring gap rather than a market signal. The cap is
+enforced twice — by `pricing_tariffs.demand_max_bps` and by the platform ceiling in
+`platform_settings.surge.max_bps` — so no market can configure past it. Failing to *measure*
+demand returns neutral rather than an error: an unreachable database should cost the platform a
+surge, not cost the customer a quote.
+
 ### BD-05 — Commission rates, payout schedule, minimum payout threshold
 **Domain:** financial · merchant · provider
 **Why it matters:** Determines what every driver and merchant is paid. Wrong rates mean paying the wrong people the wrong amounts, retroactively.
@@ -46,6 +76,12 @@ vertical slice (ride), where six items become live.
 **Depends on it:** ledger entries, earnings, payouts, settlement runs, merchant dashboards.
 **Proceed without?** Partly — the ledger *structure* can be built and tested with configured rates. No real payout may run.
 **Recommendation:** Build commission as configuration from day one. Values are the owner's.
+
+**RESOLVED — 2026-08-28, by the owner.** A **flat 20% (2000 bps)** platform commission on
+every service. Seeded into `commission_rates` for all five job types against `DRIVER`. The
+refusal was kept: a combination with no row still returns `ErrNoCommission`, so a service added
+tomorrow cannot silently inherit a rate. Payout schedule and minimum payout threshold remain
+undecided and are not implemented.
 
 ### BD-06 — Refund policy: window, partial rules, fee absorption
 **Domain:** payments
@@ -78,6 +114,15 @@ vertical slice (ride), where six items become live.
 **Depends on it:** substitution flow, payment adjustment, ledger.
 **Proceed without?** No for the financial adjustment. The offer/accept/decline flow can be built.
 **Recommendation:** None.
+
+**RESOLVED — 2026-08-28, by the owner.** **The customer pays the substitute's actual
+price**, in both directions: a dearer substitute costs them more, a cheaper one costs them less,
+and the platform neither absorbs the difference nor keeps the saving. Only a *settled*
+substitution reprices — one the customer accepted, or one auto-applied under a standing `ALLOW`
+preference. A pending proposal changes nothing, because charging for it would bill the customer
+for something they may decline. Document 074's prohibition on mutating the original order line is
+preserved: the substitute price lives in `order_item_issues` and the order total reads it from
+there, so what was ordered and what was charged remain separate rows.
 
 ### BD-13 — Cargo waiting and loading rates; restricted-goods list; damage liability
 **Domain:** cargo
@@ -179,6 +224,12 @@ assumed silently.
 **Blocks at:** first vertical slice (ride dispatch).
 **Recommendation:** A search window and retry cadence can be proposed as configuration once dispatch is built — but the customer-facing behaviour on failure is a product decision. Raise before the dispatch slice starts.
 
+**RESOLVED — 2026-08-28, by the owner.** Dispatch **retries with a widening radius, then
+the job ends as `EXPIRED` with a `NO_SUPPLY` reason and nothing is charged.** Bounded at three
+attempts over a ninety-second window; both bounds are checked because either alone leaves a hole.
+Uniform across services. Enforced by `dispatch.Runner` and, for jobs whose worker died, by a
+background sweeper.
+
 ### BD-12 — Merchant order acceptance timeout
 **Domain:** merchant · grocery
 **Why it matters:** An order a merchant never accepts leaves the customer waiting and the driver unassigned. Auto-cancelling too aggressively damages merchant relations; too slowly damages customer trust.
@@ -187,6 +238,12 @@ assumed silently.
 **Proceed without?** Partly — the acceptance flow can be built with the timeout as configuration. The value and the resulting behaviour must be set before grocery ships.
 **Blocks at:** grocery slice.
 **Recommendation:** Build as configuration with an explicit unset state that fails loudly rather than defaulting silently. Value from the owner.
+
+**RESOLVED — 2026-08-28, by the owner.** Merchants have **10 minutes** to accept, after
+which the order **auto-cancels** and the customer is not charged. The value is a platform default
+in `platform_settings.merchant.accept_timeout_seconds`; a merchant may still set its own shorter
+window in `merchant_config`. Enforced by a sweeper that compare-and-sets on `PLACED`, so a
+merchant accepting as the deadline passes wins or loses cleanly rather than both happening.
 
 ---
 

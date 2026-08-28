@@ -453,3 +453,84 @@ func isUniqueViolation(err error) bool {
 	var pgErr interface{ SQLState() string }
 	return errors.As(err, &pgErr) && pgErr.SQLState() == "23505"
 }
+
+// --- search expiry (BD-04) ---------------------------------------------------
+
+// FailureReason explains why a job ended without being delivered.
+type FailureReason string
+
+const (
+	// ReasonNoSupply is BD-04's outcome: dispatch ran its configured rounds
+	// and found nobody. The customer is not charged.
+	ReasonNoSupply FailureReason = "NO_SUPPLY"
+)
+
+// ExpireSearch ends a job that dispatch could not fill.
+//
+// Compare-and-set on SEARCHING, so a driver accepting in the same moment wins
+// cleanly: the accepting transaction moves the job to ASSIGNED and this one
+// matches no rows, rather than a customer being told "no drivers" about a job
+// that just found one.
+func (s *Store) ExpireSearch(ctx context.Context, jobID string, reason FailureReason) (Job, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Job{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	job, err := scanJob(tx.QueryRow(ctx,
+		`UPDATE jobs
+		    SET status = 'EXPIRED', failure_reason = $2, updated_at = now(),
+		        terminated_at = COALESCE(terminated_at, now())
+		  WHERE id = $1 AND status = 'SEARCHING'
+		  RETURNING `+jobColumns,
+		jobID, string(reason)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		var current Status
+		if qerr := s.pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id = $1`, jobID).Scan(&current); qerr != nil {
+			return Job{}, ErrNotFound
+		}
+		return Job{}, fmt.Errorf("%w: expected SEARCHING, found %s", ErrStaleTransition, current)
+	}
+	if err != nil {
+		return Job{}, fmt.Errorf("expire search: %w", err)
+	}
+
+	if err := appendHistory(ctx, tx, jobID, StatusSearching, StatusExpired,
+		Actor{Type: ActorSystem}, map[string]any{"reason": string(reason)}); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Job{}, fmt.Errorf("commit: %w", err)
+	}
+	return job, nil
+}
+
+// SearchingSince returns jobs that have been SEARCHING longer than a deadline.
+//
+// This is the sweeper's query. A job whose dispatch loop died — the process
+// restarted, the worker crashed — is still SEARCHING with nothing driving it,
+// and would wait forever without something that notices the clock.
+func (s *Store) SearchingSince(ctx context.Context, before time.Time, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text FROM jobs
+		  WHERE status = 'SEARCHING' AND updated_at <= $1
+		  ORDER BY updated_at LIMIT $2`, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find stale searches: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan stale search: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

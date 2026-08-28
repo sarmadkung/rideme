@@ -68,11 +68,67 @@ func (h *merchantHarness) aShop(t *testing.T) shop {
 	return s
 }
 
-func TestPlacingAnOrderRequiresAConfiguredAcceptanceTimeout(t *testing.T) {
-	// BD-12 is unresolved. The register asks for "an explicit unset state that
-	// fails loudly rather than defaulting silently" — a guessed timeout would
-	// either auto-cancel orders merchants were about to accept, or leave
-	// customers waiting indefinitely.
+func TestAMerchantWithNoConfigGetsThePlatformAcceptanceWindow(t *testing.T) {
+	// BD-12, resolved: ten minutes, then the order cancels itself. A merchant
+	// that has never configured anything still gets a working deadline, from
+	// the platform default rather than from a constant in Go.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aShop(t)
+
+	cart, err := h.store.OpenCart(ctx, s.merchantID, s.storeID, h.aUser(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 2, merchant.PreferAllow); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	placed, err := h.store.Place(ctx, cart.ID, now)
+	if err != nil {
+		t.Fatalf("an unconfigured merchant could not take an order: %v", err)
+	}
+	if placed.AcceptDeadline == nil {
+		t.Fatal("no acceptance deadline was set")
+	}
+	if delta := placed.AcceptDeadline.Sub(now); delta < 9*time.Minute || delta > 11*time.Minute {
+		t.Fatalf("deadline is %v from now, want the platform default of 10 minutes", delta)
+	}
+}
+
+func TestAMerchantsOwnTimeoutOverridesThePlatformDefault(t *testing.T) {
+	// The platform default is a fallback, not a ceiling. A merchant that knows
+	// it answers in two minutes should be able to say so.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aShop(t)
+
+	timeout := 5 * time.Minute
+	if err := h.store.SetConfig(ctx, merchant.Config{MerchantID: s.merchantID, AcceptTimeout: &timeout}); err != nil {
+		t.Fatal(err)
+	}
+	cart, err := h.store.OpenCart(ctx, s.merchantID, s.storeID, h.aUser(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 2, merchant.PreferAllow); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	placed, err := h.store.Place(ctx, cart.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta := placed.AcceptDeadline.Sub(now); delta < 4*time.Minute || delta > 6*time.Minute {
+		t.Fatalf("deadline is %v from now, want the merchant's own 5 minutes", delta)
+	}
+}
+
+func TestAnOverdueOrderCancelsItself(t *testing.T) {
+	// BD-12's second half. Without a sweeper the deadline is a timestamp
+	// nobody acts on, and an order sent to a closed store waits forever.
 	h := newMerchantHarness(t)
 	ctx := context.Background()
 	s := h.aShop(t)
@@ -82,29 +138,116 @@ func TestPlacingAnOrderRequiresAConfiguredAcceptanceTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 2, merchant.PreferAllow); err != nil {
+	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 1, merchant.PreferAllow); err != nil {
+		t.Fatal(err)
+	}
+	placed := time.Now().UTC()
+	if _, err := h.store.Place(ctx, cart.ID, placed); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := h.store.Place(ctx, cart.ID, time.Now()); !errors.Is(err, merchant.ErrAcceptTimeoutUnset) {
-		t.Fatalf("an order was placed with no configured timeout: %v", err)
-	}
-
-	// Configuring one unblocks it, and the deadline comes from that value.
-	timeout := 5 * time.Minute
-	if err := h.store.SetConfig(ctx, merchant.Config{MerchantID: s.merchantID, AcceptTimeout: &timeout}); err != nil {
+	// Nothing expires while the merchant still has time to answer.
+	if _, err := h.store.ExpireOverdue(ctx, placed.Add(9*time.Minute), 100); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC()
-	placed, err := h.store.Place(ctx, cart.ID, now)
+	still, err := h.store.OrderByID(ctx, cart.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if placed.AcceptDeadline == nil {
-		t.Fatal("no acceptance deadline was set")
+	if still.Status != merchant.StatusPlaced {
+		t.Fatalf("an order expired at 9 minutes, inside its 10-minute window: %s", still.Status)
 	}
-	if delta := placed.AcceptDeadline.Sub(now); delta < 4*time.Minute || delta > 6*time.Minute {
-		t.Fatalf("deadline is %v from now, want the configured 5 minutes", delta)
+
+	// Past the deadline it cancels, attributed to the system rather than to
+	// the customer or the merchant.
+	expired, err := h.store.ExpireOverdue(ctx, placed.Add(11*time.Minute), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, o := range expired {
+		if o.ID == cart.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the overdue order was not expired")
+	}
+
+	after, err := h.store.OrderByID(ctx, cart.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != merchant.StatusCancelled {
+		t.Fatalf("status after expiry = %s, want CANCELLED", after.Status)
+	}
+
+	var by, reason string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT COALESCE(cancelled_by, ''), COALESCE(cancelled_reason, '')
+		   FROM orders WHERE id = $1`, cart.ID).Scan(&by, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if by != "SYSTEM" || reason != "MERCHANT_ACCEPT_TIMEOUT" {
+		t.Fatalf("expiry recorded as by=%q reason=%q", by, reason)
+	}
+}
+
+func TestAcceptingAndExpiringTheSameOrderCannotBothHappen(t *testing.T) {
+	// The race that matters: a merchant tapping accept as the sweeper runs.
+	// Compare-and-set on PLACED means exactly one of them takes effect.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aShop(t)
+
+	cart, err := h.store.OpenCart(ctx, s.merchantID, s.storeID, h.aUser(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 1, merchant.PreferAllow); err != nil {
+		t.Fatal(err)
+	}
+	placed := time.Now().UTC()
+	if _, err := h.store.Place(ctx, cart.ID, placed); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	var accepted, swept bool
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := h.store.Transition(ctx, cart.ID, merchant.StatusPlaced, merchant.StatusConfirmed,
+			"MERCHANT", "", nil)
+		accepted = err == nil
+	}()
+	go func() {
+		defer wg.Done()
+		expired, err := h.store.ExpireOverdue(ctx, placed.Add(time.Hour), 100)
+		if err != nil {
+			return
+		}
+		for _, o := range expired {
+			if o.ID == cart.ID {
+				swept = true
+			}
+		}
+	}()
+	wg.Wait()
+
+	if accepted == swept {
+		t.Fatalf("accept and expiry both %v — exactly one must win", accepted)
+	}
+
+	final, err := h.store.OrderByID(ctx, cart.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted && final.Status != merchant.StatusConfirmed {
+		t.Fatalf("the merchant accepted but the order is %s", final.Status)
+	}
+	if swept && final.Status != merchant.StatusCancelled {
+		t.Fatalf("the sweeper won but the order is %s", final.Status)
 	}
 }
 
@@ -604,12 +747,11 @@ func TestARemovedItemLeavesTheOrderTotal(t *testing.T) {
 	}
 }
 
-func TestNoPriceDifferenceIsChargedAnywhere(t *testing.T) {
-	// BD-11 is unresolved: who absorbs a substitution's price difference is a
-	// product decision. The difference is recorded; nothing charges it.
-	h := newMerchantHarness(t)
+// aSubstitutedOrder places one item and substitutes it at a new price.
+func (h *merchantHarness) aSubstitutedOrder(t *testing.T, s shop, substituteMinor int64,
+	resolution string) (orderID string, originalTotal int64) {
+	t.Helper()
 	ctx := context.Background()
-	s := h.aShop(t)
 
 	cart, err := h.store.OpenCart(ctx, s.merchantID, s.storeID, h.aUser(t))
 	if err != nil {
@@ -624,22 +766,118 @@ func TestNoPriceDifferenceIsChargedAnywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	substitute := money.MustNew(40000, money.PKR)
-	difference := money.MustNew(15000, money.PKR)
+	substitute := money.MustNew(substituteMinor, money.PKR)
+	difference, err := merchant.PriceDifference(item.UnitPrice, substitute, item.Quantity)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.store.RecordIssue(ctx, merchant.Issue{
 		OrderID: cart.ID, OrderItemID: item.ID, Reason: "OUT_OF_STOCK",
 		Action: merchant.ActionSubstitute, SubstituteName: "Milk 1L (premium)",
 		SubstitutePrice: &substitute, PriceDifference: &difference,
-	}, ""); err != nil {
+		Resolution: resolution,
+	}, "SUBSTITUTED"); err != nil {
 		t.Fatal(err)
 	}
+	return cart.ID, before.ItemsTotal.Minor
+}
 
-	after, err := h.store.OrderByID(ctx, cart.ID)
+func TestADearerSubstituteRaisesWhatTheCustomerPays(t *testing.T) {
+	// BD-11, resolved: the customer pays what the substitute actually costs.
+	h := newMerchantHarness(t)
+	s := h.aShop(t)
+
+	orderID, original := h.aSubstitutedOrder(t, s, 40000, merchant.ResolutionCustomerAccepted)
+	after, err := h.store.OrderByID(context.Background(), orderID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.ItemsTotal.Minor != before.ItemsTotal.Minor {
-		t.Fatalf("a substitution changed the order total from %d to %d with BD-11 unresolved",
-			before.ItemsTotal.Minor, after.ItemsTotal.Minor)
+	if original != 25000 {
+		t.Fatalf("the fixture ordered %d minor units, expected 25000", original)
+	}
+	if after.ItemsTotal.Minor != 40000 {
+		t.Fatalf("total after substitution = %d, want the substitute's 40000", after.ItemsTotal.Minor)
+	}
+}
+
+func TestACheaperSubstituteLowersWhatTheCustomerPays(t *testing.T) {
+	// The other direction matters just as much: the platform does not keep the
+	// saving when a shopper buys something cheaper.
+	h := newMerchantHarness(t)
+	s := h.aShop(t)
+
+	orderID, _ := h.aSubstitutedOrder(t, s, 18000, merchant.ResolutionCustomerAccepted)
+	after, err := h.store.OrderByID(context.Background(), orderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ItemsTotal.Minor != 18000 {
+		t.Fatalf("total after a cheaper substitution = %d, want 18000", after.ItemsTotal.Minor)
+	}
+}
+
+func TestAnUnansweredSubstitutionChargesNothingYet(t *testing.T) {
+	// A proposal the customer has not accepted must not reach their bill.
+	h := newMerchantHarness(t)
+	s := h.aShop(t)
+
+	orderID, original := h.aSubstitutedOrder(t, s, 40000, merchant.ResolutionPending)
+	after, err := h.store.OrderByID(context.Background(), orderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ItemsTotal.Minor != original {
+		t.Fatalf("a pending substitution changed the total from %d to %d",
+			original, after.ItemsTotal.Minor)
+	}
+}
+
+func TestChargingTheSubstitutePriceDoesNotRewriteWhatWasOrdered(t *testing.T) {
+	// BD-11 and document 74 together. The customer pays the substitute's
+	// price, and the original line still says what they asked for — so the
+	// order total and the order history can disagree about the amount without
+	// either being wrong.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aShop(t)
+
+	orderID, _ := h.aSubstitutedOrder(t, s, 40000, merchant.ResolutionCustomerAccepted)
+
+	var price int64
+	var name string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT unit_price_minor, name_snapshot FROM order_items WHERE order_id = $1`,
+		orderID).Scan(&price, &name); err != nil {
+		t.Fatal(err)
+	}
+	if price != 25000 {
+		t.Fatalf("the ordered line was repriced to %d; it must still read 25000", price)
+	}
+	if name != "Milk 1L" {
+		t.Fatalf("the ordered line was renamed to %q", name)
+	}
+
+	// What was actually supplied, and the difference charged for it, live in
+	// the issue row.
+	var substitute, difference int64
+	var substituteName string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT substitute_unit_price_minor, price_difference_minor, substitute_name
+		   FROM order_item_issues WHERE order_id = $1`, orderID).
+		Scan(&substitute, &difference, &substituteName); err != nil {
+		t.Fatal(err)
+	}
+	if substitute != 40000 || difference != 15000 || substituteName != "Milk 1L (premium)" {
+		t.Fatalf("the substitution recorded price=%d difference=%d name=%q",
+			substitute, difference, substituteName)
+	}
+
+	// And the total charged reflects the substitute, not the original.
+	order, err := h.store.OrderByID(ctx, orderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.ItemsTotal.Minor != 40000 {
+		t.Fatalf("total = %d, want the substitute's 40000", order.ItemsTotal.Minor)
 	}
 }
