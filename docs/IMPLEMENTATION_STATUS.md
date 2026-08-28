@@ -3,7 +3,11 @@
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
 **Phases 1–11 are complete and verified.** Every backend service — ride, parcel, cargo,
 grocery — runs through one job core, one dispatch engine, one pricing engine and one ledger.
-Four product decisions are open: BD-04, BD-05, BD-09, BD-11.
+
+**Phases 12–15 are PARTIAL.** Their foundations are built and tested; the product surfaces
+they call for are not. See each phase below for exactly what exists.
+
+Five product decisions are open and blocking: BD-04, BD-05, BD-11, BD-12, BD-01/BD-02.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -567,7 +571,82 @@ verification and webhook path exist; a provider contract does not. No automated 
 execution (needs banking integration). No maker/checker on admin financial actions (`059`
 prefers it; it needs the admin console, Phase 13).
 
-## Phase 12+ — Not Started
+## Phase 12 — Mobile Production Features · **PARTIAL**
+
+Documents 17, 28, 48, 116, 179.
+
+**Built and verified**
+
+| Task | Status | Tests | Notes |
+|------|--------|-------|-------|
+| Secure refresh-token storage (`028`) | VERIFIED | n/a | `expo-secure-store` → Keychain / Keystore. Document 28 forbids plain AsyncStorage |
+| Shared auth flow, one copy for both platforms (`048`) | VERIFIED | 6 | a wrong code keeps the user on the code step rather than invalidating the code in their hand |
+| User-facing error mapping | VERIFIED | 2 | asserted to leak no internal code; preserves the server's deliberate ambiguity about whether an account exists |
+| ADR-006 consequences handled | VERIFIED | n/a | mobile Jest maps `@platform/*` to source, so transitive deps and ESM `.js` specifiers both needed handling |
+
+**Not built.** Screens and navigation for booking, tracking, order history, notifications and
+profile. Driver onboarding, availability, offer acceptance, trip workflow, earnings. Background
+location and its native module. Offline mutation queue. Push registration. Performance budgets
+(BD-19 requires real-device measurement).
+
+## Phase 13 — Operational Dashboards · **PARTIAL**
+
+Documents 135–147.
+
+**Built and verified**
+
+| Task | Status | Tests | Notes |
+|------|--------|-------|-------|
+| Dashboard API client | VERIFIED | n/a | refresh token held **in memory**, not localStorage — an operator console is the highest-privilege surface and a persisted token is readable by any script on the page |
+| Operational job list with cursor paging | VERIFIED | 4 | same generated client as the mobile apps; a console with its own API layer drifts from what it explains |
+| Operational triage | VERIFIED | 2 | `SEARCHING` first, because a job nobody has taken is the one needing attention |
+
+**Not built.** Every admin screen beyond the job list: providers, vehicles, dispatch console,
+payments, settlements, audit, feature flags. The entire merchant dashboard. `merchant-dashboard`
+remains a reserved directory.
+
+## Phase 14 — Production Infrastructure · **PARTIAL**
+
+Documents 163–176, 301.
+
+**Built and verified**
+
+| Task | Status | Notes |
+|------|--------|-------|
+| Production container | IMPLEMENTED | multi-stage, distroless, non-root, static binary; migrations travel with the binary that applies them |
+| Migrations never run at startup | VERIFIED | separate `migrate` command, so a rolling deploy cannot have two instances migrating at once |
+| **Contract gate in CI** (ADR-007) | IMPLEMENTED | a Go type changed without regenerating fails the build instead of shipping a client describing a response the server no longer sends |
+| Structured logging, tracing, health probes | VERIFIED | Phase 1; unchanged |
+
+**Not built.** Terraform, AWS networking, ECS services and scaling, production Postgres/Redis
+operations, secrets management, monitoring and alerting, backups and disaster recovery, CDN.
+These need cloud credentials and an account that is not billing-locked.
+
+## Phase 15 — Hardening and Release · **PARTIAL**
+
+**Verification performed (observed, 2026-08-28)**
+
+```text
+gofmt clean · go vet ok
+go test -race ./...          21 packages ok — race detector clean
+go test -tags=integration    ok — real Postgres, PostGIS, Redis
+pnpm typecheck 17/17 · lint 10/10 · test 17/17 (70 tests) · build 10/10
+pnpm format:check clean
+migrate up → down → up       version 10, reversible twice
+```
+
+**Security properties enforced and tested, not merely reviewed:** OTP and refresh tokens
+hashed at rest; refresh rotation with reuse detection that revokes every session; constant-time
+comparison on tokens, OTPs and webhook signatures; rate limiting by phone and IP; role *and*
+resource authorization; realtime subscription authorization that fails closed; location access
+scoped and audited; ledger entries immutable by database trigger; no client-trusted capability,
+price or payment state.
+
+**Not done.** Load and stress testing. Mobile performance measurement. Accessibility audit.
+E2E suite — no journey harness exists. Remote CI has still never executed: the account has been
+billing-locked since 2026-08-27, which is external to this repository.
+
+## Remaining Non-Blocking Work
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.

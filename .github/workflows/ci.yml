@@ -115,6 +115,19 @@ jobs:
       - name: Unit tests
         run: go test -race ./...
 
+      # The contract gate (ADR-007). Go is authoritative for every wire shape,
+      # so a Go type changed without regenerating would ship a TypeScript
+      # client describing a response the server no longer sends. This fails the
+      # build rather than letting the drift reach a client.
+      # The job's working directory is services/api, which is where the Go
+      # module lives; the generator writes into the workspace two levels up.
+      - name: Contract is in sync
+        run: |
+          go run ./cmd/contractgen -root ../..
+          cd ../..
+          git diff --exit-code -- packages/types/src/generated.ts packages/validation/src/generated.ts \
+            || (echo "::error::The generated contract is stale. Run 'make contracts' and commit the result." && exit 1)
+
   api-integration:
     name: Go API — integration
     needs: changes

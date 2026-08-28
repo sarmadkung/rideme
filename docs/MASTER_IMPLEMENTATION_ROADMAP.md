@@ -1293,10 +1293,10 @@ Phase N — <name>
 | 9 — Delivery and cargo | NOT_STARTED | — | — | BD-13, BD-10, BD-16 |
 | 10 — Grocery and merchant | NOT_STARTED | — | — | **BD-12**, BD-11 |
 | 11 — Payments and financial | NOT_STARTED | — | — | BD-05, BD-06, BD-09 |
-| 12 — Mobile production | NOT_STARTED | — | — | — |
-| 13 — Operational dashboards | NOT_STARTED | — | — | — |
-| 14 — Production infrastructure | NOT_STARTED | — | — | BD-15, BD-16 |
-| 15 — Hardening and release | NOT_STARTED | — | — | BD-14 and all remaining |
+| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | secure storage + auth flow built; screens outstanding |
+| 13 — Operational dashboards | **PARTIAL** | 2026-08-28 | — | foundations built and tested; product surfaces outstanding |
+| 14 — Production infrastructure | **PARTIAL** | 2026-08-28 | — | container + CI contract gate built; cloud needs credentials |
+| 15 — Hardening and release | **PARTIAL** | 2026-08-28 | — | full local verification run; load/E2E/remote CI outstanding |
 
 Phase 1's full evidence stays in `IMPLEMENTATION_STATUS.md`; it is not duplicated here.
 
