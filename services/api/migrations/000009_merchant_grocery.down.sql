@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS merchant_config;
+DROP TABLE IF EXISTS order_status_history;
+DROP TABLE IF EXISTS order_item_issues;
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS inventory;
+DROP TABLE IF EXISTS product_variants;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS store_hours;
+DROP TABLE IF EXISTS stores;
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_merchant_fk;
+DROP TABLE IF EXISTS merchants;

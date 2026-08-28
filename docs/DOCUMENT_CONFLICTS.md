@@ -87,11 +87,16 @@ payments, merchants, notifications, support, fraud, analytics.
 abbreviation rather than a decision to drop those domains — `wallet` and `zones` have their own
 Tier A documents (`053`, `097`) and `ratings` appears throughout `111`.
 
-**Not fully resolved.** Working position: `025`'s layout is authoritative for structure, with
-`wallet`, `ratings`, and `zones` retained as modules when their slices are built. This does not
-block Phase 1 — no module beyond the foundation is created in the first slice.
+**Resolved 2026-08-28**, at the first domain module (roadmap Phase 4). The tie is broken by
+`004`, which was not consulted when this conflict was recorded: its "Core Domains" list is
+`009`'s exactly, including `wallet`, `ratings` and `zones`. Two Tier A documents against one,
+and `004` is the master architecture.
 
-**Status:** DEFERRED — revisit when the first domain module is built. Recorded as ADR-004.
+The module list is the **union** — `004`/`009`'s seventeen plus `tracking` from `025`. `025`
+remains authoritative for structure and layering, which was never in dispute. Modules are
+created when their slice is built, not up front.
+
+**Status:** RESOLVED — ADR-004, promoted from Proposed to Accepted.
 
 ---
 
@@ -110,6 +115,7 @@ full in that document's **Conflicts Discovered** section rather than duplicated 
 | R-3 | Dispatch sequenced after ride booking | RESOLVED — ride E2E moved to the dispatch phase |
 | R-4 | Location/realtime moved ahead of dispatch | RESOLVED in favour of the roadmap |
 | R-5 | Horizontal client phases vs. the vertical slice rule | **RESOLVED** (owner, 2026-08-28) — vertical slices primary; shared client platform CAP-6; Phases 12/13 consolidate |
+| C-7 | Verification state vocabularies (`016` vs `029`/`030`) | **RESOLVED** 2026-08-28 — dedicated implementation documents win |
 | R-6 | Maps/routing/ETA, safety/fraud, notifications/chat/support, and analytics have **no phase** | **RESOLVED** (owner, 2026-08-28) — four cross-cutting tracks CAP-2…CAP-5 inside the existing 15 phases; B-4 closed |
 | R-7 | Business decision register timeline uses the old numbering | RESOLVED by remapping |
 | R-8 | BD-07 pulled from old Phase 3 to roadmap Phase 2 | RESOLVED — earlier is safer |
@@ -123,6 +129,49 @@ roadmap had **no messaging capability before Phase 7**, yet `020` and `028` make
 initial authentication method and require the OTP provider to sit behind an interface. Phase 3
 authentication could not have shipped as previously scoped. Corrected — CAP-4's boundary is now
 mandatory at Phase 3.
+
+---
+
+## C-7 — Verification state vocabularies
+
+**Documents:** `016` vs `029`, `030`
+
+`016` summarises verification as `PENDING_VERIFICATION -> VERIFIED | SUSPENDED | EXPIRED` for
+vehicles and says nothing about driver verification states. `029` gives seven driver states
+(`NOT_STARTED`, `IN_PROGRESS`, `SUBMITTED`, `UNDER_REVIEW`, `APPROVED`, `REJECTED`,
+`SUSPENDED`); `030` gives six vehicle states, adding `UNDER_REVIEW` and `REJECTED` and naming
+the first `PENDING`.
+
+**Precedence:** `029` and `030` are the dedicated implementation documents and are more
+specific. `016` is a summary state machine covering driver *availability*, where it remains
+authoritative.
+
+**Resolved 2026-08-28 (Phase 5):** driver verification follows `029`, vehicle verification
+follows `030`, driver availability follows `016`. Migration `000004` widens the constraints
+that `000003` had taken from `016`. Without `REJECTED` and a path back, `029`'s requirement
+that "rejected documents can be resubmitted" would have been unrepresentable.
+
+**Status:** RESOLVED
+
+---
+
+## C-8 — Job state names
+
+**Documents:** `015` vs `036`
+
+`015`'s main flow uses `ARRIVING` and `AT_DROPOFF`. `036`'s transition matrix uses
+`ARRIVING_PICKUP` and `ARRIVING_DROPOFF` for the same two slots.
+
+**Precedence:** `015` is the dedicated job state machine document and names the states;
+`036` is the dedicated *rules* document and supplies the transition matrix, offer timeout,
+reassignment, concurrency and cancellation behaviour, none of which `015` covers.
+
+**Resolved 2026-08-28 (Phase 7):** state **names** follow `015` (already implemented in
+migration `000003` and `internal/jobs`); transition **rules** follow `036`. The two documents
+describe the same lifecycle and disagree only on two labels, so no behaviour is lost either
+way — but two vocabularies in one codebase would be.
+
+**Status:** RESOLVED
 
 ---
 

@@ -20,6 +20,7 @@ describe('generated contract', () => {
       'forbidden',
       'conflict',
       'validation',
+      'rate_limited',
       'unavailable',
       'internal',
     ]);

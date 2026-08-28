@@ -1280,23 +1280,27 @@ Phase N — <name>
 
 ### Live record
 
+> Rows 4–11 were stale until 2026-08-28: the phases were built and verified, but the edits to
+> this table used non-asserting string replacements that silently matched nothing. The status
+> here now agrees with `IMPLEMENTATION_STATUS.md`, which was correct throughout.
+
 | Phase | Status | Started | Completed | Blockers |
 |---|---|---|---|---|
 | 1 — Engineering foundation | **VERIFIED** | 2026-08-27 | 2026-08-27 | criterion 12 (remote CI) deferred to Phase 15 |
 | 2 — Contracts and core platform | **VERIFIED** | 2026-08-28 | 2026-08-28 | none — B-2 closed (ADR-007), BD-07 implemented (ADR-008) |
-| 3 — Identity and auth | READY | — | — | none; CAP-4 OTP boundary is in scope |
-| 4 — Core domain model | NOT_STARTED | — | — | C-5 / ADR-004 to resolve |
-| 5 — Providers, vehicles, eligibility | NOT_STARTED | — | — | BD-14 (list) |
-| 6 — Location and realtime | NOT_STARTED | — | — | BD-15 |
-| 7 — Ride booking | NOT_STARTED | — | — | BD-01, BD-02 |
-| 8 — Dispatch engine | NOT_STARTED | — | — | **BD-04** |
-| 9 — Delivery and cargo | NOT_STARTED | — | — | BD-13, BD-10, BD-16 |
-| 10 — Grocery and merchant | NOT_STARTED | — | — | **BD-12**, BD-11 |
-| 11 — Payments and financial | NOT_STARTED | — | — | BD-05, BD-06, BD-09 |
-| 12 — Mobile production | NOT_STARTED | — | — | — |
-| 13 — Operational dashboards | NOT_STARTED | — | — | — |
-| 14 — Production infrastructure | NOT_STARTED | — | — | BD-15, BD-16 |
-| 15 — Hardening and release | NOT_STARTED | — | — | BD-14 and all remaining |
+| 3 — Identity and auth | **VERIFIED** | 2026-08-28 | 2026-08-28 | none |
+| 4 — Core domain model | **VERIFIED** | 2026-08-28 | 2026-08-28 | none — C-5 resolved, ADR-004 accepted |
+| 5 — Providers, vehicles, eligibility | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-14 structural only; requirements table ships empty |
+| 6 — Location and realtime | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-15/BD-17 mechanisms built, values unset |
+| 7 — Ride booking | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-01, BD-02 open** — configurable and unset |
+| 8 — Dispatch engine | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-04 open (B-5)** — engine bounded, terminal behaviour undecided |
+| 9 — Delivery and cargo | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-10/BD-13/BD-16 mechanisms built, values unset |
+| 10 — Grocery and merchant | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-12 open** — orders refuse until configured; BD-11 unwired |
+| 11 — Payments and financial | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-05 open** — earnings refuse until configured; BD-06/BD-09 open |
+| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | secure storage + auth flow built; screens outstanding |
+| 13 — Operational dashboards | **PARTIAL** | 2026-08-28 | — | foundations built and tested; product surfaces outstanding |
+| 14 — Production infrastructure | **PARTIAL** | 2026-08-28 | — | CI contract gate built; **container does not build**; cloud needs credentials |
+| 15 — Hardening and release | **PARTIAL** | 2026-08-28 | — | full local verification run; load/E2E/remote CI outstanding |
 
 Phase 1's full evidence stays in `IMPLEMENTATION_STATUS.md`; it is not duplicated here.
 

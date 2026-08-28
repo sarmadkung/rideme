@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS job_status_history;
+DROP TABLE IF EXISTS assignments;
+DROP TABLE IF EXISTS job_requirements;
+DROP TABLE IF EXISTS job_stops;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS pricing_quotes;
+DROP TABLE IF EXISTS driver_vehicles;
+DROP TABLE IF EXISTS vehicle_capabilities;
+DROP TABLE IF EXISTS vehicles;
+DROP TABLE IF EXISTS drivers;

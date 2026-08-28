@@ -1,0 +1,8 @@
+# Everything the image does not need. Keeping the build context small is also
+# what stops a stray .env from being copied into a layer.
+.env
+.env.*
+*_test.go
+tests/
+Dockerfile
+.dockerignore
