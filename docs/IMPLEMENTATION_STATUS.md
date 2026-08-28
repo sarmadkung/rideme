@@ -1,8 +1,9 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–9 are complete and verified.** Ride, parcel and cargo run through the same job
-core, dispatch and pricing engine. Two product decisions (BD-04, BD-13) are open.
+**Phases 1–10 are complete and verified.** Ride, parcel, cargo and grocery all run through
+the same job core, dispatch and pricing engine. Three product decisions are open — BD-04,
+BD-11, BD-12.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -474,7 +475,51 @@ on the bucket rather than a schema change here.
 object-storage wiring). No multi-item packing optimisation — document 080 defers it explicitly.
 No scheduled delivery windows.
 
-## Phase 10+ — Not Started
+## Phase 10 — Grocery and Merchant Platform
+
+Verified 2026-08-28. Documents 65–78.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Migration `000009` | VERIFIED | n/a | YES | up → down → up observed |
+| **Order and delivery stay separate (`070`)** | VERIFIED | n/a | YES | an Order is merchant fulfilment and *produces* a Job; merging them would put PREPARING into the lifecycle every ride uses |
+| Order state machine (`070`) | VERIFIED | 2 | YES | documented flow walkable; skipping fulfilment refused |
+| Merchant rejection before preparation only | VERIFIED | 1 | YES | after picking starts, stock and staff time are consumed |
+| Customer cancellation is state-aware | VERIFIED | 1 | YES | |
+| **BD-12 fails loudly, never defaults** | VERIFIED | 2 | YES | placing an order against a merchant with no configured timeout is refused; the deadline comes from that value |
+| Acceptance timeout sweep | VERIFIED | 2 | YES | enforces the merchant's own configured deadline; an accepted order is not swept |
+| Merchant timestamps (`072`) | VERIFIED | 1 | YES | `accepted_at`, `preparation_started_at`, `ready_at` set by the transitions that earn them |
+| **Price snapshot on order lines (`068`)** | VERIFIED | 2 | YES | doubling a catalogue price does not move a stored line — referencing the live price would rewrite every past receipt |
+| Order total always matches its lines | VERIFIED | 2 | YES | summed in the database from the stored snapshots |
+| Cart is idempotent | VERIFIED | 1 | YES | one live cart per customer per store |
+| **Inventory cannot oversell (`069`)** | VERIFIED | 3 | YES | 20 concurrent reservations against 5 units → exactly 5; a CHECK constraint backs the predicate |
+| Reservations release on cancellation | VERIFIED | 1 | YES | |
+| **Customer preference is authoritative (`074`)** | VERIFIED | 3 | YES | a merchant proposing a substitution for a `DO_NOT_ALLOW` item gets a removal instead |
+| `ASK_ME` becomes a question, not a decision | VERIFIED | 1 | YES | removal still needs no permission |
+| **Original order lines never mutated (`074`)** | VERIFIED | 2 | YES | name and price survive a substitution; the line is marked, not deleted |
+| Removed items leave the total | VERIFIED | 1 | YES | the total stops including what nobody received |
+| **BD-11 unwired** | VERIFIED | 1 | YES | asserted that a substitution's price difference is recorded and **changes no total** |
+| Store hours decide availability | VERIFIED | 2 | YES | closing time exclusive; **no configured hours means closed**, because a store that has not said it is open should not take orders |
+| Concurrent order transitions | VERIFIED | 1 | YES | 6 racers → exactly 1 |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 302 Go test functions · 21 unit packages ok
+go test -tags=integration   115 tests, ok
+migrate up → down → up      version 9
+```
+
+**A schema defect the tests caught.** `inventory` had `variant_id` inside its primary key, so a
+product without variants — most of them — could not have a stock row at all. Fixed with a
+`NULLS NOT DISTINCT` unique index, which gives the same uniqueness while letting "no variant"
+be a real single row.
+
+**Not done, deliberately:** no HTTP handlers. No merchant payouts — settlement is Phase 11.
+No `READY_FOR_PICKUP → create delivery job` wiring yet; the link column exists and the event
+that drives it belongs with the worker framework. No add-ons or option groups beyond variants.
+
+## Phase 11+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
