@@ -1,8 +1,8 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–3 are complete and verified.** Phase 3 is the first phase with product
-functionality: a caller can now authenticate.
+**Phases 1–4 are complete and verified.** A caller can authenticate (Phase 3) and the
+core domain model exists (Phase 4). No service lifecycle is implemented yet.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -169,7 +169,51 @@ by the same suite.
 no step-up on sensitive actions, no Google/Apple providers (`20`: "later"), no real SMS
 provider, no mobile secure-storage integration (that is client work, Phase 12).
 
-## Phase 4+ — Not Started
+## Phase 4 — Core Domain Model
+
+Verified 2026-08-28. Documents 04, 13, 15, 16, 25, 26.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| **C-5 resolved** — backend module list | VERIFIED | n/a | YES | `004` breaks the tie; union of `004`/`009` plus `tracking`. ADR-004 promoted to Accepted; C-5 closed |
+| Migration `000003` — core entity model | VERIFIED | n/a | YES | up → down → up observed |
+| Job as the universal work abstraction (`04`) | VERIFIED | 2 | YES | one `jobs` table, five types; **no per-service booking entity** |
+| Job state machine matches `015` | VERIFIED | 6 | YES | documented main flow walkable; skips, reversals and resurrection refused |
+| Assignment state machine | VERIFIED | 2 | YES | an answered offer cannot be answered again |
+| `pkg/statemachine` engine (ADR-010) | VERIFIED | n/a | YES | table-driven; refusals name what was allowed |
+| **Compare-and-set transitions** | VERIFIED | 1 | YES | 8 concurrent transitions on one job → exactly 1 winner, 2 history rows |
+| **Two drivers cannot hold one job** | VERIFIED | 2 | YES | 10 concurrent offers → exactly 1 claim; partial unique index, not an application check |
+| Job stops as ordered rows, PostGIS geography | VERIFIED | 3 | YES | lat/lon survive the round trip; multi-stop dropoff resolution correct |
+| Atomic creation | VERIFIED | 1 | YES | a bad stop leaves no orphan job |
+| Status history (`015`) | VERIFIED | 2 | YES | from/to, actor and metadata recorded on every transition |
+| Quotes as integer minor units (ADR-008) | VERIFIED | 2 | YES | no numeric or float amount column anywhere in the schema |
+| Schema constraints as invariants | VERIFIED | 3 | YES | undocumented type/status, negative or foreign-currency quote, inverted range, second primary vehicle all refused by the database |
+| Cursor pagination (ADR-009) | VERIFIED | 1 | YES | newest-first, no repeated row across pages |
+| Repository layer | VERIFIED | n/a | YES | `internal/jobs/store.go`; no SQL outside it |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 127 Go test functions
+go test -tags=integration   38 tests, ok — real Postgres + PostGIS
+migrate up → down → up      version 3 → all rolled back → version 3
+```
+
+**Verification level:** 3 for entities and repositories, **5** for every transition and the
+assignment claim — those are concurrency-sensitive and are tested under real contention
+rather than reasoned about.
+
+**A modelling correction.** `Job.Live()` initially returned true for `COMPLETED`, because
+document 15 does not list it as terminal — it is reachable by `DISPUTED`. Correct by the
+letter, wrong in effect: dispatch and tracking ask "is this still running?", and answering yes
+for a finished trip keeps a driver marked busy. `Live()` and `Finished()` are now distinct.
+
+**Not done, deliberately:** no driver or vehicle *behaviour* (Phase 5), no dispatch (Phase 8),
+no pricing logic — the quote table exists, CAP-1's boundary is created by the ride slice
+(Phase 7). No proof model yet; it arrives with proof of delivery in Phase 9. Sixteen of the
+seventeen modules are not created: empty directories are not architecture.
+
+## Phase 5+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.

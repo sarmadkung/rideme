@@ -87,11 +87,16 @@ payments, merchants, notifications, support, fraud, analytics.
 abbreviation rather than a decision to drop those domains — `wallet` and `zones` have their own
 Tier A documents (`053`, `097`) and `ratings` appears throughout `111`.
 
-**Not fully resolved.** Working position: `025`'s layout is authoritative for structure, with
-`wallet`, `ratings`, and `zones` retained as modules when their slices are built. This does not
-block Phase 1 — no module beyond the foundation is created in the first slice.
+**Resolved 2026-08-28**, at the first domain module (roadmap Phase 4). The tie is broken by
+`004`, which was not consulted when this conflict was recorded: its "Core Domains" list is
+`009`'s exactly, including `wallet`, `ratings` and `zones`. Two Tier A documents against one,
+and `004` is the master architecture.
 
-**Status:** DEFERRED — revisit when the first domain module is built. Recorded as ADR-004.
+The module list is the **union** — `004`/`009`'s seventeen plus `tracking` from `025`. `025`
+remains authoritative for structure and layering, which was never in dispute. Modules are
+created when their slice is built, not up front.
+
+**Status:** RESOLVED — ADR-004, promoted from Proposed to Accepted.
 
 ---
 

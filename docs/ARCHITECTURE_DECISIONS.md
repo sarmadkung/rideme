@@ -68,9 +68,9 @@ provider-interface rule remain authoritative.
 
 ---
 
-## ADR-004 — Backend module list reconciliation deferred
+## ADR-004 — Backend module list reconciliation deferred → resolved
 
-**Date:** 2026-08-27 · **Status:** Proposed (deferred)
+**Date:** 2026-08-27 · **Resolved:** 2026-08-28 · **Status:** Accepted · **Resolves:** C-5
 
 **Context:** `009` and `025` list different backend modules; `025` adds `tracking` and omits
 `wallet`, `ratings`, `zones`. Those three have their own Tier A documents, so the omission reads
@@ -79,10 +79,28 @@ as abbreviation rather than a decision. Conflict C-5.
 **Decision:** Adopt `025`'s directory layout and layering now. Treat the module list as open;
 add `wallet`, `ratings`, `zones`, and `tracking` when their slices are built.
 
-**Consequences:** Phase 1 creates no domain modules, so nothing is blocked. Revisit before the
-first domain module lands.
+**Resolution (2026-08-28, roadmap Phase 4 — the first domain module).** The tie is broken by
+`004`, which was not consulted when this ADR was written. `004`'s "Core Domains" list is
+`009`'s exactly — it includes `wallet`, `ratings` and `zones`. Two Tier A documents against
+one, and `004` is the master architecture.
 
-**Affects:** `services/api/internal/` — future.
+**The module list is the union:** `009`/`004`'s seventeen domains plus `tracking` from `025`.
+`025` remains authoritative for *structure* — the directory layout and the
+handler → application → domain → repository layering — which was never in dispute. Its
+omission of three domains reads as abbreviation, not decision: each has its own Tier A
+document (`53-wallets-and-ledger`, `97-geofencing-and-zone-model`,
+`111-ratings-reviews-and-quality`) and none could be dropped without losing documented
+behaviour.
+
+Modules are created when their slice is built, not up front. `internal/identity` (Phase 3)
+and `internal/jobs` (Phase 4) exist; the remaining sixteen are directories that do not yet
+exist and should not be created empty.
+
+**Consequences:** C-5 is closed. `jobs` is the module that matters most and it is deliberately
+one module for all five job types — `004`'s Job abstraction means there is no `rides` module,
+no `parcels` module, and there must never be one.
+
+**Affects:** `services/api/internal/`.
 
 ---
 
@@ -277,3 +295,41 @@ endpoint exists yet, so nothing is migrated. Cursor encoding is decided by the
 first list endpoint, in Phase 3 or later; only the envelope is fixed here.
 
 **Affects:** `services/api/pkg/httpx`, `packages/types`, every list endpoint.
+
+
+---
+
+## ADR-010 — One state machine engine, three documented machines
+
+**Date:** 2026-08-28 · **Status:** Accepted
+
+**Context:** Document 15 defines the job lifecycle, document 16 defines the driver and vehicle
+lifecycles, and each says transitions are performed by backend commands rather than assigned by
+clients. More machines arrive with assignments, payments, orders and merchant fulfilment.
+
+**Decision:** `pkg/statemachine` holds a small table-driven engine; each domain declares its
+machine as data. A transition is validated against the declaration, and refused transitions
+carry the states that *were* allowed.
+
+Every transition additionally uses **compare-and-set** at the database — `WHERE status = $from`
+— rather than a plain UPDATE.
+
+**Why compare-and-set is not optional.** Two actors racing on one job is the normal case, not
+the edge case: a customer cancels while dispatch assigns. Both read the same status, both
+consider their move legal, and with a plain UPDATE both writes land — the second silently
+overwriting the first. That produces a cancelled job with a driver on the way, and no error
+anywhere. The predicate makes exactly one win and tells the loser it lost.
+
+**Alternatives:** (a) A hand-written `switch` per domain — the same logic three times, drifting
+independently, with no shared way to report what was allowed. (b) Serializable transactions —
+correct, and far more expensive than one predicate on a primary-key update. (c) Advisory locks
+— an extra round trip and a lock to leak.
+
+**Consequences:** A machine is declared once and its shape is testable without a database, so
+"can a cancelled job be resurrected?" is a unit test. Terminal states are part of the
+declaration rather than a hardcoded list at each call site. Callers must supply the status they
+believe the entity is in, which is slightly more work and is exactly what makes the race
+detectable.
+
+**Affects:** `pkg/statemachine`, `internal/jobs`, and every module with a lifecycle from Phase 5
+onward.
