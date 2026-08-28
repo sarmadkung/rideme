@@ -31,7 +31,7 @@ func testRouter(t *testing.T, probeErr error) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(checker, identity.NewHandler(nil), issuer, "api", "test", logger)
+	return newRouter(checker, identity.NewHandler(nil), nil, issuer, "api", "test", logger)
 }
 
 // Acceptance criterion 5: health reports accurately in both directions.

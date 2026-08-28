@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
@@ -19,6 +20,7 @@ import (
 func newRouter(
 	checker *health.Checker,
 	identityHandler *identity.Handler,
+	bookingHandler *booking.Handler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
@@ -29,7 +31,11 @@ func newRouter(
 	mux.Handle("GET /health/live", health.LivenessHandler(service, version))
 	mux.Handle("GET /health/ready", health.ReadinessHandler(checker))
 
-	identityHandler.Routes(mux, identity.Authenticate(issuer))
+	authenticate := identity.Authenticate(issuer)
+	identityHandler.Routes(mux, authenticate)
+	if bookingHandler != nil {
+		bookingHandler.Routes(mux, authenticate)
+	}
 
 	// Anything unrouted answers in the platform's error envelope.
 	mux.Handle("/", httpx.NotFoundHandler())

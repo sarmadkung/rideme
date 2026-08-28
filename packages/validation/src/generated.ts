@@ -65,3 +65,38 @@ export const analyticsEventSchema = z.object({
   correlation_id: z.string().optional(),
   properties: z.record(z.string(), z.unknown()).optional(),
 });
+
+export const jobStopSchema = z.object({
+  id: z.string(),
+  sequence: z.number().int(),
+  type: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  address: z.string().optional(),
+});
+
+export const jobSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  status: z.string(),
+  stops: z.array(jobStopSchema),
+  quote_id: z.string().optional(),
+  assigned_driver_id: z.string().optional(),
+  scheduled_at: z.string().datetime({ offset: true }).optional(),
+  created_at: z.string().datetime({ offset: true }),
+});
+
+export const quoteSchema = z.object({
+  quote_id: z.string(),
+  total_minor: z.number().int(),
+  currency: z.string(),
+  distance_meters: z.number().int(),
+  duration_seconds: z.number().int(),
+  route_confidence: z.string(),
+  expires_at: z.string().datetime({ offset: true }),
+});
+
+export const cancelResultSchema = z.object({
+  job: jobSchema,
+  cancellation_tier: z.string(),
+});

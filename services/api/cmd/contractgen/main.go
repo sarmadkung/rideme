@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 
+	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
 	"github.com/sarmadkung/rideme/services/api/pkg/events"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
@@ -62,6 +63,13 @@ func Registry() *contract.Registry {
 	r.Struct("DependencyHealth", health.DependencyResult{})
 	r.Struct("HealthResponse", health.Report{})
 	r.Struct("AnalyticsEvent", events.Envelope{})
+
+	// The booking surface (documents 14, 35). Registered so the mobile and web
+	// clients receive generated models rather than hand-written ones.
+	r.Struct("JobStop", booking.StopResponse{})
+	r.Struct("Job", booking.JobResponse{})
+	r.Struct("Quote", booking.QuoteResponse{})
+	r.Struct("CancelResult", booking.CancelResponse{})
 
 	return r
 }

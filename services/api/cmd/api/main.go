@@ -17,7 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
+	"github.com/sarmadkung/rideme/services/api/internal/jobs"
+	"github.com/sarmadkung/rideme/services/api/internal/pricing"
+	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/cache"
 	"github.com/sarmadkung/rideme/services/api/pkg/config"
@@ -27,6 +31,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/pkg/notify"
 	"github.com/sarmadkung/rideme/services/api/pkg/observability"
 	"github.com/sarmadkung/rideme/services/api/pkg/ratelimit"
+	"github.com/sarmadkung/rideme/services/api/pkg/routing"
 )
 
 const serviceName = "api"
@@ -135,9 +140,23 @@ func run() error {
 		identity.Options{},
 	)
 
+	// Booking, pricing and routing. The routing service has one provider today
+	// — a straight-line estimator that labels every result as estimated — so a
+	// fare built on a guess is never presented as a measured one.
+	jobStore := jobs.NewStore(pool.Pool)
+	bookingStore := booking.NewStore(pool.Pool)
+	bookingService := booking.NewService(
+		jobStore, bookingStore,
+		pricing.NewEngine(nil),
+		routing.NewService(),
+		nil,
+	)
+	bookingHandler := booking.NewHandler(bookingService, jobStore, providers.NewStore(pool.Pool))
+
 	server := &http.Server{
-		Addr:              net.JoinHostPort("", strconv.Itoa(cfg.Port)),
-		Handler:           newRouter(checker, identity.NewHandler(identityService), issuer, serviceName, version, logger),
+		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
+		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
+			issuer, serviceName, version, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -69,3 +69,38 @@ export interface AnalyticsEvent {
   correlation_id?: string | undefined;
   properties?: Record<string, unknown> | undefined;
 }
+
+export interface JobStop {
+  id: string;
+  sequence: number;
+  type: string;
+  latitude: number;
+  longitude: number;
+  address?: string | undefined;
+}
+
+export interface Job {
+  id: string;
+  type: string;
+  status: string;
+  stops: JobStop[];
+  quote_id?: string | undefined;
+  assigned_driver_id?: string | undefined;
+  scheduled_at?: string | undefined;
+  created_at: string;
+}
+
+export interface Quote {
+  quote_id: string;
+  total_minor: number;
+  currency: string;
+  distance_meters: number;
+  duration_seconds: number;
+  route_confidence: string;
+  expires_at: string;
+}
+
+export interface CancelResult {
+  job: Job;
+  cancellation_tier: string;
+}
