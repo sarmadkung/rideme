@@ -91,7 +91,7 @@ superseded in detail by Tier A. Read the Objective; do not expect implementation
 - **No documents were deleted, renumbered, or created** to satisfy references.
 - **Document 011 is absent** from the numbering. Nothing references it; this is a gap in the
   sequence, not a missing dependency.
-- **All cross-references resolve.** The 228 document references in `.claude/skills/` were
+- **All cross-references resolve.** The 228 document references in `.skills/` were
   validated against the filesystem.
 - **Document 564 exists** (`564-agent-workflow-execution-spec.md`). An earlier audit pass
   reported it missing; that report was wrong and is corrected here.

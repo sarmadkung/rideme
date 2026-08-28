@@ -4,7 +4,7 @@
 project from Phase 3 onward.
 
 This is the source of truth for implementation efficiency and verification.
-`AGENT.md` references it; the implementation skills enforce it. Where this
+`AGENTS.md` references it; the implementation skills enforce it. Where this
 document and a skill disagree, this document wins and the skill is corrected.
 
 It governs *how* work is done. It does not override *what* is built: the Tier A
@@ -41,7 +41,7 @@ of them.**
 Load progressively, stopping as soon as the question is answered:
 
 ```text
-AGENT.md
+AGENTS.md
     ↓
 implementation control documents  (PLAN · STATUS · ADRs · BLOCKED · this policy)
     ↓
@@ -327,7 +327,7 @@ is — the diff already shows what changed.
 ## Hierarchy
 
 ```text
-AGENT.md                              mission and protocol
+AGENTS.md                             mission and protocol
     ↓
 IMPLEMENTATION_EXECUTION_POLICY.md    how work is performed  ← this document
     ↓

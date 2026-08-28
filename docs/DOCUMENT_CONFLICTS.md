@@ -1,23 +1,23 @@
 # Document Conflicts
 
-Conflicts are recorded with the precedence applied (AGENT.md §4). Where precedence does not
+Conflicts are recorded with the precedence applied (AGENTS.md §4). Where precedence does not
 settle a question, it is escalated to `BLOCKED_TASKS.md` rather than decided here.
 
 ---
 
-## C-1 — Backend language vs. AGENT.md toolchain
+## C-1 — Backend language vs. AGENTS.md toolchain
 
-**Documents:** `004`, `012`, `023`, `025` vs `AGENT.md` Phase 1
+**Documents:** `004`, `012`, `023`, `025` vs `AGENTS.md` Phase 1
 
 `004` and `012` lock the backend to **Go**. `023` and `025` elaborate it: Go lives at
 `services/api/` as an independent application, explicitly *not* inside the JavaScript workspace.
-`AGENT.md` Phase 1 prescribes a repository-wide TypeScript toolchain ("TypeScript configuration",
+`AGENTS.md` Phase 1 prescribes a repository-wide TypeScript toolchain ("TypeScript configuration",
 `typecheck`).
 
 **Precedence:** master architecture (`012` Locked Stack) over the generic protocol document.
 
 **Resolved:** Go for `services/api/` (`go build`, `go vet`, `go test`, `gofmt`). TypeScript for
-`apps/` and `packages/` (pnpm, ESLint, Prettier, tsc). AGENT.md's "typecheck/lint/test/build"
+`apps/` and `packages/` (pnpm, ESLint, Prettier, tsc). AGENTS.md's "typecheck/lint/test/build"
 is read as *per-surface* verification, not one toolchain. **Recorded as ADR-001.**
 
 **Status:** RESOLVED
@@ -97,7 +97,7 @@ block Phase 1 — no module beyond the foundation is created in the first slice.
 
 ## C-6 — Roadmap conflicts (R-1 … R-8)
 
-**Documents:** `AGENT.md` §9 · `IMPLEMENTATION_PLAN.md` · `MASTER_IMPLEMENTATION_ROADMAP.md`
+**Documents:** `AGENTS.md` §9 · `IMPLEMENTATION_PLAN.md` · `MASTER_IMPLEMENTATION_ROADMAP.md`
 · `BUSINESS_DECISION_REGISTER.md`
 
 Creating `MASTER_IMPLEMENTATION_ROADMAP.md` (2026-08-27) surfaced eight items, catalogued in

@@ -1,7 +1,12 @@
 # Skill System
 
-Project-specific Claude Code skills for implementing the RideMe logistics platform.
-Location: `.claude/skills/<name>/SKILL.md` — 31 skills, 1,823 lines total (~59 avg).
+Project-specific agent skills for implementing the RideMe logistics platform.
+Canonical location: `.skills/<name>/SKILL.md` — 31 skills, 1,823 lines total (~59 avg).
+
+Claude Code and Codex consume this same canonical directory through relative symlinks:
+
+- Claude Code: `.claude/skills -> ../.skills`
+- Codex: `.agents/skills -> ../.skills`
 
 These carry **only** knowledge specific to this platform or this workflow. Generic React,
 React Native, TypeScript, Go, PostgreSQL, and Playwright knowledge is deliberately absent —
@@ -163,7 +168,7 @@ Recorded rather than invented. Each becomes a `docs/BLOCKED_TASKS.md` entry when
 ### Documentation structure
 
 - **360 documents are template boilerplate** (`205`–`564`, in nine batches of 40). The control
-  documents the AGENT.md protocol depends on are among them: `366` names a dependency graph but
+  documents the AGENTS.md protocol depends on are among them: `366` names a dependency graph but
   contains none; `367` names phases but lists none; `368` names a work queue but defines none.
   **The documented execution protocol has no machine-readable substrate.** `dependency-planning`
   compensates by deriving order from Tier A architecture; `IMPLEMENTATION_PLAN.md` holds the
@@ -172,7 +177,7 @@ Recorded rather than invented. Each becomes a `docs/BLOCKED_TASKS.md` entry when
 
 ### Architecture conflicts
 
-- **Backend language.** `docs/04` and `docs/12` lock the backend to **Go**; `AGENT.md` Phase 1
+- **Backend language.** `docs/04` and `docs/12` lock the backend to **Go**; `AGENTS.md` Phase 1
   prescribes a TypeScript-wide toolchain. Resolution applied: Go for `services/api/`,
   TypeScript for `apps/` and `packages/`. Recorded, not silently merged.
 - **Web framework.** `docs/04` says "Web: Next.js"; `docs/12` splits it (React+Vite for

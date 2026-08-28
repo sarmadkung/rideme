@@ -12,4 +12,6 @@ services/api
 # Hand-authored prose and the agent protocol — Prettier reflows these in ways
 # that make diffs unreadable and adds nothing.
 .claude
-AGENT.md
+.agents
+.skills
+AGENTS.md

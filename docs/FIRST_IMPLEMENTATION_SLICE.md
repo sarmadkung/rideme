@@ -133,10 +133,12 @@ rideme/
 │   └── docker/docker-compose.yml postgres redis nats minio
 ├── .github/workflows/ci.yml
 ├── docs/                         (existing)
-├── .claude/skills/               (existing, 31 skills)
+├── .skills/                      (31 canonical shared skills)
+├── .claude/skills -> ../.skills  (Claude Code)
+├── .agents/skills -> ../.skills  (Codex)
 ├── package.json  pnpm-workspace.yaml  turbo.json
 ├── .env.example  .gitignore
-├── AGENT.md
+├── AGENTS.md
 └── README.md
 ```
 

@@ -2,7 +2,7 @@
 
 The single ordered implementation roadmap for the RideMe logistics platform after Phase 1.
 
-This document supersedes the phase *ordering* in `AGENT.md` §9 and in
+This document supersedes the phase *ordering* in `AGENTS.md` §9 and in
 `IMPLEMENTATION_PLAN.md` for execution purposes. It does not supersede either document on
 anything else — mission, protocol, sequencing principle, token policy and deferred-decision
 tracking continue to live where they already live.
@@ -10,7 +10,7 @@ tracking continue to live where they already live.
 **Authority order** (unchanged from `IMPLEMENTATION_EXECUTION_POLICY.md`):
 
 ```text
-AGENT.md                              mission and protocol
+AGENTS.md                             mission and protocol
     ↓
 IMPLEMENTATION_EXECUTION_POLICY.md    how work is performed
     ↓
@@ -44,7 +44,7 @@ business decision and left open, never guessed.
 Three phase numberings exist in this repository. They are **not** interchangeable, and every
 cross-reference in older documents uses an older numbering. This table is the translation key.
 
-| This roadmap | `IMPLEMENTATION_PLAN.md` spine | `AGENT.md` §9 |
+| This roadmap | `IMPLEMENTATION_PLAN.md` spine | `AGENTS.md` §9 |
 |---|---|---|
 | 1 — Engineering foundation | 1 (+ local half of 2) | 1 (+ 2) |
 | 2 — Contracts and core platform foundation | 3 — backend foundation | 3 — backend foundation |
@@ -1309,9 +1309,9 @@ Phase 2.
 
 ### R-1 — Three incompatible phase numberings
 
-`AGENT.md` §9, `IMPLEMENTATION_PLAN.md`, and this roadmap number phases differently, and
+`AGENTS.md` §9, `IMPLEMENTATION_PLAN.md`, and this roadmap number phases differently, and
 existing documents cross-reference the older schemes. **Handling:** the reconciliation table
-above is the translation key; this roadmap governs execution order only. `AGENT.md` §9 and the
+above is the translation key; this roadmap governs execution order only. `AGENTS.md` §9 and the
 `IMPLEMENTATION_PLAN.md` spine are superseded for ordering and remain authoritative for
 everything else. **Status:** RESOLVED by translation.
 
@@ -1372,7 +1372,7 @@ favour of this roadmap.
 
 Phases 12 and 13 read as horizontal client phases. `IMPLEMENTATION_PLAN.md` states clients
 should "grow alongside the backend slices rather than as a separate horizontal phase", and
-`AGENT.md` §10 is the vertical slice rule.
+`AGENTS.md` §10 is the vertical slice rule.
 
 **Decision (owner, 2026-08-28): vertical slices remain the primary implementation strategy.
 Shared client/platform infrastructure may be built horizontally when it is genuinely
@@ -1481,7 +1481,7 @@ it in Phase 2. Earlier is strictly safer and satisfies the register's own condit
 ## Master Agent Command
 
 > When instructed to continue implementation, identify the earliest uncompleted phase whose
-> dependencies are satisfied and execute it according to `AGENT.md` and
+> dependencies are satisfied and execute it according to `AGENTS.md` and
 > `docs/IMPLEMENTATION_EXECUTION_POLICY.md`.
 >
 > Do not skip phases without dependency justification.
