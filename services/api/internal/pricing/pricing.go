@@ -302,11 +302,21 @@ type rule func(Request, Tariff, money.Currency) (Line, error)
 // service is added — Phase 9's parcel and cargo, Phase 10's grocery — and
 // nothing outside it changes.
 //
-// Only RIDE is populated. The others are registered with the components
-// document 05 names for them so the shape is visible, but they are not reached
-// until their slice builds them.
+// Each entry is the component list document 05 gives for that service:
+//
+//	ride    base + distance + time + demand + vehicle adjustment
+//	parcel  base + distance + size/weight + urgency
+//	cargo   base + distance + vehicle + capacity + loading + waiting + schedule
+//
+// GROCERY is absent until Phase 10 builds it — an unpriced service is refused
+// rather than quietly charged with another service's rules.
 var ruleSets = map[string][]rule{
-	"RIDE": {baseRule, distanceRule, timeRule, serviceFeeRule},
+	"RIDE":   {baseRule, distanceRule, timeRule, serviceFeeRule},
+	"PARCEL": {baseRule, distanceRule, WeightRule, serviceFeeRule},
+	// Cargo prices loading and waiting time. BD-13 leaves the rates open, so a
+	// tariff with zero rates records the time and charges nothing for it.
+	"CARGO":   {baseRule, distanceRule, WeightRule, LoadingRule, WaitingRule, serviceFeeRule},
+	"FREIGHT": {baseRule, distanceRule, WeightRule, LoadingRule, WaitingRule, serviceFeeRule},
 }
 
 // Register adds a service's rule set. Phase 9 and Phase 10 call this rather

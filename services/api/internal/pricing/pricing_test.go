@@ -275,11 +275,61 @@ func TestQuotesCarryTheirTariffVersionAndExpiry(t *testing.T) {
 func TestAnUnpricedServiceIsRefusedNotGuessed(t *testing.T) {
 	// Parcel, cargo and grocery arrive with their slices. Pricing one now
 	// would mean inventing its rule set.
-	for _, jobType := range []string{"PARCEL", "CARGO", "GROCERY", "FREIGHT", "TAXI"} {
+	// GROCERY arrives with Phase 10; TAXI is not a service at all.
+	for _, jobType := range []string{"GROCERY", "TAXI"} {
 		if _, err := engine().Quote(pricing.Request{JobType: jobType, DistanceMeters: 1000},
 			rideTariff()); !errors.Is(err, pricing.ErrUnknownService) {
 			t.Errorf("%s was priced by the ride rule set: %v", jobType, err)
 		}
+	}
+}
+
+func TestParcelAndCargoArePricedByTheSameEngine(t *testing.T) {
+	// Phase 9 added two services by registering component lists. No second
+	// engine, and the distance component is the identical code the ride slice
+	// uses — which is the property CAP-1 exists to guarantee.
+	tariff := rideTariff()
+	tariff.PerKGMinor = 500
+	tariff.LoadingPerMinuteMinor = 100
+
+	for _, jobType := range []string{"PARCEL", "CARGO", "FREIGHT"} {
+		tariff.JobType = jobType
+		quote, err := engine().Quote(pricing.Request{
+			JobType: jobType, DistanceMeters: 8000, WeightKG: 12, LoadingSeconds: 600,
+		}, tariff)
+		if err != nil {
+			t.Fatalf("%s: %v", jobType, err)
+		}
+		total(t, quote)
+		if _, ok := quote.Component(pricing.ComponentDistance); !ok {
+			t.Errorf("%s did not use the shared distance rule", jobType)
+		}
+		if _, ok := quote.Component(pricing.ComponentWeight); !ok {
+			t.Errorf("%s did not price weight", jobType)
+		}
+	}
+
+	// Cargo prices loading time; parcel does not.
+	tariff.JobType = "CARGO"
+	cargo, err := engine().Quote(pricing.Request{
+		JobType: "CARGO", DistanceMeters: 8000, LoadingSeconds: 600,
+	}, tariff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loading, ok := cargo.Component(pricing.ComponentLoading)
+	if !ok || loading.Minor != 1000 {
+		t.Fatalf("cargo loading = %+v, want 1000", loading)
+	}
+	tariff.JobType = "PARCEL"
+	parcel, err := engine().Quote(pricing.Request{
+		JobType: "PARCEL", DistanceMeters: 8000, LoadingSeconds: 600,
+	}, tariff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parcel.Component(pricing.ComponentLoading); ok {
+		t.Fatal("a parcel was charged loading time")
 	}
 }
 

@@ -1,8 +1,8 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–8 are complete and verified.** The ride vertical slice now runs end to end:
-quote → book → dispatch → accept → track → complete. One product decision (BD-04) is open.
+**Phases 1–9 are complete and verified.** Ride, parcel and cargo run through the same job
+core, dispatch and pricing engine. Two product decisions (BD-04, BD-13) are open.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -427,7 +427,54 @@ document 044 leaves open.
 is a worker. No batch offers (`043`: MVP prefers one driver at a time). No zone restrictions
 (`039`'s service zones) — zones are a Phase 14 capability. No operator escalation path (BD-04).
 
-## Phase 9+ — Not Started
+## Phase 9 — Delivery and Cargo
+
+Verified 2026-08-28. Documents 79–91.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Migration `000008` | VERIFIED | n/a | YES | up → down → up observed |
+| **Parcel and cargo are Job types** | VERIFIED | n/a | YES | no parallel order entity; same dispatch, same lifecycle |
+| **Pricing by rule set, not a new engine** | VERIFIED | 2 | YES | PARCEL and CARGO registered behind CAP-1; the distance component is the identical code the ride slice uses |
+| Cargo prices loading, parcel does not | VERIFIED | 1 | YES | the difference is a component list, not a branch |
+| Recipient OTP hashed and single-use (`083`) | VERIFIED | 2 | YES | 32-byte keyed hash; a replayed code would authorise a second handover of a parcel already gone |
+| Concurrent OTP verification | VERIFIED | 1 | YES | 8 racers → exactly 1 handover |
+| OTP attempts bounded | VERIFIED | 1 | YES | past the limit the correct code fails too |
+| Proof audit fields (`083`) | VERIFIED | 2 | YES | method, actor, capture location, media **reference** — never the binary |
+| Proof required per service (`083`) | VERIFIED | 2 | YES | a ride needs none; parcel, grocery and cargo each have a default method |
+| Photo/signature proof needs media | VERIFIED | 1 | YES | a photo proof with no photo is not proof |
+| **Deterministic failure actions (`084`)** | VERIFIED | 3 | YES | a wrong address escalates rather than retrying the same wrong address; a rejection returns rather than retrying at the door |
+| Retries bounded (`084`) | VERIFIED | 2 | YES | configurable limit, then RETURN |
+| **Customer-safe messages (`084`)** | VERIFIED | 1 | YES | asserted that no internal code leaks — a customer told `MERCHANT_ISSUE` learns nothing |
+| Return is a stop, not a new job (`084`) | VERIFIED | 1 | YES | goes back to the original pickup; job count stays 1 |
+| **Cargo capacity beyond weight (`080`, `041`)** | VERIFIED | 5 | YES | a 3.5m/800kg load is refused by a motorcycle on length *and* weight; equipment is a hard constraint |
+| Unknown vehicle capacity fails | VERIFIED | 1 | YES | passing would surface at the pickup as a driver who cannot do the job |
+| Waiting and loading times (`087`) | VERIFIED | 3 | YES | grace period respected; **seconds recorded, never money** |
+| Arrival idempotent | VERIFIED | 1 | YES | a repeated tap does not reset the waiting clock |
+| Helper is an explicit requirement (`087`) | VERIFIED | 1 | YES | `loading_assistance`, not inferred from vehicle type |
+| Restricted goods (BD-13, `088`) | VERIFIED | 1 | YES | table ships **empty**; the check passes vacuously and works the moment a list exists |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 276 Go test functions · 20 unit packages ok
+go test -tags=integration   99 tests, ok
+migrate up → down → up      version 8
+```
+
+**Business decisions handled without inventing anything.** BD-10 (failed-delivery financial
+treatment): the failure states, next actions and return stop are built; no fee or return-leg
+price is written anywhere. BD-13 (cargo waiting/loading rates, restricted goods): time is
+recorded in seconds and priced only if a tariff configures a rate — zero by default — and the
+restricted-goods table ships empty because the list is legal and the owner's. BD-16 (proof
+retention): proofs store object-storage references, so a retention policy is a lifecycle rule
+on the bucket rather than a schema change here.
+
+**Not done, deliberately:** no HTTP handlers. No signed upload URLs for proof media (needs
+object-storage wiring). No multi-item packing optimisation — document 080 defers it explicitly.
+No scheduled delivery windows.
+
+## Phase 10+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
