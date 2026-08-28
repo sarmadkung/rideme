@@ -119,9 +119,13 @@ func TestCreationIsAtomic(t *testing.T) {
 	h := newJobHarness(t)
 	ctx := context.Background()
 
+	// Scoped to this test's own requester: other tests legitimately create
+	// jobs without stops through raw SQL, and a global count would blame this
+	// one for them.
+	userID := h.aUser(t)
 	_, err := h.store.Create(ctx, jobs.Job{
 		Type:            jobs.TypeRide,
-		RequesterUserID: h.aUser(t),
+		RequesterUserID: userID,
 		Stops: []jobs.Stop{
 			{Sequence: 0, Type: jobs.StopPickup, Location: jobs.Coordinate{Latitude: 31.5, Longitude: 74.3}},
 			{Sequence: 1, Type: "TELEPORT", Location: jobs.Coordinate{Latitude: 31.6, Longitude: 74.4}},
@@ -133,7 +137,10 @@ func TestCreationIsAtomic(t *testing.T) {
 
 	var orphans int
 	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM jobs WHERE id NOT IN (SELECT DISTINCT job_id FROM job_stops)`).Scan(&orphans); err != nil {
+		`SELECT count(*) FROM jobs j
+		  WHERE j.requester_user_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM job_stops s WHERE s.job_id = j.id)`,
+		userID).Scan(&orphans); err != nil {
 		t.Fatal(err)
 	}
 	if orphans != 0 {

@@ -1,8 +1,8 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–5 are complete and verified.** Authentication, the core domain model and the
-supply side exist. No service lifecycle is implemented yet.
+**Phases 1–6 are complete and verified.** Authentication, the core domain model, the supply
+side, and the location/realtime foundation exist. No service lifecycle is implemented yet.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -260,7 +260,63 @@ upload URLs (needs object storage wiring). No scheduled expiry worker; the sweep
 the scheduler is the worker framework's job. No service-area eligibility — zones are CAP-2
 and arrive with Phase 6.
 
-## Phase 6+ — Not Started
+## Phase 6 — Location and Realtime Foundation
+
+Verified 2026-08-28. Documents 18, 47, 48, 95, 96, 98, 102, 103.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Migration `000005` | VERIFIED | n/a | YES | full chain down → up → down → up observed |
+| **CAP-2 boundary created (`095`)** | VERIFIED | 12 | YES | `route`/`Matrix`/`EstimateETA`, normalized response, one provider behind it |
+| Routing modes by vehicle (`095`) | VERIFIED | 2 | YES | a truck does not get a car route |
+| Fallback never presented as exact (`096`) | VERIFIED | 3 | YES | every estimate is labelled `estimated`; a total provider outage still ranks candidates |
+| `Drivers × Pickup` matrix (`096`) | VERIFIED | 2 | YES | the reduction Phase 8's `eta_score` performs |
+| Location validation (`048`) | VERIFIED | 12 | YES | every check `048` lists: impossible coordinates, future and stale timestamps, impossible speed, unrealistic jumps |
+| Jump detection tolerates real gaps | VERIFIED | 2 | YES | a tunnel exit is not a spoof; 60 km/h movement is not rejected |
+| Out-of-order fixes dropped | VERIFIED | 2 | YES | buffered delivery reorders; an older fix must not move the driver backwards |
+| Redis current state + geo pool (`018`) | VERIFIED | 4 | YES | only AVAILABLE drivers are in the dispatch pool; leaving is immediate, not TTL-based |
+| Nearby bounded and ordered (`042`) | VERIFIED | 1 | YES | radius-bounded, nearest first — dispatch's candidate discovery |
+| Durable history, batched (`048`) | VERIFIED | 2 | YES | batch-only signature; there is no synchronous single-fix insert to reach for |
+| Retention mechanism, no default (BD-15) | VERIFIED | 1 | YES | cutoff is an argument; nothing decides how long location is kept |
+| Tracking sessions unique per live job | VERIFIED | 1 | YES | two sessions would mean two answers to "who may watch this" |
+| **Location access scoped and audited (`102`)** | VERIFIED | 2 | YES | a stranger is refused; granted *and* denied attempts are both logged |
+| Visibility ends with the job (`102`) | VERIFIED | 1 | YES | "only location needed for active service" |
+| Realtime channels and envelope (`047`) | VERIFIED | 3 | YES | document `047`'s exact envelope; `version` present from the first event |
+| Subscription authorization mandatory (`047`) | VERIFIED | 4 | YES | strict channel parsing; **fails closed** with no membership check configured |
+| Backpressure — slow clients (`047`) | VERIFIED | 1 | YES | 1000 events to a stalled client never block the publisher |
+| Location coalescing (`047`) | VERIFIED | 1 | YES | 500 positions collapse to the newest one, not a backlog of stale ones |
+| Connection limits (`047`) | VERIFIED | 1 | YES | per-user cap; quota released on disconnect |
+| Concurrency safety | VERIFIED | 2 | YES | `go test -race` clean, including publish racing disconnect |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 198 Go test functions · 17 unit packages ok
+go test -race ./internal/realtime/   ok
+go test -tags=integration            ok — real Postgres, PostGIS and Redis
+migrate down → up → down → up        clean both ways
+```
+
+**Two defects found and fixed.**
+
+*A migration that could not be rolled back.* `000004`'s down migration mapped vehicle types
+back by name. A market that had configured a new type — exactly what `030` requires be
+possible — left rows the restored CHECK constraint rejected, and the rollback failed partway,
+leaving the database dirty. Rollback is now total rather than name-by-name: anything outside
+the earlier vocabulary maps to a default. Lossy by nature, since the earlier schema had
+nowhere to put it, but a rollback that fails the moment a market adds a type is not a rollback.
+
+*A test that blamed the wrong code.* Phase 4's atomicity check counted stopless jobs across the
+whole database. Phase 6's fixtures legitimately create jobs without stops, so the assertion
+began failing for something it was not testing. Now scoped to its own requester.
+
+**Not done, deliberately:** no WebSocket transport — the hub, envelope, authorization and
+backpressure are the substance; binding it to a socket is Phase 12's client work. No NATS
+fan-out between gateway instances (`018`'s horizontal scaling) until there is more than one.
+No geocoding or map display (CAP-2, Phase 12). BD-17 sampling frequencies remain unset —
+`182` requires they come from real-device measurement, not guesswork.
+
+## Phase 7+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
