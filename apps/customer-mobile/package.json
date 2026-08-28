@@ -16,7 +16,8 @@
   "jest": {
     "preset": "jest-expo",
     "moduleNameMapper": {
-      "^@platform/([^/]+)$": "<rootDir>/../../packages/$1/src/index.ts"
+      "^@platform/([^/]+)$": "<rootDir>/../../packages/$1/src/index.ts",
+      "^(\\.{1,2}/.*)\\.js$": "$1"
     }
   },
   "dependencies": {
@@ -26,11 +27,16 @@
     "expo": "~57.0.17",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
-    "react-native": "0.86.3"
+    "react-native": "0.86.3",
+    "@platform/api-client": "workspace:*",
+    "@platform/validation": "workspace:*",
+    "expo-secure-store": "~15.0.7",
+    "expo-application": "~7.0.7",
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
-    "@testing-library/react-native": "^13.3.3",
+    "@testing-library/react-native": "^13.0.1",
     "@types/jest": "^29.5.14",
     "@types/react": "~19.2.2",
     "eslint": "^9.39.0",

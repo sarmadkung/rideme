@@ -16,7 +16,8 @@
   "jest": {
     "preset": "jest-expo",
     "moduleNameMapper": {
-      "^@platform/([^/]+)$": "<rootDir>/../../packages/$1/src/index.ts"
+      "^@platform/([^/]+)$": "<rootDir>/../../packages/$1/src/index.ts",
+      "^(\\.{1,2}/.*)\\.js$": "$1"
     }
   },
   "dependencies": {
