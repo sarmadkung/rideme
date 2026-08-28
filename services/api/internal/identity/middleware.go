@@ -53,6 +53,16 @@ func (p Principal) HasAnyRole(roles ...Role) bool {
 	return false
 }
 
+// ContextWithPrincipal attaches a caller to a context.
+//
+// Authenticate is the only thing that should derive a principal from a
+// request. This exists for the callers that already hold one and need to pass
+// it down — internal work started on behalf of a user, and tests that exercise
+// a handler without exercising the token pipeline as well.
+func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
+	return context.WithValue(ctx, principalKey, p)
+}
+
 // PrincipalFrom returns the authenticated caller, if there is one.
 func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey).(Principal)

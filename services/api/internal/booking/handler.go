@@ -7,6 +7,7 @@ import (
 
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
+	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
@@ -165,16 +166,19 @@ func (h *Handler) quote(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
-		"quote_id":         quote.ID,
-		"total":            quote.Total,
-		"lines":            quote.Job.Lines,
-		"expires_at":       quote.Job.ExpiresAt,
-		"distance_meters":  quote.Job.DistanceMeters,
-		"duration_seconds": quote.Job.DurationSeconds,
+	// Written as the declared struct rather than an ad-hoc map. A map here
+	// silently drifts from QuoteResponse — which it had, leaving the generated
+	// client parsing fields the server never sent.
+	httpx.WriteJSON(w, r, http.StatusOK, QuoteResponse{
+		QuoteID:         quote.ID,
+		Total:           quote.Total,
+		Lines:           quote.Job.Lines,
+		DistanceMeters:  quote.Job.DistanceMeters,
+		DurationSeconds: quote.Job.DurationSeconds,
 		// The client is told how the route was obtained, so an estimate is
 		// never presented as a measured fare (document 96).
-		"route_confidence": quote.Job.RouteConfidence,
+		RouteConfidence: string(quote.Job.RouteConfidence),
+		ExpiresAt:       quote.Job.ExpiresAt,
 	})
 }
 
@@ -354,14 +358,19 @@ func intParam(r *http.Request, name string) int {
 // RouteConfidence is on the wire deliberately: document 096 forbids presenting
 // a fallback as exact, and a client that cannot tell an estimated route from a
 // measured one will show both as a firm fare.
+//
+// Lines carry document 034's full breakdown rather than a single figure. That
+// mattered less when every fare was the sum of fixed rates; it matters now
+// that BD-02's demand multiplier can move a fare, because a customer charged
+// 1.3x should be able to see which line did it.
 type QuoteResponse struct {
-	QuoteID         string    `json:"quote_id"`
-	TotalMinor      int64     `json:"total_minor"`
-	Currency        string    `json:"currency"`
-	DistanceMeters  int64     `json:"distance_meters"`
-	DurationSeconds int64     `json:"duration_seconds"`
-	RouteConfidence string    `json:"route_confidence"`
-	ExpiresAt       time.Time `json:"expires_at"`
+	QuoteID         string         `json:"quote_id"`
+	Total           money.Amount   `json:"total"`
+	Lines           []pricing.Line `json:"lines"`
+	DistanceMeters  int64          `json:"distance_meters"`
+	DurationSeconds int64          `json:"duration_seconds"`
+	RouteConfidence string         `json:"route_confidence"`
+	ExpiresAt       time.Time      `json:"expires_at"`
 }
 
 // CancelResponse reports the outcome of a cancellation.

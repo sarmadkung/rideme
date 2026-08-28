@@ -17,6 +17,7 @@ import (
 	"reflect"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
 	"github.com/sarmadkung/rideme/services/api/pkg/events"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
@@ -68,6 +69,7 @@ func Registry() *contract.Registry {
 	// clients receive generated models rather than hand-written ones.
 	r.Struct("JobStop", booking.StopResponse{})
 	r.Struct("Job", booking.JobResponse{})
+	r.Struct("QuoteLine", pricing.Line{})
 	r.Struct("Quote", booking.QuoteResponse{})
 	r.Struct("CancelResult", booking.CancelResponse{})
 

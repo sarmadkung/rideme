@@ -86,10 +86,16 @@ export const jobSchema = z.object({
   created_at: z.string().datetime({ offset: true }),
 });
 
+export const quoteLineSchema = z.object({
+  component: z.string(),
+  amount: moneySchema,
+  detail: z.string().optional(),
+});
+
 export const quoteSchema = z.object({
   quote_id: z.string(),
-  total_minor: z.number().int(),
-  currency: z.string(),
+  total: moneySchema,
+  lines: z.array(quoteLineSchema),
   distance_meters: z.number().int(),
   duration_seconds: z.number().int(),
   route_confidence: z.string(),

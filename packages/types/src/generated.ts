@@ -90,10 +90,16 @@ export interface Job {
   created_at: string;
 }
 
+export interface QuoteLine {
+  component: string;
+  amount: Money;
+  detail?: string | undefined;
+}
+
 export interface Quote {
   quote_id: string;
-  total_minor: number;
-  currency: string;
+  total: Money;
+  lines: QuoteLine[];
   distance_meters: number;
   duration_seconds: number;
   route_confidence: string;
