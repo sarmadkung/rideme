@@ -1,8 +1,8 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–6 are complete and verified.** Authentication, the core domain model, the supply
-side, and the location/realtime foundation exist. No service lifecycle is implemented yet.
+**Phases 1–7 are complete and verified.** A customer can be quoted, book a ride, track it and
+cancel it; a driver can run the trip to completion. Dispatch is Phase 8.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -316,7 +316,58 @@ fan-out between gateway instances (`018`'s horizontal scaling) until there is mo
 No geocoding or map display (CAP-2, Phase 12). BD-17 sampling frequencies remain unset —
 `182` requires they come from real-device measurement, not guesswork.
 
-## Phase 7+ — Not Started
+## Phase 7 — Ride Booking
+
+Verified 2026-08-28. Documents 05, 15, 34, 35, 36.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Migration `000006` | VERIFIED | n/a | YES | up → down → up observed |
+| **CAP-1 boundary created** | VERIFIED | 15 | YES | `internal/pricing`; service-parameterized from the first line |
+| A service is a rule set, not an engine | VERIFIED | 2 | YES | a second service registered in a test reuses the shared distance rule |
+| **No rate value in Go** (`034`) | VERIFIED | n/a | YES | every number comes from a `pricing_tariffs` row; the engine holds a clock and nothing else |
+| Document `034` breakdown complete | VERIFIED | 3 | YES | lines always sum to the total — asserted on every quote in every pricing test |
+| Rounds once, half away from zero | VERIFIED | 2 | YES | rational arithmetic throughout; 3,333 successive quotes accumulate without drift |
+| Minimum fare tops up, never reduces | VERIFIED | 2 | YES | applied before demand and tax |
+| Demand inert by default (BD-02) | VERIFIED | 1 | YES | term present, adjustment zero |
+| **Demand bounded by tariff** (`034`) | VERIFIED | 1 | YES | 3× against a 1.5× cap is refused; so is 0.5× — surge must not become a silent discount |
+| Tax applies last | VERIFIED | 1 | YES | on what the customer actually pays |
+| Discount never makes a fare negative | VERIFIED | 1 | YES | the platform would owe money for a ride |
+| **Price lock** (`034`) | VERIFIED | 2 | YES | doubling the tariff does not move a confirmed price; a new quote does pick it up |
+| Quote expiry enforced | VERIFIED | 1 | YES | |
+| Quote ownership enforced (`035`) | VERIFIED | 1 | YES | otherwise one customer books at another's price |
+| Quote is single-use | VERIFIED | 1 | YES | two jobs must not share one locked price |
+| **Idempotent create** (`035`, `185`) | VERIFIED | 2 | YES | a retry returns the same job; exactly one row exists |
+| Key reused with different content refused | VERIFIED | 1 | YES | replaying the first response would discard the second request |
+| Cancellation tiers follow `005` | VERIFIED | 2 | YES | tier recorded, **fee left null** — BD-01 is not the platform's to invent |
+| Cancellation is state-aware (`036`) | VERIFIED | 2 | YES | a trip in progress cannot be cancelled |
+| Concurrent cancellations | VERIFIED | 1 | YES | 6 racers → one cancellation, one history row |
+| Driver commands validate ownership (`035`) | VERIFIED | 1 | YES | a driver cannot command a job they do not hold |
+| Driver commands idempotent (`036`) | VERIFIED | 1 | YES | tapping "arrived" twice returns the job, not an error |
+| **Commands walk the documented flow** | VERIFIED | 1 | YES | a trip cannot complete without passing through `ARRIVING` and `AT_DROPOFF` |
+| C-8 resolved — state names | VERIFIED | n/a | YES | names from `015`, rules from `036` |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 228 Go test functions · 18 unit packages ok
+go test -tags=integration   76 tests, ok — real Postgres, PostGIS, Redis
+migrate up → down → up      version 6
+```
+
+**A defect the tests caught.** Driver commands jumped straight to their target status, so
+`arrive` moved a job `ACCEPTED → AT_PICKUP` and skipped `ARRIVING` entirely. The state machine
+refused it — which is what a state machine is for — but the fix mattered more than the
+refusal: commands now walk the main flow one documented transition at a time. Jumping would
+have left intermediate states in the specification and never in the data, making "when did the
+driver set off?" unanswerable.
+
+**Not done, deliberately:** no HTTP handlers for the `035` endpoints yet. No dispatch — Phase 8
+assigns drivers; `StartSearching` is the handoff. Cancellation **fees** and driver
+compensation are unwired (BD-01). No payment capture at completion — Phase 11. Parcel, cargo
+and grocery are refused rather than priced by the ride rule set; they arrive with their slices.
+
+## Phase 8+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.

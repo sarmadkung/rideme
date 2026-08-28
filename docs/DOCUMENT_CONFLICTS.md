@@ -155,6 +155,26 @@ that "rejected documents can be resubmitted" would have been unrepresentable.
 
 ---
 
+## C-8 — Job state names
+
+**Documents:** `015` vs `036`
+
+`015`'s main flow uses `ARRIVING` and `AT_DROPOFF`. `036`'s transition matrix uses
+`ARRIVING_PICKUP` and `ARRIVING_DROPOFF` for the same two slots.
+
+**Precedence:** `015` is the dedicated job state machine document and names the states;
+`036` is the dedicated *rules* document and supplies the transition matrix, offer timeout,
+reassignment, concurrency and cancellation behaviour, none of which `015` covers.
+
+**Resolved 2026-08-28 (Phase 7):** state **names** follow `015` (already implemented in
+migration `000003` and `internal/jobs`); transition **rules** follow `036`. The two documents
+describe the same lifecycle and disagree only on two labels, so no behaviour is lost either
+way — but two vocabularies in one codebase would be.
+
+**Status:** RESOLVED
+
+---
+
 ## Non-conflicts (checked, not conflicting)
 
 - **`012` vs `023` on Next.js** — consistent; both scope it to marketing.
