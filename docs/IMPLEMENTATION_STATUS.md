@@ -1,8 +1,8 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–4 are complete and verified.** A caller can authenticate (Phase 3) and the
-core domain model exists (Phase 4). No service lifecycle is implemented yet.
+**Phases 1–5 are complete and verified.** Authentication, the core domain model and the
+supply side exist. No service lifecycle is implemented yet.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -213,7 +213,54 @@ no pricing logic — the quote table exists, CAP-1's boundary is created by the 
 (Phase 7). No proof model yet; it arrives with proof of delivery in Phase 9. Sixteen of the
 seventeen modules are not created: empty directories are not architecture.
 
-## Phase 5+ — Not Started
+## Phase 5 — Providers, Vehicles and Service Eligibility
+
+Verified 2026-08-28. Documents 16, 29, 30, 41, 108.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Migration `000004` | VERIFIED | n/a | YES | up → down → up observed, including data mapping both ways |
+| **Vehicle taxonomy as configuration (`030`)** | VERIFIED | 1 | YES | `vehicle_types`/`capabilities` reference tables replace `000003`'s CHECK constraints; a new type is a row, not a migration |
+| Capabilities derived, never submitted (`030`) | VERIFIED | 1 | YES | `RegisterVehicle` has no capability input; `source` records DERIVED vs ADMIN |
+| Driver verification machine (`029`) | VERIFIED | 3 | YES | seven states; rejection is not terminal, so resubmission works |
+| Driver availability machine (`016`) | VERIFIED | 2 | YES | separate column and machine from verification, per `029`'s objective |
+| Vehicle verification machine (`030`) | VERIFIED | 2 | YES | six states |
+| Onboarding resumable and idempotent | VERIFIED | 1 | YES | "become a driver" twice does not reset progress |
+| Active vehicle must be verified and owned | VERIFIED | 1 | YES | ownership and status checked inside the statement, not before it |
+| Suspension clears the active vehicle | VERIFIED | 1 | YES | otherwise a driver keeps working on a suspended vehicle |
+| Document model and expiry sweep (`029`) | VERIFIED | 2 | YES | one table for driver and vehicle documents; expiry is a single indexed sweep |
+| **One shared eligibility implementation (`041`)** | VERIFIED | 16 | YES | `internal/eligibility`; dispatch and acceptance both call `Evaluate`, neither has a copy |
+| Hard constraints reject candidates (`041`) | VERIFIED | 8 | YES | every constraint in `041`'s list, each exercised individually |
+| Expired mandatory document blocks work (`016`) | VERIFIED | 3 | YES | inclusive at the boundary — a document expiring today is expired today |
+| **Missing** mandatory document blocks work | VERIFIED | 1 | YES | requirements are LEFT JOINed *from* the requirement, so an unsubmitted document is a failure rather than an absent row |
+| Stale location excludes from dispatch only | VERIFIED | 1 | YES | acceptance does not check it — the driver is present and answering |
+| Every failure reported, not just the first | VERIFIED | 1 | YES | a driver fixing their profile learns all of it in one pass |
+| Review actions audited (`029`) | VERIFIED | 1 | YES | `verification_reviews`; counts asserted |
+| Concurrent availability transitions | VERIFIED | 1 | YES | 6 racers → exactly 1 winner |
+| BD-14 handled structurally | VERIFIED | n/a | YES | `document_requirements` ships **empty**; the mechanism requires nothing until a market's list is supplied |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 153 Go test functions · 14 unit packages ok
+go test -tags=integration   50 tests, ok — real Postgres + PostGIS
+migrate up → down → up      version 4 → rolled back → version 4
+```
+
+**A correction to Phase 4.** Migration `000003` encoded vehicle types and capabilities as CHECK
+constraints, using the narrower vocabulary from the roadmap. Document `030` requires the
+taxonomy be configuration-driven — "local names/categories can evolve" — and gives eight types
+and eight capabilities, not seven and five. `000004` converts both to reference tables with
+foreign keys and maps the existing rows in both directions. C-7 (verification vocabularies)
+recorded and resolved at the same time.
+
+**Not done, deliberately:** no HTTP surface for the `030` endpoints yet — the store and rules
+are the phase's substance and the handlers follow the same pattern as Phase 3's. No signed
+upload URLs (needs object storage wiring). No scheduled expiry worker; the sweep exists,
+the scheduler is the worker framework's job. No service-area eligibility — zones are CAP-2
+and arrive with Phase 6.
+
+## Phase 6+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
