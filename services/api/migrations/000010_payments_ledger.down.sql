@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS commission_rates;
+DROP TABLE IF EXISTS reconciliation_cases;
+DROP TABLE IF EXISTS payouts;
+DROP TRIGGER IF EXISTS ledger_entries_no_update ON ledger_entries;
+DROP FUNCTION IF EXISTS ledger_entries_immutable();
+DROP TABLE IF EXISTS ledger_entries;
+DROP TABLE IF EXISTS ledger_transactions;
+DROP TABLE IF EXISTS ledger_accounts;
+DROP TABLE IF EXISTS payment_webhook_events;
+DROP TABLE IF EXISTS payment_intents;

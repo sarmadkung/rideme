@@ -1,9 +1,9 @@
 # Implementation Status
 
 Reflects reality, not intent. `IMPLEMENTED` ≠ `VERIFIED` — see `progress-tracking`.
-**Phases 1–10 are complete and verified.** Ride, parcel, cargo and grocery all run through
-the same job core, dispatch and pricing engine. Three product decisions are open — BD-04,
-BD-11, BD-12.
+**Phases 1–11 are complete and verified.** Every backend service — ride, parcel, cargo,
+grocery — runs through one job core, one dispatch engine, one pricing engine and one ledger.
+Four product decisions are open: BD-04, BD-05, BD-09, BD-11.
 
 `VERIFIED` below means a command was run and its output observed, not that the
 code looks right. Evidence is in the Phase 1 completion report.
@@ -519,7 +519,55 @@ be a real single row.
 No `READY_FOR_PICKUP → create delivery job` wiring yet; the link column exists and the event
 that drives it belongs with the worker framework. No add-ons or option groups beyond variants.
 
-## Phase 11+ — Not Started
+## Phase 11 — Payments and Financial System
+
+Verified 2026-08-28. Documents 19, 51–64. **Level 5 throughout, mandatory.**
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Migration `000010` | VERIFIED | n/a | YES | up → down → up observed |
+| **Double-entry ledger balances (`053`)** | VERIFIED | 4 | YES | checked in Go *and* re-summed in SQL before commit; the whole ledger sums to zero |
+| Signed amounts, one column | VERIFIED | n/a | YES | "does this balance?" is `sum() = 0` — nobody can fill in the wrong column |
+| **Entries are immutable (`053`)** | VERIFIED | 1 | YES | database **trigger**, so UPDATE and DELETE fail for psql and migrations too |
+| Corrections are reversals | VERIFIED | 2 | YES | every account nets to zero across the pair; both transactions remain |
+| No mixed currencies in a transaction | VERIFIED | 1 | YES | two currencies summing to zero would balance numerically and mean nothing |
+| Earnings split gross exactly | VERIFIED | 2 | YES | net + commission = gross, asserted over 2,000 random splits |
+| Commission never exceeds the earning | VERIFIED | 2 | YES | a driver must not owe money for working |
+| **Concurrent captures (`059`)** | VERIFIED | 1 | YES | 10 racers → 1 capture, 1 ledger transaction, books still balance |
+| **Concurrent refunds bounded (`059`)** | VERIFIED | 2 | YES | 10 × 2000 against a 10000 capture → exactly 5; the schema refuses an over-refund even by direct SQL |
+| One live intent per job | VERIFIED | 1 | YES | two would let a customer be charged twice for one ride |
+| Idempotent intent creation | VERIFIED | 1 | YES | a retry returns the original |
+| **Webhook signatures verified (`058`)** | VERIFIED | 1 | YES | constant-time; tampered payload, wrong secret and empty signature all refused |
+| Webhook deduplication is durable (`052`) | VERIFIED | 2 | YES | 8 concurrent deliveries → 1 processor; an in-memory set forgets exactly when providers replay |
+| Capture and ledger commit together | VERIFIED | n/a | YES | a captured payment with no ledger entry is money the books do not know about |
+| **BD-05: no commission without configuration** | VERIFIED | 1 | YES | `commission_rates` ships empty and earnings refuse — a guessed rate pays every driver wrongly, retroactively |
+| Balances derived, not stored (`053`) | VERIFIED | 1 | YES | a cached balance is a second source of truth that can disagree |
+| One payout per subject per period (`059`) | VERIFIED | 1 | YES | paying a driver twice for one week is found by whoever reconciles the bank |
+| **BD-08: zero tolerance (`058`)** | VERIFIED | 1 | YES | a one-paisa mismatch opens a case and adjusts nothing |
+| **BD-09: COD allocates no liability** | VERIFIED | 1 | YES | cash sits in `CASH_IN_TRANSIT` against the driver holding it; nothing decides whose loss it is |
+
+**Verification evidence (observed, 2026-08-28):**
+
+```text
+gofmt clean · go vet ok · 330 Go test functions · 22 unit packages ok
+go test -tags=integration              131 tests, ok
+money races with -count=3              ok — document 059's parallel/retry requirement
+migrate up → down → up                 version 10
+```
+
+**Business decisions handled without inventing money.** BD-05 (commission rates): configuration
+only; earnings return `ErrNoCommission` until a rate exists. BD-06 (refund policy): the refund
+*mechanism* is built and bounded; no automatic policy decides when one happens. BD-08
+(reconciliation tolerance): zero tolerance, the register's recommended default, adopted
+explicitly — any discrepancy raises a case. BD-09 (COD liability): recorded as cash in transit
+held by a driver, with no allocation of loss.
+
+**Not done, deliberately:** no real payment provider adapter — the abstraction, signature
+verification and webhook path exist; a provider contract does not. No automated payout
+execution (needs banking integration). No maker/checker on admin financial actions (`059`
+prefers it; it needs the admin console, Phase 13).
+
+## Phase 12+ — Not Started
 
 Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 `MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
