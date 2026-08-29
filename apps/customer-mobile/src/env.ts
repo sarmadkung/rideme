@@ -8,6 +8,15 @@ import {
 export interface MobileEnv {
   appEnv: AppEnv;
   apiBaseUrl: string;
+  /**
+   * The market this build serves, used to select a pricing tariff.
+   *
+   * Optional, and deliberately not defaulted. Tariffs are per city and the
+   * platform ships none — inventing a city here would ask the server for a
+   * fare in a market nobody configured. Left unset, quoting fails with the
+   * server's own "not available here yet", which is the truth.
+   */
+  city?: string;
 }
 
 /**
@@ -20,6 +29,7 @@ export function loadEnv(source: Record<string, string | undefined>): MobileEnv {
   return {
     appEnv: requireAppEnv(source, 'EXPO_PUBLIC_APP_ENV'),
     apiBaseUrl: requireEnv(source, 'EXPO_PUBLIC_API_BASE_URL'),
+    city: source.EXPO_PUBLIC_CITY,
   };
 }
 
