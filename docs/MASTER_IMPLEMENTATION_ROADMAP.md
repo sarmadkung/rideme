@@ -1280,9 +1280,11 @@ Phase N — <name>
 
 ### Live record
 
-> Rows 4–11 were stale until 2026-08-28: the phases were built and verified, but the edits to
-> this table used non-asserting string replacements that silently matched nothing. The status
-> here now agrees with `IMPLEMENTATION_STATUS.md`, which was correct throughout.
+> This table has drifted twice, both times because edits used non-asserting string
+> replacements that silently matched nothing. Rows 4–11 were corrected on 2026-08-28, and the
+> blocker column on 2026-08-29 after the business decisions were resolved. Every edit since
+> asserts its match. `IMPLEMENTATION_STATUS.md` has been correct throughout and remains the
+> authority where the two disagree.
 
 | Phase | Status | Started | Completed | Blockers |
 |---|---|---|---|---|
@@ -1292,13 +1294,13 @@ Phase N — <name>
 | 4 — Core domain model | **VERIFIED** | 2026-08-28 | 2026-08-28 | none — C-5 resolved, ADR-004 accepted |
 | 5 — Providers, vehicles, eligibility | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-14 structural only; requirements table ships empty |
 | 6 — Location and realtime | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-15/BD-17 mechanisms built, values unset |
-| 7 — Ride booking | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-01, BD-02 open** — configurable and unset |
-| 8 — Dispatch engine | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-04 open (B-5)** — engine bounded, terminal behaviour undecided |
+| 7 — Ride booking | **VERIFIED** | 2026-08-28 | 2026-08-29 | none — BD-01 and BD-02 resolved 2026-08-28 and configured |
+| 8 — Dispatch engine | **VERIFIED** | 2026-08-28 | 2026-08-29 | none — BD-04 resolved 2026-08-28, B-5 closed; sweeper enforces the deadline |
 | 9 — Delivery and cargo | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-10/BD-13/BD-16 mechanisms built, values unset |
-| 10 — Grocery and merchant | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-12 open** — orders refuse until configured; BD-11 unwired |
-| 11 — Payments and financial | **VERIFIED** | 2026-08-28 | 2026-08-28 | **BD-05 open** — earnings refuse until configured; BD-06/BD-09 open |
-| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | secure storage + auth flow built; screens outstanding |
-| 13 — Operational dashboards | **PARTIAL** | 2026-08-28 | — | foundations built and tested; product surfaces outstanding |
+| 10 — Grocery and merchant | **VERIFIED** | 2026-08-28 | 2026-08-29 | none — BD-11 and BD-12 resolved 2026-08-28; sweeper auto-cancels unanswered orders |
+| 11 — Payments and financial | **VERIFIED** | 2026-08-28 | 2026-08-29 | BD-05 resolved (flat 20%); BD-06/BD-09 open but block nothing built |
+| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | customer booking and driver trip flows built and tested; **no map, no real location source, no push, no offline queue, no earnings**; BD-17/18/19 unmeasured |
+| 13 — Operational dashboards | **PARTIAL** | 2026-08-28 | — | admin job list only; **merchant dashboard is an empty directory**; support and finance consoles outstanding |
 | 14 — Production infrastructure | **PARTIAL** | 2026-08-28 | — | CI contract gate built; **container does not build**; cloud needs credentials |
 | 15 — Hardening and release | **PARTIAL** | 2026-08-28 | — | full local verification run; load/E2E/remote CI outstanding |
 
