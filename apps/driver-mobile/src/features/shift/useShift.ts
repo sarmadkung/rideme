@@ -97,15 +97,22 @@ export function useShift(
   }, []);
 
   const refresh = useCallback(async () => {
-    // Read the driver and the assignment together. Reading only one leaves the
-    // app showing an offer for a driver who has gone offline, or an online
-    // driver with no sign of the job they are holding.
-    const [driver, assignment] = await Promise.all([
-      client.driverMe(),
-      client.driverAssignment(),
-    ]);
-    setState((s) => ({ ...s, driver, assignment }));
-  }, [client]);
+    // Through run() like every other action. This is called on mount, and a
+    // signed-in account that is not a driver makes driverMe throw — outside
+    // run() that surfaces as an unhandled rejection rather than as a message
+    // the driver can read.
+    //
+    // Both reads happen together. Reading only one leaves the app showing an
+    // offer for a driver who has gone offline, or an online driver with no
+    // sign of the job they are holding.
+    await run(async () => {
+      const [driver, assignment] = await Promise.all([
+        client.driverMe(),
+        client.driverAssignment(),
+      ]);
+      return { driver, assignment };
+    });
+  }, [client, run]);
 
   const goOnline = useCallback(
     async (at: PositionInput) => {

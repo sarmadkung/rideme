@@ -255,3 +255,27 @@ describe('isOffer', () => {
     expect(isOffer(null)).toBe(false);
   });
 });
+
+describe('useShift.refresh', () => {
+  it('shows a message rather than throwing when the account is not a driver', async () => {
+    // refresh runs on mount. Outside the error path this would surface as an
+    // unhandled rejection instead of something the person can read.
+    const client = stubClient({
+      driverMe: jest.fn(async () => {
+        throw new ApiError(403, {
+          code: 'forbidden',
+          message: 'this account is not a driver',
+          request_id: 'r',
+        });
+      }),
+    });
+    const { result } = renderHook(() => useShift(asClient(client), { pollMs: 100000 }));
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.error).toBe('this account is not a driver');
+    expect(result.current.driver).toBeNull();
+  });
+});
