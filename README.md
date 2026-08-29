@@ -58,7 +58,9 @@ packages/              @platform/* shared TypeScript packages
 services/api/          Go — independent module, its own toolchain (ADR-001)
 infra/docker/          local infrastructure
 docs/                  specification and control documents
-.claude/skills/        31 project skills
+.skills/               31 canonical project skills
+.claude/skills         symlink to ../.skills for Claude Code
+.agents/skills         symlink to ../.skills for Codex
 ```
 
 The Go service is deliberately outside the pnpm workspace. Two toolchains, two
@@ -122,7 +124,7 @@ exercise.
 Branch from `main`, open a pull request, keep CI green. CI runs the JavaScript
 and Go paths independently and only when their files change.
 
-Before changing anything, read [AGENT.md](AGENT.md) — it is the execution
+Before changing anything, read [AGENTS.md](AGENTS.md) — it is the execution
 protocol this repository is built under — and the control documents in
 [docs/](docs/): the implementation plan, current status, architecture decisions
 and blocked tasks. Documents `00`–`190` are the authoritative specification.

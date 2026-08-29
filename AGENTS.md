@@ -60,7 +60,7 @@ built, the Tier A documentation (`00`–`190`) governs both.
 The hierarchy:
 
 ```text
-AGENT.md                              mission and protocol
+AGENTS.md                             mission and protocol
     ↓
 IMPLEMENTATION_EXECUTION_POLICY.md    how work is performed
     ↓
@@ -70,6 +70,20 @@ authoritative documentation           what to build (Tier A)
     ↓
 implementation  →  targeted verification
 ```
+
+## Repository Skills
+
+Reusable agent skills are stored in `.skills/`.
+
+Both supported coding agents consume the same canonical skills:
+
+- Claude Code: `.claude/skills -> ../.skills`
+- Codex: `.agents/skills -> ../.skills`
+
+Do not create duplicate Claude-specific or Codex-specific copies of a skill unless the skill
+genuinely requires agent-specific behavior.
+
+When modifying a skill, update the canonical version under `.skills/`.
 
 # 2. Documentation Is the Source of Truth
 
@@ -1153,7 +1167,7 @@ Production verification is the final authority.
 
 # 29. Starting Instruction
 
-When this AGENT.md is first loaded, perform these actions in order:
+When this AGENTS.md is first loaded, perform these actions in order:
 
 1. Inspect repository.
 2. Inspect `/docs`.

@@ -24,7 +24,7 @@ code looks right. Evidence is in the Phase 1 completion report.
 
 | Task | Status | Tests | Verified | Notes |
 |------|--------|-------|----------|-------|
-| AGENT.md execution protocol | IMPLEMENTED | n/a | n/a | committed `393d793`, patched `c958f68` |
+| AGENTS.md execution protocol | IMPLEMENTED | n/a | n/a | committed `393d793`, patched `c958f68` |
 | Custom skill system (31 skills) | VERIFIED | n/a | YES | frontmatter valid; 228 doc refs resolve |
 | Documentation audit | VERIFIED | n/a | YES | signature clustering; `DOCUMENT_AUDIT.md` |
 | Document conflict register | IMPLEMENTED | n/a | n/a | 5 conflicts; 4 resolved, 1 deferred |
@@ -682,7 +682,7 @@ Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
 
 | Item | Blocks | Tracked |
 |---|---|---|
-| B-1 — control docs 366/367/368 empty | AGENT.md protocol as written | mitigated by `IMPLEMENTATION_PLAN.md`; **Phase 1 unaffected** |
+| B-1 — control docs 366/367/368 empty | AGENTS.md protocol as written | mitigated by `IMPLEMENTATION_PLAN.md`; **Phase 1 unaffected** |
 | ~~B-2 — Go ↔ TS type strategy~~ | — | **CLOSED 2026-08-28** — ADR-007; Go authoritative, TypeScript generated |
 | B-3 — 19 business rules | Phase 7 onward (roadmap numbering) | `BUSINESS_DECISION_REGISTER.md`; BD-07 now implemented as ADR-008 |
 | ~~B-4 — four domains without a phase~~ | — | **CLOSED 2026-08-28** — resolved as CAP-2…CAP-5 |

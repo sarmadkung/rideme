@@ -9,13 +9,13 @@ Decisions that resolve documented ambiguity or depart from a specification. Rout
 
 **Date:** 2026-08-27 · **Status:** Accepted
 
-**Context:** `AGENT.md` Phase 1 prescribes a repository-wide TypeScript toolchain, while `004`
+**Context:** `AGENTS.md` Phase 1 prescribes a repository-wide TypeScript toolchain, while `004`
 and `012` lock the backend to Go. `023` states explicitly: "Do not force Go into the JavaScript
 workspace." Conflict C-1.
 
 **Decision:** `services/api/` is an independent Go application with its own `go.mod`, verified by
 `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt`. The pnpm/Turborepo workspace covers
-`apps/` and `packages/` only. AGENT.md's "typecheck / lint / test / build" is interpreted
+`apps/` and `packages/` only. AGENTS.md's "typecheck / lint / test / build" is interpreted
 per-surface.
 
 **Alternatives:** (a) Node/TypeScript backend — contradicts the locked stack and discards the Go
@@ -110,7 +110,7 @@ no `parcels` module, and there must never be one.
 
 **Context:** 360 of 564 documents (205–564) are nine 40-document template batches whose only
 unique content is a title and a one-sentence Objective. `366`, `367`, and `368` — the dependency
-graph, phases, and work queue that AGENT.md's protocol depends on — are among them and contain
+graph, phases, and work queue that AGENTS.md's protocol depends on — are among them and contain
 no graph, no phases, and no queue. See `DOCUMENT_AUDIT.md`.
 
 **Decision:** Treat 000–190 as authoritative specification, 191–204 as thin restatement, and

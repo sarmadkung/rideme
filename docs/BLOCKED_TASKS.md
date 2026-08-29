@@ -11,7 +11,7 @@ imminently**.
 
 ## B-1 — Control documents 366/367/368 contain no control data
 
-**Task:** Follow the AGENT.md execution protocol as written.
+**Task:** Follow the AGENTS.md execution protocol as written.
 
 **Reason:** `366-implementation-dependency-graph`, `367-implementation-phases`, and
 `368-agent-work-queue` are Tier C template documents. `366` contains no graph, `367` no phase
