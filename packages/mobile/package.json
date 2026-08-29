@@ -1,0 +1,38 @@
+{
+  "name": "@platform/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "echo \"useAuth is exercised by the customer app suite\" && exit 0"
+  },
+  "dependencies": {
+    "@platform/api-client": "workspace:*",
+    "expo-secure-store": "~15.0.7"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/react": "~19.2.2",
+    "eslint": "^9.39.0",
+    "react": "19.2.3",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0"
+  }
+}

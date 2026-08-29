@@ -17,7 +17,7 @@ export function LoginScreen({ auth }: { auth: AuthState & AuthActions }) {
 
   return (
     <View style={styles.screen} testID="login-screen">
-      <Text style={styles.title}>RideMe</Text>
+      <Text style={styles.title}>RideMe Driver</Text>
       <Text style={styles.subtitle}>
         {onPhoneStage ? 'Enter your phone number to continue.' : `We sent a code to ${auth.phone}.`}
       </Text>

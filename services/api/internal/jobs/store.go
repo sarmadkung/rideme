@@ -534,3 +534,23 @@ func (s *Store) SearchingSince(ctx context.Context, before time.Time, limit int)
 	}
 	return ids, rows.Err()
 }
+
+// LiveAssignmentForDriver returns the offer or active job a driver currently
+// holds.
+//
+// A driver holds at most one at a time — the partial unique index on
+// assignments enforces it — so this is the driver app's whole world: either
+// there is something to answer or drive, or there is not.
+func (s *Store) LiveAssignmentForDriver(ctx context.Context, driverID string) (Assignment, error) {
+	a, err := scanAssignment(s.pool.QueryRow(ctx,
+		`SELECT `+assignmentColumns+` FROM assignments
+		  WHERE driver_id = $1 AND status IN ('OFFERED', 'ACCEPTED')
+		  ORDER BY offered_at DESC LIMIT 1`, driverID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Assignment{}, ErrNotFound
+	}
+	if err != nil {
+		return Assignment{}, fmt.Errorf("load driver assignment: %w", err)
+	}
+	return a, nil
+}

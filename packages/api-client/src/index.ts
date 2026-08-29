@@ -11,16 +11,22 @@
 import type {
   ApiErrorBody,
   CancelResult,
+  DriverAssignment,
+  DriverProfile,
   ErrorCode,
   HealthResponse,
   Job,
+  LocationReport,
   Quote,
 } from '@platform/types';
 import {
   apiErrorBodySchema,
   cancelResultSchema,
+  driverAssignmentSchema,
+  driverProfileSchema,
   healthResponseSchema,
   jobSchema,
+  locationReportSchema,
   quoteSchema,
 } from '@platform/validation';
 
@@ -118,6 +124,26 @@ export interface ApiClient {
   driverArrive(jobId: string): Promise<Job>;
   driverStart(jobId: string): Promise<Job>;
   driverComplete(jobId: string): Promise<Job>;
+  driverAccept(jobId: string): Promise<Job>;
+  driverReject(jobId: string): Promise<Job>;
+
+  driverMe(): Promise<DriverProfile>;
+  goOnline(at: PositionInput): Promise<DriverProfile>;
+  goOffline(): Promise<DriverProfile>;
+  reportLocation(fixes: PositionInput[]): Promise<LocationReport>;
+  /** The offer or trip the driver is holding, or null when they hold nothing. */
+  driverAssignment(): Promise<DriverAssignment | null>;
+}
+
+/** One position report. Timestamped by the device, not the server. */
+export interface PositionInput {
+  latitude: number;
+  longitude: number;
+  accuracyM?: number;
+  headingDeg?: number;
+  speedMps?: number;
+  jobId?: string;
+  recordedAt?: Date;
 }
 
 export interface StopInput {
@@ -396,6 +422,60 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         await request(`/driver/jobs/${encodeURIComponent(jobId)}/complete`, { method: 'POST' }),
       );
     },
+    async driverAccept(jobId) {
+      return jobSchema.parse(
+        await request(`/driver/jobs/${encodeURIComponent(jobId)}/accept`, { method: 'POST' }),
+      );
+    },
+    async driverReject(jobId) {
+      return jobSchema.parse(
+        await request(`/driver/jobs/${encodeURIComponent(jobId)}/reject`, { method: 'POST' }),
+      );
+    },
+
+    async driverMe() {
+      return driverProfileSchema.parse(await request('/driver/me'));
+    },
+    async goOnline(at) {
+      return driverProfileSchema.parse(
+        await request('/driver/online', { method: 'POST', body: toPositionBody(at) }),
+      );
+    },
+    async goOffline() {
+      return driverProfileSchema.parse(await request('/driver/offline', { method: 'POST' }));
+    },
+    async reportLocation(fixes) {
+      return locationReportSchema.parse(
+        await request('/driver/location', {
+          method: 'POST',
+          body: { fixes: fixes.map(toPositionBody) },
+        }),
+      );
+    },
+    async driverAssignment() {
+      try {
+        return driverAssignmentSchema.parse(await request('/driver/assignment'));
+      } catch (error) {
+        // Holding nothing is the normal state of an idle driver, not a
+        // failure. Returning null keeps that out of the app's error path.
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+  };
+}
+
+function toPositionBody(position: PositionInput) {
+  return {
+    latitude: position.latitude,
+    longitude: position.longitude,
+    accuracy_m: position.accuracyM,
+    heading_deg: position.headingDeg,
+    speed_mps: position.speedMps,
+    job_id: position.jobId,
+    // The device's own clock. Document 048 is explicit that a fix is timed by
+    // when it was recorded, not by when the server happened to receive it.
+    recorded_at: (position.recordedAt ?? new Date()).toISOString(),
   };
 }
 

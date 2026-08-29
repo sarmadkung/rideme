@@ -17,6 +17,7 @@ import (
 	"reflect"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
 	"github.com/sarmadkung/rideme/services/api/pkg/events"
@@ -72,6 +73,12 @@ func Registry() *contract.Registry {
 	r.Struct("QuoteLine", pricing.Line{})
 	r.Struct("Quote", booking.QuoteResponse{})
 	r.Struct("CancelResult", booking.CancelResponse{})
+
+	// Driver surface.
+	r.Struct("DriverProfile", driver.DriverResponse{})
+	r.Struct("RejectedFix", driver.RejectedFix{})
+	r.Struct("LocationReport", driver.LocationResponse{})
+	r.Struct("DriverAssignment", driver.AssignmentResponse{})
 
 	return r
 }

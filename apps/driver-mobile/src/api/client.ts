@@ -1,8 +1,8 @@
 import { createApiClient, type ApiClient } from '@platform/api-client';
+import { secureTokenStorage } from '@platform/mobile';
 import * as Application from 'expo-application';
 import { Platform } from 'react-native';
 import { loadEnv } from '../env';
-import { secureTokenStorage } from '@platform/mobile';
 
 /**
  * The app's single API client.
@@ -24,10 +24,6 @@ export function getApiClient(options: ClientOptions): ApiClient {
     baseUrl: loadEnv(process.env as Record<string, string | undefined>).apiBaseUrl,
     storage: secureTokenStorage(),
     device: {
-      // Document 116 asks for device signals while warning against
-      // unnecessary fingerprinting. This is the installation id, the platform
-      // and the app version — enough to spot a new device, not enough to
-      // track anyone.
       id: Application.getAndroidId?.() ?? undefined,
       platform: Platform.OS,
       os: String(Platform.Version),

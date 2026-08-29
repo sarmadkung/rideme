@@ -101,7 +101,12 @@ type StopResponse struct {
 	Address   string  `json:"address,omitempty"`
 }
 
-func toJobResponse(j jobs.Job) JobResponse {
+// ToJobResponse renders a job for the wire.
+//
+// Exported because the driver surface returns the same job a customer sees.
+// Two renderings of one entity drift, and the difference shows up as a client
+// that works for one app and not the other.
+func ToJobResponse(j jobs.Job) JobResponse {
 	stops := make([]StopResponse, 0, len(j.Stops))
 	for _, s := range j.Stops {
 		stops = append(stops, StopResponse{
@@ -200,7 +205,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, r, http.StatusCreated, toJobResponse(job))
+	httpx.WriteJSON(w, r, http.StatusCreated, ToJobResponse(job))
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +232,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]JobResponse, 0, len(found))
 	for _, job := range found {
-		items = append(items, toJobResponse(job))
+		items = append(items, ToJobResponse(job))
 	}
 	page := httpx.PageInfo{Limit: limit}
 	if len(found) == limit && limit > 0 {
@@ -252,7 +257,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	httpx.WriteJSON(w, r, http.StatusOK, toJobResponse(job))
+	httpx.WriteJSON(w, r, http.StatusOK, ToJobResponse(job))
 }
 
 func (h *Handler) driverHoldsJob(r *http.Request, principal identity.Principal, job jobs.Job) bool {
@@ -277,7 +282,7 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, CancelResponse{
-		Job:              toJobResponse(job),
+		Job:              ToJobResponse(job),
 		CancellationTier: string(cancellation.Tier),
 		Fee:              cancellation.Fee,
 	})
@@ -317,7 +322,7 @@ func (h *Handler) driverCommand(cmd Command) http.HandlerFunc {
 				httpx.WriteError(w, r, err)
 				return
 			}
-			httpx.WriteJSON(w, r, http.StatusOK, toJobResponse(job))
+			httpx.WriteJSON(w, r, http.StatusOK, ToJobResponse(job))
 		}
 	}
 }
