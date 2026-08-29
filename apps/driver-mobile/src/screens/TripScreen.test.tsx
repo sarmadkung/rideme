@@ -55,22 +55,28 @@ function shift(status: string, overrides: Partial<ShiftState> = {}): ShiftState 
 }
 
 describe('TripScreen', () => {
-  it('offers exactly one command, the one the trip is up to', () => {
+  it.each([
+    ['ACCEPTED', /arrived/i],
+    ['ARRIVING', /arrived/i],
+    ['AT_PICKUP', /start trip/i],
+    ['IN_PROGRESS', /complete trip/i],
+  ])('offers exactly the command %s is up to', (status, label) => {
     // Showing every command at once would let a driver complete a trip they
     // never started.
-    render(<TripScreen shift={shift('ACCEPTED')} />);
-    expect(screen.getByTestId('trip-advance')).toHaveTextContent(/arrived/i);
-
-    render(<TripScreen shift={shift('AT_PICKUP')} />);
-    expect(screen.getAllByTestId('trip-advance')[1]).toHaveTextContent(/start trip/i);
+    const view = render(<TripScreen shift={shift(status)} />);
+    expect(view.getByTestId('trip-advance')).toHaveTextContent(label);
+    view.unmount();
   });
 
-  it('points at the pickup before it, and the destination after', () => {
-    render(<TripScreen shift={shift('ACCEPTED')} />);
-    expect(screen.getByTestId('trip-heading')).toHaveTextContent(/Liberty Market/);
-
-    render(<TripScreen shift={shift('IN_PROGRESS')} />);
-    expect(screen.getAllByTestId('trip-heading')[1]).toHaveTextContent(/Anarkali Bazaar/);
+  it.each([
+    ['ACCEPTED', /Liberty Market/],
+    ['AT_PICKUP', /Liberty Market/],
+    ['IN_PROGRESS', /Anarkali Bazaar/],
+    ['AT_DROPOFF', /Anarkali Bazaar/],
+  ])('points %s at the stop the driver is heading for', (status, expected) => {
+    const view = render(<TripScreen shift={shift(status)} />);
+    expect(view.getByTestId('trip-heading')).toHaveTextContent(expected);
+    view.unmount();
   });
 
   it('sends the command', () => {

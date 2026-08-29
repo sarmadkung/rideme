@@ -109,6 +109,9 @@ importers:
       '@platform/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@platform/mobile':
+        specifier: workspace:*
+        version: link:../../packages/mobile
       '@platform/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -124,9 +127,6 @@ importers:
       expo-application:
         specifier: ~7.0.7
         version: 7.0.8(expo@57.0.17)
-      expo-secure-store:
-        specifier: ~15.0.7
-        version: 15.0.8(expo@57.0.17)
       expo-status-bar:
         specifier: ~57.0.1
         version: 57.0.1(expo@57.0.17)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
@@ -170,18 +170,33 @@ importers:
 
   apps/driver-mobile:
     dependencies:
+      '@platform/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@platform/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@platform/mobile':
+        specifier: workspace:*
+        version: link:../../packages/mobile
       '@platform/types':
         specifier: workspace:*
         version: link:../../packages/types
       '@platform/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@platform/validation':
+        specifier: workspace:*
+        version: link:../../packages/validation
       expo:
         specifier: ~57.0.17
         version: 57.0.17(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(react-dom@19.2.3(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7)(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
+      expo-application:
+        specifier: ~7.0.7
+        version: 7.0.8(expo@57.0.17)
+      expo-secure-store:
+        specifier: ~15.0.7
+        version: 15.0.8(expo@57.0.17)
       expo-status-bar:
         specifier: ~57.0.1
         version: 57.0.1(expo@57.0.17)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
@@ -191,6 +206,9 @@ importers:
       react-native:
         specifier: 0.86.3
         version: 0.86.3(@babel/core@7.29.7)(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@types/react@19.2.18)(react@19.2.3)
+      zod:
+        specifier: ^4.1.13
+        version: 4.4.3
     devDependencies:
       '@eslint/js':
         specifier: ^9.39.0
@@ -302,6 +320,34 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jsdom@27.4.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0)
+
+  packages/mobile:
+    dependencies:
+      '@platform/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+      expo-secure-store:
+        specifier: ~15.0.7
+        version: 15.0.8(expo@57.0.17)
+    devDependencies:
+      '@eslint/js':
+        specifier: ^9.39.0
+        version: 9.39.5
+      '@types/react':
+        specifier: ~19.2.2
+        version: 19.2.18
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5
+      react:
+        specifier: 19.2.3
+        version: 19.2.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.46.0
+        version: 8.68.0(eslint@9.39.5)(typescript@5.9.3)
 
   packages/types:
     devDependencies:

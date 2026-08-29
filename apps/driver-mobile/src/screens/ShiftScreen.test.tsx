@@ -33,16 +33,22 @@ function shift(driver: DriverProfile | null): ShiftState & ShiftActions {
 }
 
 describe('ShiftScreen', () => {
-  it('goes online and offline', () => {
-    const offline = shift(aDriver({ status: 'OFFLINE' }));
-    render(<ShiftScreen shift={offline} position={HERE} />);
-    fireEvent.press(screen.getByTestId('shift-toggle'));
-    expect(offline.goOnline).toHaveBeenCalledWith(HERE);
+  it('goes online from offline', () => {
+    const state = shift(aDriver({ status: 'OFFLINE' }));
+    const view = render(<ShiftScreen shift={state} position={HERE} />);
 
-    const online = shift(aDriver({ status: 'AVAILABLE' }));
-    render(<ShiftScreen shift={online} position={HERE} />);
-    fireEvent.press(screen.getAllByTestId('shift-toggle')[1]!);
-    expect(online.goOffline).toHaveBeenCalled();
+    fireEvent.press(view.getByTestId('shift-toggle'));
+    expect(state.goOnline).toHaveBeenCalledWith(HERE);
+    view.unmount();
+  });
+
+  it('goes offline from online', () => {
+    const state = shift(aDriver({ status: 'AVAILABLE' }));
+    const view = render(<ShiftScreen shift={state} position={HERE} />);
+
+    fireEvent.press(view.getByTestId('shift-toggle'));
+    expect(state.goOffline).toHaveBeenCalled();
+    view.unmount();
   });
 
   it('says why a driver cannot go online rather than doing nothing', () => {
