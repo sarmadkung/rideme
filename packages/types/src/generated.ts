@@ -111,3 +111,29 @@ export interface CancelResult {
   cancellation_tier: string;
   fee: Money;
 }
+
+export interface DriverProfile {
+  id: string;
+  status: string;
+  active_vehicle_id?: string | undefined;
+  verification_status: string;
+}
+
+export interface RejectedFix {
+  recorded_at: string;
+  reason: string;
+  detail?: string | undefined;
+}
+
+export interface LocationReport {
+  accepted: number;
+  rejected: RejectedFix[];
+}
+
+export interface DriverAssignment {
+  id: string;
+  status: string;
+  offered_at: string;
+  expires_at?: string | undefined;
+  job: Job;
+}

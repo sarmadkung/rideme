@@ -850,3 +850,57 @@ now decodes a real response with `DisallowUnknownFields`.
 defaulted: tariffs are per city and the platform ships none, so inventing one
 would ask the server for a fare in a market nobody configured. Unset, quoting
 fails with the server's own "not available here yet".
+
+
+---
+
+## Phase 12 — Driver Trip Flow · 2026-08-29
+
+The other half of the loop. Without it nothing can accept a ride, so the
+customer flow could not complete end to end.
+
+### The gap this closed
+
+A driver could be *offered* a job and had no way to learn about one. Every
+piece of domain logic existed and was tested — availability is a state machine
+in `providers`, location validation is in `tracking`, the trip commands are in
+`booking` — but no endpoint exposed any of it.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /driver/me` | the driver's own record |
+| `POST /driver/online` | join dispatch, with a position |
+| `POST /driver/offline` | leave dispatch |
+| `POST /driver/location` | report a batch of fixes |
+| `GET /driver/assignment` | the offer or trip being held |
+
+| Task | Status | Tests | Evidence |
+|---|---|---|---|
+| Going online joins the dispatch pool | VERIFIED | 3 | status **and** geo pool, or neither — a failed pool write rolls the status back |
+| Going online requires a vehicle and a position | VERIFIED | 2 | dispatch matches on vehicle capability; "online" with no location is not a usable state |
+| Going offline withdraws from dispatch | VERIFIED | 1 | pool first, then status — a stale label beats a driver still receiving offers |
+| Batched location reports | VERIFIED | 2 | one bad fix does not cost the batch, and a rejected fix never becomes the next baseline |
+| Current assignment | VERIFIED | 2 | idle is not an error; the offer carries the server's expiry |
+| Shift state as a shared hook | VERIFIED | 9 | mirrors the server rather than tracking a parallel copy |
+| Offer countdown from server expiry | VERIFIED | 2 | a local TTL would let a driver accept an offer that has already gone |
+| One command at a time (doc 035) | VERIFIED | 6 | ACCEPTED → arrive → start → complete, never skipping |
+| Blocked-driver explanations | VERIFIED | 3 | verification, vehicle and location each named specifically |
+
+### Shared mobile package
+
+`useAuth` and the Keychain-backed token storage moved to `@platform/mobile`
+rather than being copied into the second app. Document 048 forbids duplicating
+business logic per platform, and an auth flow copied into two apps differs in
+exactly the ways nobody tests. Screens stay in the apps; only what is
+genuinely identical is shared.
+
+### Known gap
+
+**`expo-location` is not wired up.** Going online reports a fixed coordinate.
+A driver going online from the wrong place would be offered jobs across the
+city, so this must be replaced before the app is put in front of anyone. It is
+marked in the source at `apps/driver-mobile/App.tsx`.
+
+Also absent, and deliberately: no map, no navigation hand-off, no push
+notification for an offer (the app polls while online and stops when offline),
+no earnings screen.

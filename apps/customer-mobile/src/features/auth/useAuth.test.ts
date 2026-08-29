@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { ApiError } from '@platform/api-client';
-import { messageFor, useAuth } from './useAuth';
+import { messageFor, useAuth } from '@platform/mobile';
 
 function stubClient(overrides: Partial<Record<string, unknown>> = {}) {
   return {

@@ -4,7 +4,7 @@ import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { tokens } from '@platform/ui';
 import { loadEnvOrNull } from './src/env';
 import { getApiClient } from './src/api/client';
-import { useAuth } from './src/features/auth/useAuth';
+import { useAuth } from '@platform/mobile';
 import { useBooking } from './src/features/booking/useBooking';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { BookingScreen } from './src/screens/BookingScreen';

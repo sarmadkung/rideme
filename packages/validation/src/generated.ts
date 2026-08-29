@@ -107,3 +107,29 @@ export const cancelResultSchema = z.object({
   cancellation_tier: z.string(),
   fee: moneySchema,
 });
+
+export const driverProfileSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  active_vehicle_id: z.string().optional(),
+  verification_status: z.string(),
+});
+
+export const rejectedFixSchema = z.object({
+  recorded_at: z.string().datetime({ offset: true }),
+  reason: z.string(),
+  detail: z.string().optional(),
+});
+
+export const locationReportSchema = z.object({
+  accepted: z.number().int(),
+  rejected: z.array(rejectedFixSchema),
+});
+
+export const driverAssignmentSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  offered_at: z.string().datetime({ offset: true }),
+  expires_at: z.string().datetime({ offset: true }).optional(),
+  job: jobSchema,
+});

@@ -19,6 +19,7 @@ import (
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
+	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
@@ -26,6 +27,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/internal/settings"
 	"github.com/sarmadkung/rideme/services/api/internal/sweeper"
+	"github.com/sarmadkung/rideme/services/api/internal/tracking"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/cache"
 	"github.com/sarmadkung/rideme/services/api/pkg/config"
@@ -159,12 +161,20 @@ func run() error {
 		platformSettings,
 		nil,
 	)
-	bookingHandler := booking.NewHandler(bookingService, jobStore, providers.NewStore(pool.Pool))
+	providerStore := providers.NewStore(pool.Pool)
+	bookingHandler := booking.NewHandler(bookingService, jobStore, providerStore)
+
+	// The driver surface. Availability, position reporting and "what am I
+	// holding" — the three things a driver's phone needs that no endpoint
+	// offered before.
+	driverHandler := driver.NewHandler(driver.NewService(
+		providerStore, tracking.NewStore(pool.Pool, redis.Client), jobStore,
+		tracking.DefaultLimits(), nil))
 
 	server := &http.Server{
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
-			issuer, serviceName, version, logger),
+			driverHandler, issuer, serviceName, version, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
