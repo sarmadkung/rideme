@@ -982,3 +982,40 @@ justified until measurement says JavaScript-side delivery is the problem
 and are now recorded as **B-6 / BD-20** in `BLOCKED_TASKS.md`. The hook takes both as options and
 defaults to 25 m / 5 s — engineering defaults, marked as such, not a decision inferred from
 silence. Nothing state-dependent is built on them.
+
+## Place Search — 2026-09-08
+
+The customer app picked from five hard-coded Lahore landmarks. Booking anywhere else
+was impossible, and the screen said so in a comment. The server can now turn typed
+text into a place.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `Geocoder` is its own boundary (`105`, `346`) | VERIFIED | 13 | YES | routing.go always said "a provider that also geocodes implements Geocoder separately" — routing and geocoding are billed as different products and can come from different vendors |
+| `GET /api/v1/places` and `/places/reverse` (`014`) | VERIFIED | 10 | YES | authenticated: each call costs money |
+| **The key stays on the server** | VERIFIED | n/a | — | a client searching Google directly needs a key in its bundle, and a key in a bundle is a key anyone can spend |
+| The shared Google HTTP call | VERIFIED | 2 | YES | routing and geocoding share one `get`, so the "key never reaches an error" guarantee cannot drift between them; asserted separately for both |
+| **An outage is not an empty result** | VERIFIED | 2 | YES | 404 for no match, 503 for a broken provider. A customer shown "no results" for an outage retypes their address until they give up |
+| The provider's message is not shown | VERIFIED | 1 | YES | it can name a disabled API or a restricted key — an operator's problem, already logged |
+| Search is biased, not filtered | VERIFIED | 2 | YES | "Liberty" matches several Pakistani cities and a customer in Lahore means Lahore, but an airport across town stays findable |
+| Unroutable results are dropped | VERIFIED | 1 | YES | one would sit in the list looking selectable and fail at quote time |
+| Bounded query and result count | VERIFIED | 2 | YES | an unbounded string is a billed call somebody else sized |
+| Reverse keeps the point asked about | VERIFIED | 1 | YES | moving a pickup to the provider's snapped centroid is a worse answer than the one the customer gave |
+| No geocoder → the routes do not exist | VERIFIED | 1 | YES | an endpoint that always fails is worse than an absent one; a client can detect a 404 and fall back to its own list |
+
+**A defect found by running against the real API, not by reading documentation.** Reverse
+geocoding returned `G9C5+5F5` — a Plus Code. Google orders reverse results by specificity and
+for a point that is not on a building the most specific answer is a Plus Code: precise, correct
+and unusable on a screen where a customer is confirming a pickup. `preferNamedResult` now takes
+the first result that is not one, keeping the Plus Code only where it is the sole answer (a
+field, an unaddressed plot). Live re-check: `31.5204,74.3587` now resolves to
+"50-N Gurumangat Rd" instead.
+
+**Verification.** `go vet` and `go test ./...` clean. Live check against the real API resolved
+"Liberty Market", "Emporium Mall" and "Johar Town block G" to correct Lahore coordinates.
+
+**Not done.** No geocode caching — document 104 asks to "cache stable geocoding" and an address
+is genuinely stable, unlike traffic, so this is the clearest remaining saving. Text Search is
+used rather than Autocomplete: Autocomplete is the better as-you-type experience but returns
+identifiers without coordinates, so every selection costs a second Place Details call. No client
+UI yet — the customer app still shows the five landmarks.
