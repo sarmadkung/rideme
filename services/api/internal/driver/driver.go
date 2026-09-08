@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sarmadkung/rideme/services/api/internal/finance"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
@@ -28,8 +29,10 @@ type Service struct {
 	providers *providers.Store
 	tracking  *tracking.Store
 	jobs      *jobs.Store
-	limits    tracking.Limits
-	now       func() time.Time
+	// ledger is optional; see WithLedger.
+	ledger *finance.Store
+	limits tracking.Limits
+	now    func() time.Time
 }
 
 func NewService(providerStore *providers.Store, trackingStore *tracking.Store,
@@ -42,6 +45,68 @@ func NewService(providerStore *providers.Store, trackingStore *tracking.Store,
 	}
 	return &Service{providers: providerStore, tracking: trackingStore,
 		jobs: jobStore, limits: limits, now: now}
+}
+
+// WithLedger attaches the ledger the earnings surface reads.
+//
+// Optional, and nil is a legitimate state: without it the earnings route
+// refuses rather than the process failing to start. A driver who cannot see a
+// total is a worse experience than one who can; a platform that will not boot
+// is a worse outage than either.
+func (s *Service) WithLedger(ledger *finance.Store) *Service {
+	s.ledger = ledger
+	return s
+}
+
+// ErrNoLedger reports earnings being asked for with no ledger configured.
+var ErrNoLedger = errors.New("driver: no ledger is configured")
+
+// EarningsWindow is how far back the earnings surface looks.
+//
+// A driver checks today and this week. Anything longer is a statement, which
+// is a different screen with different pagination.
+const EarningsWindow = 7 * 24 * time.Hour
+
+// Earnings is what the driver has made, and the trips behind it.
+type Earnings struct {
+	Today finance.Earnings      `json:"today"`
+	Week  finance.Earnings      `json:"week"`
+	Trips []finance.TripEarning `json:"trips"`
+}
+
+// EarningsFor reads a driver's earnings straight from the ledger.
+//
+// Not from a cached total: a second record of what a driver earned is a second
+// record that can disagree with the books, and the one that disagrees is
+// always the one the driver is looking at.
+func (s *Service) EarningsFor(ctx context.Context, userID string) (Earnings, error) {
+	if s.ledger == nil {
+		return Earnings{}, ErrNoLedger
+	}
+	d, err := s.Me(ctx, userID)
+	if err != nil {
+		return Earnings{}, err
+	}
+
+	now := s.now()
+	// The driver's day, not UTC's. A shift that ends at 2am belongs to the day
+	// it started, and a total that resets under a driver mid-shift is a
+	// support ticket.
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	today, err := s.ledger.EarningsBetween(ctx, d.ID, startOfDay, now)
+	if err != nil {
+		return Earnings{}, err
+	}
+	week, err := s.ledger.EarningsBetween(ctx, d.ID, now.Add(-EarningsWindow), now)
+	if err != nil {
+		return Earnings{}, err
+	}
+	trips, err := s.ledger.TripEarningsSince(ctx, d.ID, now.Add(-EarningsWindow), finance.MaxTripEarnings)
+	if err != nil {
+		return Earnings{}, err
+	}
+	return Earnings{Today: today, Week: week, Trips: trips}, nil
 }
 
 var (

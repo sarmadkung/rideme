@@ -11,6 +11,7 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { ShiftScreen } from './src/screens/ShiftScreen';
 import { OfferScreen } from './src/screens/OfferScreen';
 import { TripScreen } from './src/screens/TripScreen';
+import { EarningsScreen } from './src/screens/EarningsScreen';
 
 const env = loadEnvOrNull(process.env as Record<string, string | undefined>);
 
@@ -36,6 +37,7 @@ function Shell() {
   const shift = useShift(client);
   const signedIn = auth.stage === 'authenticated' && !sessionLost;
   const location = useLocation();
+  const [showEarnings, setShowEarnings] = useState(false);
 
   // Load the driver's real state as soon as they are signed in. Without this
   // the app would show "offline" to a driver who is mid-trip — the server
@@ -66,12 +68,18 @@ function Shell() {
 
   return (
     <SafeAreaView style={styles.safe} testID="app-root">
-      {isOffer(shift.assignment) ? (
+      {showEarnings && shift.assignment === null ? (
+        <EarningsScreen client={client} onBack={() => setShowEarnings(false)} />
+      ) : isOffer(shift.assignment) ? (
         <OfferScreen shift={shift} />
       ) : shift.assignment !== null ? (
         <TripScreen shift={shift} />
       ) : (
-        <ShiftScreen shift={shift} location={location} />
+        <ShiftScreen
+          shift={shift}
+          location={location}
+          onShowEarnings={() => setShowEarnings(true)}
+        />
       )}
       <StatusBar style="light" />
     </SafeAreaView>

@@ -49,9 +49,7 @@ export function TripScreen({ shift }: { shift: ShiftState & ShiftActions }) {
           {STAGE[job.status] ?? job.status}
         </Text>
         <Text style={styles.label}>
-          {job.status === 'IN_PROGRESS' || job.status === 'AT_DROPOFF'
-            ? 'Destination'
-            : 'Pickup'}
+          {job.status === 'IN_PROGRESS' || job.status === 'AT_DROPOFF' ? 'Destination' : 'Pickup'}
         </Text>
         <Text style={styles.value} testID="trip-heading">
           {describe(heading)}
@@ -110,7 +108,11 @@ const styles = StyleSheet.create({
   label: { color: tokens.color.textMuted, fontSize: tokens.fontSize.sm },
   value: { color: tokens.color.text, fontSize: tokens.fontSize.md, marginTop: tokens.space.xs },
   detail: { color: tokens.color.textMuted, fontSize: tokens.fontSize.md, textAlign: 'center' },
-  error: { color: tokens.color.danger, fontSize: tokens.fontSize.sm, marginBottom: tokens.space.md },
+  error: {
+    color: tokens.color.danger,
+    fontSize: tokens.fontSize.sm,
+    marginBottom: tokens.space.md,
+  },
   button: {
     backgroundColor: tokens.color.accent,
     borderRadius: tokens.radius.md,

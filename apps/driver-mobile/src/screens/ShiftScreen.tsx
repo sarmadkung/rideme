@@ -14,9 +14,11 @@ import type { LocationActions, LocationState } from '../features/location/useLoc
 export function ShiftScreen({
   shift,
   location,
+  onShowEarnings,
 }: {
   shift: ShiftState & ShiftActions;
   location: LocationState & LocationActions;
+  onShowEarnings(): void;
 }) {
   const driver = shift.driver;
   const online = isOnline(driver);
@@ -56,6 +58,10 @@ export function ShiftScreen({
           <Text style={styles.retry}>Check again</Text>
         </Pressable>
       )}
+
+      <Pressable testID="show-earnings" onPress={onShowEarnings}>
+        <Text style={styles.earningsLink}>See earnings</Text>
+      </Pressable>
 
       {shift.error !== null && (
         <Text style={styles.error} testID="shift-error">
@@ -114,6 +120,12 @@ const styles = StyleSheet.create({
   error: {
     color: tokens.color.danger,
     fontSize: tokens.fontSize.sm,
+    marginBottom: tokens.space.md,
+  },
+  earningsLink: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.md,
+    fontWeight: '600',
     marginBottom: tokens.space.md,
   },
   retry: {

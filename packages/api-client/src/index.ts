@@ -17,6 +17,7 @@ import type {
   HealthResponse,
   Job,
   LocationReport,
+  Money,
   Quote,
 } from '@platform/types';
 import {
@@ -27,6 +28,7 @@ import {
   healthResponseSchema,
   jobSchema,
   locationReportSchema,
+  moneySchema,
   quoteSchema,
 } from '@platform/validation';
 
@@ -133,6 +135,28 @@ export interface ApiClient {
   reportLocation(fixes: PositionInput[]): Promise<LocationReport>;
   /** The offer or trip the driver is holding, or null when they hold nothing. */
   driverAssignment(): Promise<DriverAssignment | null>;
+
+  /** What the driver has made today and this week, and the trips behind it. */
+  driverEarnings(): Promise<DriverEarnings>;
+}
+
+/** A total for a period, read from the ledger rather than a counter beside it. */
+export interface EarningsTotal {
+  /** What the driver keeps: gross less the platform's commission. */
+  net: Money;
+  trips: number;
+}
+
+export interface TripEarning {
+  jobId: string;
+  amount: Money;
+  at: Date;
+}
+
+export interface DriverEarnings {
+  today: EarningsTotal;
+  week: EarningsTotal;
+  trips: TripEarning[];
 }
 
 /** One position report. Timestamped by the device, not the server. */
@@ -452,6 +476,18 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         }),
       );
     },
+    async driverEarnings() {
+      const body = (await request('/driver/earnings')) as {
+        today: Record<string, unknown>;
+        week: Record<string, unknown>;
+        trips?: Array<Record<string, unknown>>;
+      };
+      return {
+        today: toEarningsTotal(body.today),
+        week: toEarningsTotal(body.week),
+        trips: (body.trips ?? []).map(toTripEarning),
+      };
+    },
     async driverAssignment() {
       try {
         return driverAssignmentSchema.parse(await request('/driver/assignment'));
@@ -462,6 +498,21 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         throw error;
       }
     },
+  };
+}
+
+function toEarningsTotal(raw: Record<string, unknown>): EarningsTotal {
+  return {
+    net: moneySchema.parse(raw['net']),
+    trips: Number(raw['trips'] ?? 0),
+  };
+}
+
+function toTripEarning(raw: Record<string, unknown>): TripEarning {
+  return {
+    jobId: String(raw['job_id'] ?? ''),
+    amount: moneySchema.parse(raw['amount']),
+    at: new Date(String(raw['at'])),
   };
 }
 
