@@ -5,7 +5,8 @@ import { tokens } from '@platform/ui';
 import { useAuth } from '@platform/mobile';
 import { loadEnvOrNull } from './src/env';
 import { getApiClient } from './src/api/client';
-import { useShift, isOffer } from './src/features/shift/useShift';
+import { useShift, isOffer, isOnline } from './src/features/shift/useShift';
+import { useLocation } from './src/features/location/useLocation';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ShiftScreen } from './src/screens/ShiftScreen';
 import { OfferScreen } from './src/screens/OfferScreen';
@@ -34,14 +35,25 @@ function Shell() {
   const auth = useAuth(client);
   const shift = useShift(client);
   const signedIn = auth.stage === 'authenticated' && !sessionLost;
+  const location = useLocation();
 
   // Load the driver's real state as soon as they are signed in. Without this
   // the app would show "offline" to a driver who is mid-trip — the server
   // knows, the app just never asked.
-  const { refresh } = shift;
+  const { refresh, report } = shift;
   useEffect(() => {
     if (signedIn) void refresh();
   }, [signedIn, refresh]);
+
+  // Report position while online, and only while online. Dispatch matches on
+  // where a driver is now, so a stale position is worse than none — but an
+  // off-duty driver's whereabouts are nobody's business (document 102).
+  const position = location.position;
+  const online = isOnline(shift.driver);
+  useEffect(() => {
+    if (!signedIn || !online || position === null) return;
+    void report(position);
+  }, [signedIn, online, position, report]);
 
   if (!signedIn) {
     return (
@@ -59,22 +71,12 @@ function Shell() {
       ) : shift.assignment !== null ? (
         <TripScreen shift={shift} />
       ) : (
-        <ShiftScreen shift={shift} position={DEFAULT_POSITION} />
+        <ShiftScreen shift={shift} location={location} />
       )}
       <StatusBar style="light" />
     </SafeAreaView>
   );
 }
-
-/**
- * Where the driver is, pending a real location source.
- *
- * `expo-location` is not wired up yet, so going online reports a fixed point.
- * This is the one honest placeholder in the flow and it is marked as such: a
- * driver going online from the wrong coordinates would be offered jobs across
- * the city, so this must be replaced before the app is put in front of anyone.
- */
-const DEFAULT_POSITION = { latitude: 31.5204, longitude: 74.3587 };
 
 function NotConfigured() {
   return (

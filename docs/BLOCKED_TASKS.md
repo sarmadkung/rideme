@@ -203,3 +203,42 @@ expires searches whose worker died. Verified: `TestAJobThatFindsNobodyExpiresWit
 `TestNothingIsChargedForAJobThatFoundNoDriver`, `TestTheSweepExpiresOnlyJobsPastTheirDeadline`.
 
 **Status:** **CLOSED — RESOLVED 2026-08-28.** Blocks nothing.
+
+---
+
+## B-6 — BD-20: how often a driver's phone should report its position
+
+**Task:** Foreground location tracking in the driver app (`apps/driver-mobile`, Phase 12).
+
+**Reason:** The mechanism is built and shipping; the *values* it runs at are a product decision
+nobody has made. `mobile-location` names this explicitly as a blocking condition: "Required
+tracking frequency per job state is undocumented → it is a battery-versus-accuracy product
+decision." Documents 99 and 239 own the topic and both are boilerplate — neither states an
+interval, an accuracy target, or how either should differ by job state.
+
+The trade-off is real in both directions. Report too rarely and dispatch matches a driver to a
+pickup they have already driven past, and the customer watches a marker that lags the car.
+Report too often and the battery is gone before the shift is, which on the low-end Android
+hardware this platform targets is a driver who stops working for the platform.
+
+**Relevant documents:** `99-react-native-native-location-strategy.md`,
+`239-driver-mobile-location-and-background.md`, `182-mobile-performance-and-battery.md`,
+`18-realtime-location-architecture.md`
+
+**Decision required:** The reporting interval and distance threshold per driver state — idle and
+online, holding an offer, en route to pickup, and on a trip. Four numbers, or a statement that
+one set covers all four.
+
+**What ships in the meantime:** `useLocation` takes `distanceIntervalM` and `timeIntervalMs` as
+options and defaults to 25 m / 5 s for every state. These are engineering defaults chosen to be
+unsurprising, not measurements, and they are marked as such in the source — the same treatment
+`StraightLineProvider.SpeedsKPH` gets. Nothing infers a decision from them: they are one
+argument away from being replaced, and no state-dependent behaviour is built on them.
+
+**Recommendation:** Do not decide this from a desk. It wants measurement on the real low-end
+Android device BD-19 also blocks on: run a shift at a few candidate intervals, measure battery
+against how stale dispatch's view of the driver gets. Until that device exists, 25 m / 5 s while
+online is a defensible default and costs nothing to change.
+
+**Status:** **OPEN.** Blocks nothing — foreground tracking ships on the defaults above.
+Background tracking is a separate slice and is not blocked by this.
