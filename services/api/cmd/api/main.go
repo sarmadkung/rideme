@@ -146,9 +146,13 @@ func run() error {
 		identity.Options{},
 	)
 
-	// Booking, pricing and routing. The routing service has one provider today
-	// — a straight-line estimator that labels every result as estimated — so a
-	// fare built on a guess is never presented as a measured one.
+	// Booking, pricing and routing. The straight-line estimator is always the
+	// last resort, so a fare built on a guess is never presented as a measured
+	// one; a configured provider simply moves most routes off the guess.
+	routingProviders, err := buildRoutingProviders(cfg, logger)
+	if err != nil {
+		return err
+	}
 	jobStore := jobs.NewStore(pool.Pool)
 	bookingStore := booking.NewStore(pool.Pool)
 	// The values the owner decided (BD-01, BD-02, BD-04, BD-11, BD-12) are
@@ -157,7 +161,7 @@ func run() error {
 	bookingService := booking.NewService(
 		jobStore, bookingStore,
 		pricing.NewEngine(nil),
-		routing.NewService(),
+		routing.NewService(routingProviders...),
 		platformSettings,
 		nil,
 	)
@@ -219,4 +223,26 @@ func run() error {
 	}
 	logger.Info("stopped cleanly")
 	return nil
+}
+
+// buildRoutingProviders turns MAP_PROVIDER into the provider chain.
+//
+// An empty chain is legitimate: routing.Service falls back to its straight-line
+// estimator and marks every result estimated, which is what a platform without
+// a maps contract should show. Config has already refused a selected provider
+// with no credential, so a failure here is a real one.
+func buildRoutingProviders(cfg *config.Config, logger *slog.Logger) ([]routing.Provider, error) {
+	switch cfg.MapProvider {
+	case "google":
+		provider, err := routing.NewGoogleProvider(cfg.MapsAPIKey, routing.WithGoogleLogger(logger))
+		if err != nil {
+			return nil, fmt.Errorf("routing provider: %w", err)
+		}
+		logger.Info("routing provider configured", "provider", provider.Name())
+		return []routing.Provider{provider}, nil
+	default:
+		logger.Warn("no routing provider configured; distances are straight-line estimates",
+			"map_provider", cfg.MapProvider)
+		return nil, nil
+	}
 }

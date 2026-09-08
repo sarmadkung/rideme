@@ -83,3 +83,39 @@ func TestProductionRejectsThePlaceholderSecret(t *testing.T) {
 		t.Fatal("production must not start with the development placeholder secret")
 	}
 }
+
+func TestSelectingAMapProviderRequiresItsCredential(t *testing.T) {
+	// Starting with MAP_PROVIDER=google and no key would send every route to
+	// the straight-line fallback — the precise outcome setting the variable
+	// was meant to end, and silently.
+	_, err := Load(env(map[string]string{"MAP_PROVIDER": "google"}))
+	if err == nil {
+		t.Fatal("google was accepted with no MAPS_API_KEY")
+	}
+	if !strings.Contains(err.Error(), "MAPS_API_KEY") {
+		t.Errorf("err = %v, want the missing variable named", err)
+	}
+
+	cfg, err := Load(env(map[string]string{
+		"MAP_PROVIDER": "google",
+		"MAPS_API_KEY": "a-key",
+	}))
+	if err != nil {
+		t.Fatalf("google with a key was rejected: %v", err)
+	}
+	if cfg.MapsAPIKey != "a-key" {
+		t.Errorf("MapsAPIKey = %q, want a-key", cfg.MapsAPIKey)
+	}
+}
+
+func TestAnUnknownMapProviderIsRejected(t *testing.T) {
+	// A typo must not fall through to the estimator as though nothing was
+	// asked for.
+	_, err := Load(env(map[string]string{"MAP_PROVIDER": "gooogle"}))
+	if err == nil {
+		t.Fatal("an unknown MAP_PROVIDER was accepted")
+	}
+	if !strings.Contains(err.Error(), "gooogle") {
+		t.Errorf("err = %v, want the offending value quoted", err)
+	}
+}
