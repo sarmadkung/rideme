@@ -1,6 +1,7 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { tokens } from '@platform/ui';
 import { isOnline, type ShiftActions, type ShiftState } from '../features/shift/useShift';
+import type { LocationActions, LocationState } from '../features/location/useLocation';
 
 /**
  * The idle screen: on or off duty, and why the driver might not be able to
@@ -12,21 +13,25 @@ import { isOnline, type ShiftActions, type ShiftState } from '../features/shift/
  */
 export function ShiftScreen({
   shift,
-  position,
+  location,
 }: {
   shift: ShiftState & ShiftActions;
-  position: { latitude: number; longitude: number } | null;
+  location: LocationState & LocationActions;
 }) {
   const driver = shift.driver;
   const online = isOnline(driver);
   const approved = driver?.verification_status === 'APPROVED';
   const hasVehicle = Boolean(driver?.active_vehicle_id);
+  const position = location.position;
+  // The location message is the hook's, not this screen's: refused, switched
+  // off and simply not ready yet need different actions from the driver, and
+  // one sentence covering all three sends most of them to the wrong setting.
   const blocker = !approved
     ? 'Your account is still being verified. You can go online once it is approved.'
     : !hasVehicle
       ? 'Select an active vehicle before going online.'
       : position === null
-        ? 'Waiting for your location.'
+        ? location.message
         : null;
 
   return (
@@ -44,6 +49,12 @@ export function ShiftScreen({
         <Text style={styles.blocker} testID="shift-blocker">
           {blocker}
         </Text>
+      )}
+
+      {!online && position === null && location.stage !== 'starting' && (
+        <Pressable testID="location-retry" onPress={location.retry}>
+          <Text style={styles.retry}>Check again</Text>
+        </Pressable>
       )}
 
       {shift.error !== null && (
@@ -90,13 +101,27 @@ const styles = StyleSheet.create({
     marginBottom: tokens.space.md,
   },
   status: { color: tokens.color.text, fontSize: tokens.fontSize.lg, fontWeight: '600' },
-  detail: { color: tokens.color.textMuted, fontSize: tokens.fontSize.md, marginTop: tokens.space.xs },
+  detail: {
+    color: tokens.color.textMuted,
+    fontSize: tokens.fontSize.md,
+    marginTop: tokens.space.xs,
+  },
   blocker: {
     color: tokens.color.warning,
     fontSize: tokens.fontSize.sm,
     marginBottom: tokens.space.md,
   },
-  error: { color: tokens.color.danger, fontSize: tokens.fontSize.sm, marginBottom: tokens.space.md },
+  error: {
+    color: tokens.color.danger,
+    fontSize: tokens.fontSize.sm,
+    marginBottom: tokens.space.md,
+  },
+  retry: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.sm,
+    fontWeight: '600',
+    marginBottom: tokens.space.md,
+  },
   onlineButton: {
     backgroundColor: tokens.color.success,
     borderRadius: tokens.radius.md,

@@ -2,8 +2,22 @@ import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { DriverProfile } from '@platform/types';
 import { ShiftScreen } from './ShiftScreen';
 import type { ShiftActions, ShiftState } from '../features/shift/useShift';
+import type { LocationActions, LocationState } from '../features/location/useLocation';
 
 const HERE = { latitude: 31.5204, longitude: 74.3587 };
+
+/** A hook that has a fix. */
+function located(): LocationState & LocationActions {
+  return { position: HERE, stage: 'tracking', message: null, retry: jest.fn() };
+}
+
+/** A hook that has none, for the reason given. */
+function unlocated(
+  stage: LocationState['stage'],
+  message: string,
+): LocationState & LocationActions {
+  return { position: null, stage, message, retry: jest.fn() };
+}
 
 function aDriver(overrides: Partial<DriverProfile> = {}): DriverProfile {
   return {
@@ -35,7 +49,7 @@ function shift(driver: DriverProfile | null): ShiftState & ShiftActions {
 describe('ShiftScreen', () => {
   it('goes online from offline', () => {
     const state = shift(aDriver({ status: 'OFFLINE' }));
-    const view = render(<ShiftScreen shift={state} position={HERE} />);
+    const view = render(<ShiftScreen shift={state} location={located()} />);
 
     fireEvent.press(view.getByTestId('shift-toggle'));
     expect(state.goOnline).toHaveBeenCalledWith(HERE);
@@ -44,7 +58,7 @@ describe('ShiftScreen', () => {
 
   it('goes offline from online', () => {
     const state = shift(aDriver({ status: 'AVAILABLE' }));
-    const view = render(<ShiftScreen shift={state} position={HERE} />);
+    const view = render(<ShiftScreen shift={state} location={located()} />);
 
     fireEvent.press(view.getByTestId('shift-toggle'));
     expect(state.goOffline).toHaveBeenCalled();
@@ -54,7 +68,7 @@ describe('ShiftScreen', () => {
   it('says why a driver cannot go online rather than doing nothing', () => {
     // "Go online" that silently fails is the worst version of this screen.
     const unverified = shift(aDriver({ verification_status: 'UNDER_REVIEW' }));
-    render(<ShiftScreen shift={unverified} position={HERE} />);
+    render(<ShiftScreen shift={unverified} location={located()} />);
     expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/being verified/i);
 
     fireEvent.press(screen.getByTestId('shift-toggle'));
@@ -65,16 +79,45 @@ describe('ShiftScreen', () => {
     // Dispatch matches jobs to vehicle capabilities, so a driver with none is
     // never offered anything and would sit online wondering why.
     const state = shift(aDriver({ active_vehicle_id: undefined }));
-    render(<ShiftScreen shift={state} position={HERE} />);
+    render(<ShiftScreen shift={state} location={located()} />);
     expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/active vehicle/i);
   });
 
   it('waits for a location before letting a driver go online', () => {
     const state = shift(aDriver());
-    render(<ShiftScreen shift={state} position={null} />);
+    render(
+      <ShiftScreen shift={state} location={unlocated('starting', 'Waiting for your location.')} />,
+    );
     expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/location/i);
 
     fireEvent.press(screen.getByTestId('shift-toggle'));
     expect(state.goOnline).not.toHaveBeenCalled();
+  });
+
+  it('passes the location hook s own reason through rather than flattening it', () => {
+    // Refused and switched-off need different actions from the driver. One
+    // sentence covering both sends half of them to the wrong setting.
+    const state = shift(aDriver());
+    render(<ShiftScreen shift={state} location={unlocated('denied', 'Enable it in Settings.')} />);
+    expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/Settings/);
+  });
+
+  it('offers a way back once a refusal is recoverable', () => {
+    // A driver who grants permission in Settings must not have to restart the
+    // app for it to be noticed.
+    const state = shift(aDriver());
+    const location = unlocated('denied', 'Enable it in Settings.');
+    render(<ShiftScreen shift={state} location={location} />);
+
+    fireEvent.press(screen.getByTestId('location-retry'));
+    expect(location.retry).toHaveBeenCalled();
+  });
+
+  it('does not offer a retry while the first fix is still coming', () => {
+    // Nothing has failed yet; a button implying otherwise invites a driver to
+    // fix something that is not broken.
+    const state = shift(aDriver());
+    render(<ShiftScreen shift={state} location={unlocated('starting', 'Waiting.')} />);
+    expect(screen.queryByTestId('location-retry')).toBeNull();
   });
 });

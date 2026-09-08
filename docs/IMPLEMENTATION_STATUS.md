@@ -590,9 +590,10 @@ Documents 17, 28, 48, 116, 179.
 | ADR-006 consequences handled | VERIFIED | n/a | mobile Jest maps `@platform/*` to source, so transitive deps and ESM `.js` specifiers both needed handling |
 
 **Not built.** Screens and navigation for booking, tracking, order history, notifications and
-profile. Driver onboarding, availability, offer acceptance, trip workflow, earnings. Background
-location and its native module. Offline mutation queue. Push registration. Performance budgets
-(BD-19 requires real-device measurement).
+profile. Driver onboarding, earnings. **Background** location and its native module. Offline
+mutation queue. Push registration. Performance budgets (BD-19 requires real-device measurement).
+
+Foreground location landed 2026-08-29 — see below.
 
 ## Phase 13 — Operational Dashboards · **PARTIAL**
 
@@ -902,6 +903,9 @@ A driver going online from the wrong place would be offered jobs across the
 city, so this must be replaced before the app is put in front of anyone. It is
 marked in the source at `apps/driver-mobile/App.tsx`.
 
+**Resolved 2026-08-29** — see "Driver Foreground Location" below. The fixed
+coordinate is gone.
+
 Also absent, and deliberately: no map, no navigation hand-off, no push
 notification for an offer (the app polls while online and stops when offline),
 no earnings screen.
@@ -946,3 +950,35 @@ profile is currently a distinction without a difference — Google appears not t
 it in this market. No caching (`101`, `104` both ask for it); every quote is a billed call.
 No geocoding or reverse geocoding. No on-screen map in any client — that is separate work
 and remains Phase 12's largest mobile gap.
+
+## Driver Foreground Location — 2026-08-29
+
+The driver shell reported a fixed point in Gulberg, Lahore, for every driver who went online.
+The placeholder was marked in the source as something that "must be replaced before the app is
+put in front of anyone". It is replaced.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `useLocation` wraps `expo-location` | VERIFIED | 11 | YES | permission, watch, teardown; `expo-location@57.0.16` |
+| Every fix carries the four fields (`048`) | VERIFIED | 1 | YES | timestamp, accuracy, heading, speed; timed by the device, not by arrival |
+| **Sentinels are omitted, not reported** | VERIFIED | 1 | YES | stationary Android hardware reports heading `-1`; sending it claims a direction that does not exist, so the field is absent instead |
+| **Refused ≠ switched off ≠ not ready** | VERIFIED | 3 | YES | three states, three messages, three different actions from the driver; one sentence for all three sends most of them to the wrong setting |
+| A refusal is recoverable | VERIFIED | 2 | YES | `retry()` and a "Check again" control; granting permission in Settings must not need an app restart |
+| The rougher of two fixes is discarded | VERIFIED | 1 | YES | beyond 100 m, the previous fix is kept — but a rough *first* fix is accepted, or a driver starting their shift indoors could never go online |
+| The GPS session is torn down | VERIFIED | 1 | YES | including the race where the permission dialog resolves after unmount |
+| Position reported only while online (`102`) | VERIFIED | n/a | — | an off-duty driver's whereabouts are nobody's business; the effect is gated on `isOnline` |
+| Native permission declarations | VERIFIED | n/a | YES | `NSLocationWhenInUseUsageDescription`, Android `ACCESS_*_LOCATION`, and the `expo-location` config plugin; background is explicitly **not** requested |
+
+**Verification.** 51 driver-app tests pass (37 before). `make verify` green.
+
+**Not done.** Background location — it needs a config plugin change, an Android foreground
+service, and measurement on real hardware; asking for the permission before the app uses it
+invites a store rejection, so it is not requested. No native filtering layer: `expo-location`'s
+own `distanceInterval` does the movement filtering, and document 99's native layer is not
+justified until measurement says JavaScript-side delivery is the problem
+(`native-module-boundary`).
+
+**Open decision.** The reporting interval and distance threshold per job state are undocumented
+and are now recorded as **B-6 / BD-20** in `BLOCKED_TASKS.md`. The hook takes both as options and
+defaults to 25 m / 5 s — engineering defaults, marked as such, not a decision inferred from
+silence. Nothing state-dependent is built on them.
