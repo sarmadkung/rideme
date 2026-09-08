@@ -11,3 +11,12 @@
  */
 export { useAuth, messageFor, type AuthActions, type AuthStage, type AuthState } from './useAuth.js';
 export { secureTokenStorage } from './tokenStorage.js';
+export {
+  MutationQueue,
+  DEFAULT_CAPACITY,
+  type FlushResult,
+  type QueueOptions,
+  type QueueStorage,
+  type QueuedMutation,
+  type Sender,
+} from './mutationQueue.js';
