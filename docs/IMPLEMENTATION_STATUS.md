@@ -274,7 +274,8 @@ Verified 2026-08-28. Documents 18, 47, 48, 95, 96, 98, 102, 103.
 | Task | Status | Tests | Verified | Notes |
 |------|--------|-------|----------|-------|
 | Migration `000005` | VERIFIED | n/a | YES | full chain down → up → down → up observed |
-| **CAP-2 boundary created (`095`)** | VERIFIED | 12 | YES | `route`/`Matrix`/`EstimateETA`, normalized response, one provider behind it |
+| **CAP-2 boundary created (`095`)** | VERIFIED | 12 | YES | `route`/`Matrix`/`EstimateETA`, normalized response, providers behind it |
+| **Google routing provider (`104`, `346`)** | VERIFIED | 11 | YES | Directions + Distance Matrix; live-checked against the real API — see 2026-08-29 below |
 | Routing modes by vehicle (`095`) | VERIFIED | 2 | YES | a truck does not get a car route |
 | Fallback never presented as exact (`096`) | VERIFIED | 3 | YES | every estimate is labelled `estimated`; a total provider outage still ranks candidates |
 | `Drivers × Pickup` matrix (`096`) | VERIFIED | 2 | YES | the reduction Phase 8's `eta_score` performs |
@@ -840,7 +841,7 @@ now decodes a real response with `DisallowUnknownFields`.
 
 | Not built | Why |
 |---|---|
-| Map selection | No map provider is integrated (CAP-2). Pickup and destination are chosen from named places rather than a pin. The flow behind the control is the real one. |
+| Map selection | No *on-screen* map is integrated. Server-side routing now uses Google (2026-08-29), so distances are real; pickup and destination are still chosen from named places rather than a pin. The flow behind the control is the real one. |
 | Navigation stack | The flow is linear with no back destination worth preserving. A navigator before a second flow is scaffolding without a user. |
 | Realtime tracking | The gateway exists; no client transport does. Polling every 5s, stopping at terminal states. |
 | Driver location on a map | Follows map selection. The job's assignment is shown, not its position. |
@@ -904,3 +905,44 @@ marked in the source at `apps/driver-mobile/App.tsx`.
 Also absent, and deliberately: no map, no navigation hand-off, no push
 notification for an offer (the app polls while online and stops when offline),
 no earnings screen.
+
+## Google Routing Provider — 2026-08-29
+
+The routing boundary built in Phase 6 had one provider behind it: a straight-line
+estimator labelling every result `estimated`. Every fare the platform quoted was
+therefore a great-circle distance multiplied by 1.3. A key now exists, so the
+boundary has a real provider and most routes are measured.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `GoogleProvider` implements `Provider` (`346`) | VERIFIED | 11 | YES | Directions for `Route`, Distance Matrix for `Matrix`; no new interface |
+| Live routes are labelled `live` (`096`) | VERIFIED | 1 | YES | and the estimator's are still `estimated`; the two remain distinguishable |
+| Traffic duration is real or absent | VERIFIED | 2 | YES | `duration_in_traffic` when present; zero rather than an echo of free-flow, which would claim a model the response never had |
+| **Truck routes are refused, not substituted (`095`)** | VERIFIED | 2 | YES | Google has no profile modelling axle weight or lane bans. The call is not made; `Service` falls back and the caller sees `estimated` |
+| In-body failures are failures | VERIFIED | 1 | YES | both endpoints answer HTTP 200 for `REQUEST_DENIED`; checking only the status code would price a trip off a fallback and never say so |
+| **The API key never reaches an error** | VERIFIED | 1 | YES | the key is a query parameter, so the request URL is a credential; `*url.Error` is unwrapped before it is logged |
+| Oversized matrices are refused (`104`) | VERIFIED | 1 | YES | 25×25 and 100 elements are Google's ceilings; splitting would multiply a billed call without the caller asking |
+| Per-cell failures do not discard the grid | VERIFIED | 1 | YES | one unreachable driver must not stop dispatch ranking everybody else |
+| Selecting a provider requires its credential | VERIFIED | 2 | YES | `MAP_PROVIDER=google` with no `MAPS_API_KEY` refuses to start, rather than falling back silently |
+| Observability (`104`) | PARTIAL | n/a | — | endpoint, latency and outcome are logged; there is no metrics system in the service yet, so success rate and fallback rate are not aggregated |
+
+**Verification.** `go test ./...` passes; `make api-lint` and `make contracts-check` clean.
+Unit tests use an `httptest` stub, so the suite makes no billed calls. A one-off live check
+against the real API confirmed the wiring end to end:
+
+```text
+driving      12.0 km   28 min  traffic=1769s  provider=google        confidence=live
+motorcycle   12.0 km   28 min  traffic=1769s  provider=google        confidence=live
+truck        11.2 km   44 min  traffic=0s     provider=straight-line confidence=estimated
+```
+
+Lahore Fort → Gulberg is 12.0 km by road against the estimator's 11.2 km — the guess was
+7% short, and it was 7% short in the customer's favour on this route and would be wrong in
+the other direction elsewhere. The truck row is the design working: it fell back rather than
+being handed a car's route.
+
+**Not done.** `two_wheeler` returns the same route as `driving` in Lahore, so the motorcycle
+profile is currently a distinction without a difference — Google appears not to differentiate
+it in this market. No caching (`101`, `104` both ask for it); every quote is a billed call.
+No geocoding or reverse geocoding. No on-screen map in any client — that is separate work
+and remains Phase 12's largest mobile gap.

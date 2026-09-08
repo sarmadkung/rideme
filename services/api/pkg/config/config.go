@@ -52,6 +52,9 @@ type Config struct {
 
 	OTPProvider string
 	MapProvider string
+	// MapsAPIKey authenticates the routing provider. Secret: it travels as a
+	// query parameter, so a request URL built from it is a credential.
+	MapsAPIKey string
 
 	ShutdownTimeout time.Duration
 	StartupTimeout  time.Duration
@@ -84,6 +87,7 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 		JWTSecret:       l.required("JWT_SECRET"),
 		OTPProvider:     l.optional("OTP_PROVIDER", "noop"),
 		MapProvider:     l.optional("MAP_PROVIDER", "noop"),
+		MapsAPIKey:      l.optional("MAPS_API_KEY", ""),
 		ShutdownTimeout: 15 * time.Second,
 		StartupTimeout:  10 * time.Second,
 	}
@@ -97,6 +101,20 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 	}
 	if cfg.Env.IsProduction() && strings.HasPrefix(cfg.JWTSecret, "dev-only") {
 		l.problem("JWT_SECRET still holds the development placeholder")
+	}
+
+	switch cfg.MapProvider {
+	case "noop":
+	case "google":
+		// Selecting a provider without the credential it needs would start the
+		// service in a state where every route silently falls back to a
+		// straight-line estimate, which is exactly the outcome MAP_PROVIDER was
+		// set to avoid.
+		if strings.TrimSpace(cfg.MapsAPIKey) == "" {
+			l.problem("MAP_PROVIDER is google but MAPS_API_KEY is empty")
+		}
+	default:
+		l.problem("MAP_PROVIDER must be noop or google (got %q)", cfg.MapProvider)
 	}
 
 	if len(l.problems) > 0 {
