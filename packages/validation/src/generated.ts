@@ -133,3 +133,34 @@ export const driverAssignmentSchema = z.object({
   expires_at: z.string().datetime({ offset: true }).optional(),
   job: jobSchema,
 });
+
+export const pointSchema = z.object({
+  lat: z.number(),
+  lon: z.number(),
+});
+
+export const placeSchema = z.object({
+  provider_id: z.string().optional(),
+  name: z.string(),
+  address: z.string(),
+  point: pointSchema,
+});
+
+export const earningsTotalSchema = z.object({
+  net: moneySchema,
+  trips: z.number().int(),
+  from: z.string().datetime({ offset: true }),
+  to: z.string().datetime({ offset: true }),
+});
+
+export const tripEarningSchema = z.object({
+  job_id: z.string(),
+  amount: moneySchema,
+  at: z.string().datetime({ offset: true }),
+});
+
+export const driverEarningsSchema = z.object({
+  today: earningsTotalSchema,
+  week: earningsTotalSchema,
+  trips: z.array(tripEarningSchema),
+});

@@ -1,9 +1,10 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import { ApiError, type ApiClient, type Place } from '@platform/api-client';
+import { ApiError, type ApiClient } from '@platform/api-client';
+import type { Place } from '@platform/types';
 import { MIN_QUERY_LENGTH, SEARCH_DEBOUNCE_MS, usePlaceSearch } from './usePlaceSearch';
 
 function aPlace(name: string): Place {
-  return { name, address: `${name}, Lahore`, latitude: 31.5169, longitude: 74.3484 };
+  return { name, address: `${name}, Lahore`, point: { lat: 31.5169, lon: 74.3484 } };
 }
 
 function client(searchPlaces: ApiClient['searchPlaces']): ApiClient {

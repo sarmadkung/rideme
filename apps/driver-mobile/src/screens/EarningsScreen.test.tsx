@@ -1,14 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import type { ApiClient, DriverEarnings } from '@platform/api-client';
+import type { ApiClient } from '@platform/api-client';
+import type { DriverEarnings } from '@platform/types';
 import { EarningsScreen } from './EarningsScreen';
 
 function anEarnings(overrides: Partial<DriverEarnings> = {}): DriverEarnings {
+  const now = new Date().toISOString();
   return {
-    today: { net: { amount_minor: 240000, currency: 'PKR' }, trips: 6 },
-    week: { net: { amount_minor: 1450000, currency: 'PKR' }, trips: 34 },
+    today: { net: { amount_minor: 240000, currency: 'PKR' }, trips: 6, from: now, to: now },
+    week: { net: { amount_minor: 1450000, currency: 'PKR' }, trips: 34, from: now, to: now },
     trips: [
-      { jobId: 'j1', amount: { amount_minor: 40000, currency: 'PKR' }, at: new Date() },
-      { jobId: 'j2', amount: { amount_minor: 36000, currency: 'PKR' }, at: new Date() },
+      { job_id: 'j1', amount: { amount_minor: 40000, currency: 'PKR' }, at: now },
+      { job_id: 'j2', amount: { amount_minor: 36000, currency: 'PKR' }, at: now },
     ],
     ...overrides,
   } as DriverEarnings;
@@ -81,7 +83,12 @@ describe('EarningsScreen', () => {
       <EarningsScreen
         client={aClient(async () =>
           anEarnings({
-            today: { net: { amount_minor: 0, currency: 'PKR' }, trips: 0 },
+            today: {
+              net: { amount_minor: 0, currency: 'PKR' },
+              trips: 0,
+              from: new Date().toISOString(),
+              to: new Date().toISOString(),
+            },
             trips: [],
           } as Partial<DriverEarnings>),
         )}

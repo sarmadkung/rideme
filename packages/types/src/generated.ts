@@ -137,3 +137,34 @@ export interface DriverAssignment {
   expires_at?: string | undefined;
   job: Job;
 }
+
+export interface Point {
+  lat: number;
+  lon: number;
+}
+
+export interface Place {
+  provider_id?: string | undefined;
+  name: string;
+  address: string;
+  point: Point;
+}
+
+export interface EarningsTotal {
+  net: Money;
+  trips: number;
+  from: string;
+  to: string;
+}
+
+export interface TripEarning {
+  job_id: string;
+  amount: Money;
+  at: string;
+}
+
+export interface DriverEarnings {
+  today: EarningsTotal;
+  week: EarningsTotal;
+  trips: TripEarning[];
+}

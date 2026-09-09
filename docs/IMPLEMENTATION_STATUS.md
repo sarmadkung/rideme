@@ -589,11 +589,15 @@ Documents 17, 28, 48, 116, 179.
 | User-facing error mapping | VERIFIED | 2 | asserted to leak no internal code; preserves the server's deliberate ambiguity about whether an account exists |
 | ADR-006 consequences handled | VERIFIED | n/a | mobile Jest maps `@platform/*` to source, so transitive deps and ESM `.js` specifiers both needed handling |
 
-**Not built.** Screens and navigation for booking, tracking, order history, notifications and
-profile. Driver onboarding, earnings. **Background** location and its native module. Offline
-mutation queue. Push registration. Performance budgets (BD-19 requires real-device measurement).
+**Not built.** Order history and profile screens. Driver onboarding. **Background** location and
+its native module. Push registration and notification preferences. Map display and navigation
+handoff. Performance budgets (BD-19 requires real-device measurement).
 
-Foreground location landed 2026-08-29 — see below.
+**Built since this table was written**, each with its own entry below: customer booking and
+driver trip flows (2026-08-29) · foreground location (2026-08-29) · customer place search
+(2026-09-08) · offline mutation queue (2026-09-08, built and tested but deliberately wired to
+nothing pending B-7/BD-21) · driver earnings (2026-09-09). The per-slice entries are the
+authority; this table is the phase summary and was stale until 2026-09-09.
 
 ## Phase 13 — Operational Dashboards · **PARTIAL**
 
@@ -660,25 +664,15 @@ billing-locked since 2026-08-27, which is external to this repository.
 
 ## Remaining Non-Blocking Work
 
-Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
-`MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
+**Superseded 2026-09-09.** This section held a second phase-status table, written against the
+`IMPLEMENTATION_PLAN.md` spine during Phase 1, when every phase after 1 genuinely was
+`NOT_STARTED`. It was never updated, so by 2026-09-09 it reported eleven verified phases as not
+started and contradicted both the per-phase sections above and the roadmap's live record.
 
-| Phase | Status | Notes |
-|---|---|---|
-| 2 — infrastructure hardening | NOT_STARTED | local infrastructure landed in Phase 1; cloud is Phase 15 |
-| 3 — backend foundation | NOT_STARTED | BD-07 due before financial code |
-| 4 — authentication | NOT_STARTED | |
-| 5 — canonical domain | NOT_STARTED | ADR-004 to resolve here |
-| 6 — pricing / quote | NOT_STARTED | |
-| 7 — dispatch | NOT_STARTED | BD-03, BD-04 |
-| 8 — location + realtime | NOT_STARTED | BD-15, BD-17 |
-| 9 — ride vertical slice | NOT_STARTED | BD-01 … BD-06 |
-| 10 — delivery | NOT_STARTED | BD-10, BD-16 |
-| 11 — grocery | NOT_STARTED | BD-11, BD-12 |
-| 12 — cargo | NOT_STARTED | BD-13 |
-| 13 — financial completeness | NOT_STARTED | BD-08, BD-09 |
-| 14 — operations console | NOT_STARTED | |
-| 15 — production readiness | NOT_STARTED | BD-14, BD-15, BD-19 |
+It is removed rather than corrected. A second place recording which phase is finished is a
+second place that can be wrong, and the roadmap already owns that record:
+`MASTER_IMPLEMENTATION_ROADMAP.md` → **Live record**, in the roadmap's own numbering. Per-phase
+evidence stays in the sections above.
 
 ## Blocked
 
@@ -1136,3 +1130,36 @@ driver-app tests, up from 51.
 **Not done.** No payout view: what a driver has *earned* and what has been *paid out* are
 different questions, and the second needs the payout flow that has no provider yet. No date
 range picker — today and the last seven days are what a driver asks for.
+
+## Contract Drift Closed — Place Search and Driver Earnings · 2026-09-09
+
+Two slices in a row hand-wrote their TypeScript response types beside the generated ones.
+`packages/api-client` declared `Place`, `EarningsTotal`, `TripEarning` and `DriverEarnings` as
+local interfaces and built them with hand-written `toPlace`, `toEarningsTotal` and
+`toTripEarning` mappers, while `driverAssignment()` two lines away parsed a generated schema.
+ADR-007 exists to make that impossible, and `contractgen`'s own header says a client needing a
+type "must add it here rather than hand-writing a matching interface".
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `Point`, `Place` registered (`093`, `094`) | IMPLEMENTED | 2 | — | inner-first, so `Place.point` resolves to `Point` rather than an inline shape |
+| `EarningsTotal`, `TripEarning`, `DriverEarnings` registered | IMPLEMENTED | 2 | — | |
+| The hand-written interfaces and mappers are gone | IMPLEMENTED | n/a | — | `moneySchema` left `api-client` with them: nothing there parses money by hand any more |
+| **Responses are parsed, not coerced** | IMPLEMENTED | 1 | — | the old `toPlace` read `Number(point['lat'])` on an absent field, so a malformed place became latitude `NaN`; the generated schema rejects it instead |
+| An unreachable ledger still is not zero | IMPLEMENTED | 1 | — | asserted at the client now as well as at the endpoint and the screen |
+| Consumers moved to the generated shape | IMPLEMENTED | n/a | — | `place.point.lat/lon`, `trip.job_id`; `formatWhen` parses the RFC 3339 string the wire carries |
+
+**Why the gate did not catch it.** `make contracts-check` regenerates and diffs, so it fails when
+a *registered* Go type changes without regeneration. A new endpoint whose types were never
+registered changes nothing it can see. The blind spot was already recorded under Phase 2's
+"Remaining Non-Blocking Work" as the hand-maintained registration list; this is what it costs in
+practice. Nothing here closes it — a new unregistered endpoint would still pass.
+
+**Verification.** Partial, and deliberately so: this session had no Go toolchain, so
+`make contracts` was not run and the two `generated.ts` files carry a **predicted** emitter
+output. `make contracts-check` is the assertion — if the prediction is wrong it fails and prints
+the difference. Run on the developer machine: 59 driver-app tests and 49 customer-app tests pass;
+`tsc` clean on both apps and on `types`, `validation` and `api-client`; prettier and eslint clean.
+`@platform/api-client`'s own suite (4 tests added) could not run there — its rollup binary is
+built for the host platform, not the workspace VM — so those four are IMPLEMENTED, not VERIFIED,
+until `pnpm test` runs.
