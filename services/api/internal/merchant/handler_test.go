@@ -33,9 +33,11 @@ type stubStore struct {
 	outlet      merchant.Outlet
 	outletErr   error
 	attachErr   error
+	consumeErr  error
 	transitions []transition
 	rejections  []rejection
 	attached    []attachment
+	consumed    []string
 	askedFor    []merchant.OrderStatus
 }
 
@@ -102,6 +104,11 @@ func (s *stubStore) OutletByID(_ context.Context, _ string) (merchant.Outlet, er
 		return merchant.Outlet{}, s.outletErr
 	}
 	return s.outlet, nil
+}
+
+func (s *stubStore) ConsumeOrderStock(_ context.Context, orderID string) error {
+	s.consumed = append(s.consumed, orderID)
+	return s.consumeErr
 }
 
 func (s *stubStore) AttachJob(_ context.Context, orderID, jobID string) error {
@@ -734,5 +741,37 @@ func TestAnotherShopCannotSendOutMyOrder(t *testing.T) {
 	}
 	if len(creator.created) != 0 {
 		t.Errorf("created = %+v", creator.created)
+	}
+}
+
+func TestGoodsThatLeaveTheShelfAreConsumed(t *testing.T) {
+	// Held stock that is never consumed means a shop's count never falls, and
+	// a shelf empty in the aisle and full in the database sells the next
+	// customer nothing.
+	store := &stubStore{shop: anActiveShop(), order: aPreparedOrder(), outlet: aLocatedOutlet()}
+	response := call(t, serveWithJobs(store, &stubJobs{}, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(store.consumed) != 1 || store.consumed[0] != "order-1" {
+		t.Fatalf("consumed = %+v", store.consumed)
+	}
+}
+
+func TestARetryDoesNotConsumeTheStockTwice(t *testing.T) {
+	// The recovery path marks ready again. The transition has already
+	// happened, so the goods must not leave the shelf a second time.
+	stranded := aPreparedOrder()
+	stranded.Status = merchant.StatusReadyForPickup
+	stranded.JobID = ""
+	store := &stubStore{shop: anActiveShop(), order: stranded, outlet: aLocatedOutlet()}
+
+	call(t, serveWithJobs(store, &stubJobs{}, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+
+	if len(store.consumed) != 0 {
+		t.Errorf("stock was consumed again on a retry: %+v", store.consumed)
 	}
 }

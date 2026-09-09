@@ -77,6 +77,13 @@ func (h *merchantHarness) aShop(t *testing.T) shop {
 		s.merchantID).Scan(&s.productID); err != nil {
 		t.Fatal(err)
 	}
+	// A shop stocks what it sells. Placing an order now holds inventory
+	// (document 069), so a fixture with a product and no shelf is a shop that
+	// cannot take an order — which is correct, and not what most of these
+	// tests are about. Availability without a count is the common case.
+	if err := h.store.SetInventory(ctx, s.storeID, s.productID, "", true, nil); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 
