@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
+	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
 )
@@ -29,9 +30,31 @@ type stubStore struct {
 	orders      []merchant.Order
 	order       merchant.Order
 	orderErr    error
+	outlet      merchant.Outlet
+	outletErr   error
+	attachErr   error
 	transitions []transition
 	rejections  []rejection
+	attached    []attachment
 	askedFor    []merchant.OrderStatus
+}
+
+type attachment struct{ orderID, jobID string }
+
+// stubJobs stands in for the job store on the other side of document 070's
+// link.
+type stubJobs struct {
+	created []jobs.Job
+	err     error
+}
+
+func (s *stubJobs) Create(_ context.Context, job jobs.Job, _ jobs.Actor) (jobs.Job, error) {
+	if s.err != nil {
+		return jobs.Job{}, s.err
+	}
+	job.ID = "job-new"
+	s.created = append(s.created, job)
+	return job, nil
 }
 
 type transition struct {
@@ -74,6 +97,21 @@ func (s *stubStore) Transition(_ context.Context, orderID string, from, to merch
 	return moved, nil
 }
 
+func (s *stubStore) OutletByID(_ context.Context, _ string) (merchant.Outlet, error) {
+	if s.outletErr != nil {
+		return merchant.Outlet{}, s.outletErr
+	}
+	return s.outlet, nil
+}
+
+func (s *stubStore) AttachJob(_ context.Context, orderID, jobID string) error {
+	if s.attachErr != nil {
+		return s.attachErr
+	}
+	s.attached = append(s.attached, attachment{orderID, jobID})
+	return nil
+}
+
 func (s *stubStore) Reject(_ context.Context, orderID string, from merchant.OrderStatus,
 	_, reason string) (merchant.Order, error) {
 	s.rejections = append(s.rejections, rejection{orderID, from, reason})
@@ -84,7 +122,29 @@ func (s *stubStore) Reject(_ context.Context, orderID string, from merchant.Orde
 }
 
 func anActiveShop() merchant.Merchant {
-	return merchant.Merchant{ID: shopID, OwnerUserID: ownerID, Name: "Al-Fatah", Status: "ACTIVE"}
+	return merchant.Merchant{ID: shopID, OwnerUserID: ownerID, Name: "Al-Fatah",
+		Status: "ACTIVE", Phone: "+923001234567"}
+}
+
+func aLocatedOutlet() merchant.Outlet {
+	return merchant.Outlet{
+		ID: "store-1", MerchantID: shopID, MerchantName: "Al-Fatah", Name: "Gulberg",
+		Address: "Main Boulevard, Gulberg III, Lahore", Lat: 31.5169, Lon: 74.3484,
+	}
+}
+
+// aPreparedOrder is an order a picker has finished and a driver has not yet
+// been asked about.
+func aPreparedOrder() merchant.Order {
+	order := anOrder(merchant.StatusPreparing)
+	order.StoreID = "store-1"
+	order.Delivery = merchant.Delivery{
+		Address: "House 12, Street 4, Gulberg III, Lahore",
+		Lat:     31.5200,
+		Lon:     74.3500,
+		Notes:   "second gate",
+	}
+	return order
 }
 
 func anOrder(status merchant.OrderStatus) merchant.Order {
@@ -109,8 +169,13 @@ func anOrder(status merchant.OrderStatus) merchant.Order {
 // serve wires the routes with a principal already attached: whether the token
 // pipeline works is identity's concern, not this package's.
 func serve(store merchant.OrderStore, roles ...identity.Role) *http.ServeMux {
+	return serveWithJobs(store, &stubJobs{}, roles...)
+}
+
+func serveWithJobs(store merchant.OrderStore, creator merchant.JobCreator,
+	roles ...identity.Role) *http.ServeMux {
 	mux := http.NewServeMux()
-	merchant.NewHandler(merchant.NewService(store)).Routes(mux,
+	merchant.NewHandler(merchant.NewService(store).WithJobs(creator)).Routes(mux,
 		func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ctx := identity.ContextWithPrincipal(r.Context(),
@@ -437,5 +502,237 @@ func TestTheCustomerIsNotNamedToTheShop(t *testing.T) {
 
 	if strings.Contains(response.Body.String(), "customer-9") {
 		t.Errorf("the customer's identity reached the merchant: %s", response.Body)
+	}
+}
+
+// --- Mark Ready: document 070's one link between two lifecycles -------------
+
+func TestMarkingReadyProducesADeliveryJob(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), order: aPreparedOrder(), outlet: aLocatedOutlet()}
+	creator := &stubJobs{}
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(creator.created) != 1 {
+		t.Fatalf("jobs created = %d", len(creator.created))
+	}
+	job := creator.created[0]
+
+	if job.Type != jobs.TypeGrocery {
+		t.Errorf("job type = %s, want GROCERY", job.Type)
+	}
+	// The customer, not the merchant: a delivery exists for the person waiting
+	// at the other end, and every customer-facing view of a job is scoped by
+	// requester.
+	if job.RequesterUserID != "customer-9" {
+		t.Errorf("requester = %q, want the customer", job.RequesterUserID)
+	}
+	if job.MerchantID != shopID {
+		t.Errorf("merchant = %q", job.MerchantID)
+	}
+	// REQUESTED, so the dispatch round picks it up like any other job.
+	if job.Status != jobs.StatusRequested {
+		t.Errorf("job status = %s, want REQUESTED", job.Status)
+	}
+	if len(job.Stops) != 2 {
+		t.Fatalf("stops = %+v", job.Stops)
+	}
+	if job.Stops[0].Type != jobs.StopPickup || job.Stops[0].Location.Latitude != 31.5169 {
+		t.Errorf("pickup = %+v, want the shop", job.Stops[0])
+	}
+	if job.Stops[1].Type != jobs.StopDropoff || job.Stops[1].Location.Latitude != 31.5200 {
+		t.Errorf("dropoff = %+v, want the address the customer gave", job.Stops[1])
+	}
+	if job.Stops[1].Address != "House 12, Street 4, Gulberg III, Lahore" {
+		t.Errorf("dropoff address = %q", job.Stops[1].Address)
+	}
+	// A driver arriving at a shop needs to know which shop and who to ask for.
+	if job.Stops[0].ContactName != "Gulberg" || job.Stops[0].ContactPhone == "" {
+		t.Errorf("pickup contact = %+v", job.Stops[0])
+	}
+
+	if len(store.attached) != 1 || store.attached[0].jobID != "job-new" {
+		t.Fatalf("the order was not linked to its delivery: %+v", store.attached)
+	}
+	var body merchant.OrderResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.JobID != "job-new" {
+		t.Errorf("job_id = %q, want the delivery a dashboard should follow", body.JobID)
+	}
+}
+
+func TestAnOrderNobodyIsPickingCannotBeMarkedReady(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), outlet: aLocatedOutlet()}
+	creator := &stubJobs{}
+	for _, status := range []merchant.OrderStatus{
+		merchant.StatusPlaced, merchant.StatusConfirmed, merchant.StatusCancelled,
+	} {
+		store.order = anOrder(status)
+		response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+			"/api/v1/merchant/orders/order-1/ready", "")
+		if response.Code != http.StatusConflict {
+			t.Errorf("%s: status = %d, want 409", status, response.Code)
+		}
+	}
+	if len(creator.created) != 0 {
+		t.Errorf("a delivery was created for an order nobody had picked: %+v", creator.created)
+	}
+}
+
+func TestMarkingReadyTwiceDoesNotCreateASecondDelivery(t *testing.T) {
+	// Two drivers sent to collect one order is two drivers, one of whom drove
+	// for nothing.
+	already := aPreparedOrder()
+	already.Status = merchant.StatusReadyForPickup
+	already.JobID = "job-existing"
+	store := &stubStore{shop: anActiveShop(), order: already, outlet: aLocatedOutlet()}
+	creator := &stubJobs{}
+
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(creator.created) != 0 {
+		t.Errorf("a second delivery was created: %+v", creator.created)
+	}
+	if len(store.transitions) != 0 {
+		t.Errorf("the order was moved again: %+v", store.transitions)
+	}
+}
+
+func TestAReadyOrderWithNoDeliveryIsFinishedByARetry(t *testing.T) {
+	// The recovery path: the transition landed and the job creation did not.
+	// The order sits in the Ready queue with nobody coming, and calling Mark
+	// Ready again is what repairs it.
+	stranded := aPreparedOrder()
+	stranded.Status = merchant.StatusReadyForPickup
+	stranded.JobID = ""
+	store := &stubStore{shop: anActiveShop(), order: stranded, outlet: aLocatedOutlet()}
+	creator := &stubJobs{}
+
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(creator.created) != 1 {
+		t.Fatalf("the retry did not create the missing delivery: %+v", creator.created)
+	}
+	// And it did not transition an order that had already moved.
+	if len(store.transitions) != 0 {
+		t.Errorf("transitions = %+v", store.transitions)
+	}
+}
+
+func TestAnOrderWithNoAddressIsNotMarkedReady(t *testing.T) {
+	// Orders placed before checkout captured an address (migration 000012).
+	// Marking one ready would create a job with no destination.
+	addressless := aPreparedOrder()
+	addressless.Delivery = merchant.Delivery{}
+	store := &stubStore{shop: anActiveShop(), order: addressless, outlet: aLocatedOutlet()}
+	creator := &stubJobs{}
+
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(creator.created) != 0 || len(store.transitions) != 0 {
+		t.Error("an order with nowhere to go was handed to dispatch")
+	}
+}
+
+func TestAShopWithNoPlaceOnTheMapCannotSendAnOrderOut(t *testing.T) {
+	// A pickup at the null island is a driver sent into the Atlantic.
+	nowhere := aLocatedOutlet()
+	nowhere.Lat, nowhere.Lon = 0, 0
+	store := &stubStore{shop: anActiveShop(), order: aPreparedOrder(), outlet: nowhere}
+	creator := &stubJobs{}
+
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(creator.created) != 0 || len(store.transitions) != 0 {
+		t.Error("a delivery was created from a shop with no location")
+	}
+}
+
+func TestTheOrderIsCheckedBeforeItMoves(t *testing.T) {
+	// Both ends of the route are validated before the transition, so a
+	// refusal leaves the order where the merchant can still act on it rather
+	// than stranded in READY_FOR_PICKUP.
+	store := &stubStore{shop: anActiveShop(), order: aPreparedOrder(), outletErr: merchant.ErrNotFound}
+	creator := &stubJobs{}
+
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(store.transitions) != 0 {
+		t.Errorf("the order moved before its route was known: %+v", store.transitions)
+	}
+}
+
+func TestADeploymentWithNoDeliveriesRefusesRatherThanStrands(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), order: aPreparedOrder(), outlet: aLocatedOutlet()}
+	mux := http.NewServeMux()
+	// No WithJobs: the same construction main.go had before deliveries existed.
+	merchant.NewHandler(merchant.NewService(store)).Routes(mux,
+		func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ctx := identity.ContextWithPrincipal(r.Context(), identity.Principal{
+					UserID: ownerID, Roles: []identity.Role{identity.RoleMerchant},
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
+			})
+		})
+
+	response := call(t, mux, http.MethodPost, "/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", response.Code)
+	}
+	if len(store.transitions) != 0 {
+		t.Errorf("the order was marked ready with no way to deliver it: %+v", store.transitions)
+	}
+}
+
+func TestASuspendedMerchantCannotSendAnOrderOut(t *testing.T) {
+	suspended := anActiveShop()
+	suspended.Status = "SUSPENDED"
+	store := &stubStore{shop: suspended, order: aPreparedOrder(), outlet: aLocatedOutlet()}
+	creator := &stubJobs{}
+
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(creator.created) != 0 {
+		t.Errorf("created = %+v", creator.created)
+	}
+}
+
+func TestAnotherShopCannotSendOutMyOrder(t *testing.T) {
+	elsewhere := aPreparedOrder()
+	elsewhere.MerchantID = otherShop
+	store := &stubStore{shop: anActiveShop(), order: elsewhere, outlet: aLocatedOutlet()}
+	creator := &stubJobs{}
+
+	response := call(t, serveWithJobs(store, creator, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/ready", "")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(creator.created) != 0 {
+		t.Errorf("created = %+v", creator.created)
 	}
 }
