@@ -160,10 +160,15 @@ func run() error {
 	// The values the owner decided (BD-01, BD-02, BD-04, BD-11, BD-12) are
 	// rows, not constants, so every consumer reads them through one store.
 	platformSettings := settings.NewStore(pool.Pool)
+	// One routing service and one tracking store for the whole process:
+	// dispatch scores candidates with the same routes a quote was priced from,
+	// and reads the same position pool a driver reports into.
+	routes := routing.NewService(routingProviders...)
+	trackingStore := tracking.NewStore(pool.Pool, redis.Client)
 	bookingService := booking.NewService(
 		jobStore, bookingStore,
 		pricing.NewEngine(nil),
-		routing.NewService(routingProviders...),
+		routes,
 		platformSettings,
 		nil,
 	)
@@ -176,7 +181,7 @@ func run() error {
 	// The ledger is the only record of what a driver earned, so the earnings
 	// surface reads it directly rather than a total kept beside it.
 	driverHandler := driver.NewHandler(driver.NewService(
-		providerStore, tracking.NewStore(pool.Pool, redis.Client), jobStore,
+		providerStore, trackingStore, jobStore,
 		tracking.DefaultLimits(), nil).WithLedger(finance.NewStore(pool.Pool)))
 
 	// Place search. Built only when a geocoder is configured; the routes are
@@ -209,7 +214,17 @@ func run() error {
 	// Deadline enforcement (BD-04, BD-12). The values these act on are rows;
 	// this is the thing that acts on them. Without it an unanswered grocery
 	// order and a job that found no driver both wait forever.
-	dispatchRunner := dispatch.NewRunner(nil, jobStore, platformSettings, logger, nil)
+	// The dispatch engine, and the runner that drives it.
+	//
+	// The engine was built and tested in Phase 8 and never constructed: the
+	// runner was created with a nil engine, nothing called Attempt, and no job
+	// ever left REQUESTED. A customer's booking reached the database and no
+	// driver. Round is the call that closes that gap.
+	dispatchStore := dispatch.NewStore(pool.Pool)
+	dispatchEngine := dispatch.NewEngine(dispatchStore, jobStore, providerStore,
+		trackingStore, routes, logger, nil)
+	dispatchRunner := dispatch.NewRunner(dispatchEngine, jobStore, platformSettings, logger, nil).
+		WithOffers(dispatchStore)
 	deadlines := sweeper.New(merchantStore, dispatchRunner, logger, 0, nil)
 	sweepCtx, stopSweeping := context.WithCancel(context.Background())
 	defer stopSweeping()

@@ -75,6 +75,20 @@ func (s *Sweeper) Once(ctx context.Context) {
 		}
 	}
 	if s.dispatch != nil {
+		// Drive dispatch before expiring searches. A job that has just become
+		// due for its next ring must get that ring on this pass; expiring
+		// first would end searches that still had attempts left in them.
+		round, err := s.dispatch.Round(ctx, s.batch)
+		if err != nil {
+			s.logger.Error("dispatch round failed", slog.String("error", err.Error()))
+		} else if round.Considered > 0 {
+			s.logger.Info("dispatch round",
+				slog.Int("considered", round.Considered),
+				slog.Int("started", round.Started),
+				slog.Int("offered", round.Offered),
+				slog.Int64("offers_released", round.Released))
+		}
+
 		expired, err := s.dispatch.Sweep(ctx, s.batch)
 		if err != nil {
 			s.logger.Error("dispatch search sweep failed", slog.String("error", err.Error()))
