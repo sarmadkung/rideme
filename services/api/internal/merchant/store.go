@@ -755,3 +755,21 @@ func (s *Store) OrdersFor(ctx context.Context, merchantID string, statuses []Ord
 	}
 	return out, nil
 }
+
+// AttachJob links the delivery job an order produced.
+//
+// Compare-and-set on the column being empty, so a second call cannot replace
+// the job a first one created — which would strand a driver holding a job the
+// order no longer points at.
+func (s *Store) AttachJob(ctx context.Context, orderID, jobID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE orders SET job_id = $2, updated_at = now()
+		  WHERE id = $1 AND job_id IS NULL`, orderID, jobID)
+	if err != nil {
+		return fmt.Errorf("attach job: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrJobAlreadyAttached
+	}
+	return nil
+}

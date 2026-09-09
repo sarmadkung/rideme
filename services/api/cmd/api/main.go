@@ -193,7 +193,10 @@ func run() error {
 	// nothing served them, so the sweeper below was cancelling orders that no
 	// merchant had any way to answer.
 	merchantStore := merchant.NewStore(pool.Pool)
-	merchantHandler := merchant.NewHandler(merchant.NewService(merchantStore))
+	// WithJobs is what turns a ready order into a delivery: document 070's two
+	// lifecycles, linked at READY_FOR_PICKUP and nowhere else.
+	merchantHandler := merchant.NewHandler(
+		merchant.NewService(merchantStore).WithJobs(jobStore))
 
 	// The customer's side of the same lifecycle (documents 068, 071): the
 	// shops near them, one shop's catalogue, a cart, and a checkout that

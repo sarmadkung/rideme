@@ -1324,3 +1324,44 @@ integration tests are written and unverified, including the first one that walks
 `REQUESTED` to an offer in a driver's hands — the ride critical-journey coverage R-3 moved into
 Phase 8 and which has never existed. `go test -tags=integration ./tests/` is the assertion; it
 needs Postgres **and** Redis, because the geo search is the first step of a real dispatch.
+
+## Mark Ready — an Order Becomes a Delivery — 2026-09-09
+
+Document 072's definition of done is "a merchant can process an order from acceptance to
+ready-for-pickup without admin intervention", and the merchant surface stopped at `PREPARING`.
+This closes it, and with it document 070's one link between two lifecycles: reaching
+`READY_FOR_PICKUP` produces a delivery Job whose pickup is the shop and whose dropoff is the
+address the customer gave at checkout.
+
+The order does not become the job and the job does not carry the order's states. A driver app has
+no business understanding `PREPARING`, and a merchant dashboard has no business understanding
+`ARRIVING` — which is exactly why `000009` gave orders and jobs separate status columns.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /merchant/orders/{id}/ready` | IMPLEMENTED | 10 | — | the last of document 072's five actions |
+| The job is `GROCERY`, `REQUESTED`, requested **by the customer** | IMPLEMENTED | 2 | — | a delivery exists for the person waiting at the other end, and every customer-facing view of a job is scoped by requester. REQUESTED means the dispatch round picks it up like any other job — nothing in dispatch needs to know this came from a shop |
+| Pickup is the shop, dropoff is the checkout address | IMPLEMENTED | 2 | — | the pickup stop carries the branch name and the merchant's phone: a driver at the door needs to know which shop and who to ask for |
+| **Both ends are checked before anything moves** | IMPLEMENTED | 3 | — | a shop with no coordinates and an order with no address are both refused *before* the transition, so a refusal leaves the order where the merchant can still act on it rather than stranded in READY_FOR_PICKUP |
+| **One order, one delivery** | IMPLEMENTED | 3 | — | compare-and-set on `orders.job_id`, so two dashboards tapping Mark Ready together still send one driver. Two drivers collecting one order is one driver who drove for nothing |
+| Marking ready twice answers with the first delivery | IMPLEMENTED | 1 | — | idempotent like Accept and Start Preparing |
+| **A stranded order is repaired by a retry** | IMPLEMENTED | 1 | — | the order moves first and the job is created second, because two stores cannot share one transaction. If the job creation fails, the order sits in the Ready queue with nobody coming and calling Mark Ready again finishes it. The other order round would leave an orphan job offered to a driver for an order that never became ready |
+| No job store, no Mark Ready | IMPLEMENTED | 1 | — | 503 rather than moving an order to a state no driver will ever be offered |
+| Ownership and merchant status still apply | IMPLEMENTED | 2 | — | another shop's order is 404; a suspended merchant is 403 |
+| **The whole grocery path, end to end** | IMPLEMENTED | 1 | — | placed with a destination → accepted → prepared → ready → dispatch round → offered to a grocery-capable driver nearby. Every step existed and was verified in isolation; none of them joined up |
+
+**What this makes reachable.** Phase 10 is recorded as VERIFIED and was, at the domain layer.
+Until this week a grocery order could not be created over HTTP, could not be answered by a
+merchant, had nowhere to be delivered, and could not become a delivery. All four are now closed,
+and the last one only works because dispatch is finally called at all.
+
+**Not done.** `Report Issue` — document 074's substitution flow — still has no route, so a picker
+who finds an empty shelf has no way to say so and BD-11's repricing has no trigger. The order's
+own lifecycle past `READY_FOR_PICKUP` (`PICKED_UP`, `DELIVERING`, `DELIVERED`) is still not
+driven by anything: the delivery job advances through its own states as the driver works, and
+nothing mirrors those onto the order. That is the next link, and document 070 is explicit that it
+should be an event rather than a shared column.
+
+**Verification.** Partial: no Go toolchain in this session. 10 handler tests and 4 integration
+tests are written and unverified. The integration tests need Postgres **and** Redis — the last
+one runs a real dispatch round, so it needs the geo pool.

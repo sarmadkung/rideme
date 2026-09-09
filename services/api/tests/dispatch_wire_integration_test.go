@@ -77,6 +77,13 @@ func newWireHarness(t *testing.T) *wireHarness {
 // verified vehicle, the PASSENGER capability document 003 requires, and a
 // position fresh enough to pass the location-age check.
 func (h *wireHarness) aDispatchableDriver(t *testing.T, at jobs.Coordinate) string {
+	return h.aDispatchableDriverFor(t, at, "PASSENGER")
+}
+
+// aDispatchableDriverFor is the same for any capability document 003 defines,
+// so a grocery delivery can be offered to a driver a ride could not be.
+func (h *wireHarness) aDispatchableDriverFor(t *testing.T, at jobs.Coordinate,
+	capability string) string {
 	t.Helper()
 	ctx := context.Background()
 
@@ -98,8 +105,8 @@ func (h *wireHarness) aDispatchableDriver(t *testing.T, at jobs.Coordinate) stri
 		t.Fatal(err)
 	}
 	if _, err := h.pool.Exec(ctx,
-		`INSERT INTO vehicle_capabilities (vehicle_id, capability) VALUES ($1, 'PASSENGER')`,
-		vehicleID); err != nil {
+		`INSERT INTO vehicle_capabilities (vehicle_id, capability) VALUES ($1, $2)`,
+		vehicleID, capability); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.pool.Exec(ctx,

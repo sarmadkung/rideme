@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 )
 
 // StatusActive is the only merchant status that may act on an order.
@@ -26,12 +28,39 @@ type OrderStore interface {
 	Transition(ctx context.Context, orderID string, from, to OrderStatus,
 		actorType, actorID string, metadata map[string]any) (Order, error)
 	Reject(ctx context.Context, orderID string, from OrderStatus, actorID, reason string) (Order, error)
+	OutletByID(ctx context.Context, id string) (Outlet, error)
+	AttachJob(ctx context.Context, orderID, jobID string) error
+}
+
+// JobCreator is the delivery half of document 070's two lifecycles.
+//
+// An order produces a Job; it does not become one. They are separate
+// lifecycles with one link, so this is the whole of the coupling: the merchant
+// module knows how to ask for a delivery and nothing about how one is
+// dispatched. *jobs.Store satisfies it.
+type JobCreator interface {
+	Create(ctx context.Context, job jobs.Job, actor jobs.Actor) (jobs.Job, error)
 }
 
 // Service is the merchant's own view of its orders (document 072).
-type Service struct{ store OrderStore }
+type Service struct {
+	store OrderStore
+	jobs  JobCreator
+}
 
 func NewService(store OrderStore) *Service { return &Service{store: store} }
+
+// WithJobs attaches the job store, which is what lets an order be handed to a
+// driver.
+//
+// Optional, and nil is a legitimate state: without it Mark Ready refuses
+// rather than moving an order to READY_FOR_PICKUP that no driver will ever be
+// offered. An order stranded in a state with no delivery is worse than one a
+// merchant cannot mark ready yet.
+func (s *Service) WithJobs(creator JobCreator) *Service {
+	s.jobs = creator
+	return s
+}
 
 // Queue is one of document 072's five dashboard queues.
 type Queue string
@@ -161,6 +190,105 @@ func (s *Service) StartPreparing(ctx context.Context, userID, orderID string) (O
 	return s.store.Transition(ctx, order.ID, StatusConfirmed, StatusPreparing, "MERCHANT", m.ID, nil)
 }
 
+// MarkReady finishes the merchant's part and hands the order to a driver
+// (document 072's Mark Ready).
+//
+// This is document 070's "separate lifecycles, one link": reaching
+// READY_FOR_PICKUP produces a delivery Job whose pickup is the shop and whose
+// dropoff is the address the customer gave at checkout. The order does not
+// become the job and the job does not carry the order's states — a driver app
+// has no business understanding PREPARING.
+//
+// The order moves first and the job is created second, which is the safe way
+// round when two stores cannot share one transaction. If the job creation
+// fails, the order is READY_FOR_PICKUP with no job attached, and calling this
+// again creates it: recoverable, and visible in the queue as a ready order
+// with nobody coming. The other order would leave an orphan job offered to a
+// driver for an order that never became ready.
+func (s *Service) MarkReady(ctx context.Context, userID, orderID string) (Order, string, error) {
+	if s.jobs == nil {
+		return Order{}, "", ErrNoDeliveries
+	}
+	m, order, err := s.owned(ctx, userID, orderID)
+	if err != nil {
+		return Order{}, "", err
+	}
+	if err := active(m); err != nil {
+		return Order{}, "", err
+	}
+
+	switch order.Status {
+	case StatusReadyForPickup:
+		// Already answered. If the job exists this is the second tap on a bad
+		// connection; if it does not, the last attempt failed after the
+		// transition and this is the retry that finishes it.
+		if order.JobID != "" {
+			return order, order.JobID, nil
+		}
+	case StatusPreparing:
+	default:
+		return Order{}, "", ErrNotReadyable
+	}
+
+	// Both ends of the route must exist before anything moves. A job with a
+	// pickup nobody can route to is one no driver can take, and a job with no
+	// destination is one no driver can finish.
+	outlet, err := s.store.OutletByID(ctx, order.StoreID)
+	if err != nil {
+		return Order{}, "", err
+	}
+	pickup := jobs.Coordinate{Latitude: outlet.Lat, Longitude: outlet.Lon}
+	if !pickup.Valid() {
+		return Order{}, "", ErrNoPickupPoint
+	}
+	if !order.Delivery.Valid() {
+		return Order{}, "", ErrNoDestination
+	}
+
+	ready := order
+	if order.Status == StatusPreparing {
+		ready, err = s.store.Transition(ctx, order.ID, StatusPreparing, StatusReadyForPickup,
+			"MERCHANT", m.ID, nil)
+		if err != nil {
+			return Order{}, "", err
+		}
+	}
+
+	delivery, err := s.jobs.Create(ctx, jobs.Job{
+		Type: jobs.TypeGrocery,
+		// The customer, not the merchant: a delivery exists for the person
+		// waiting at the other end, and every customer-facing view of a job
+		// is scoped by requester.
+		RequesterUserID: ready.CustomerUserID,
+		MerchantID:      ready.MerchantID,
+		// REQUESTED, so the dispatch round picks it up like any other job.
+		// Nothing here knows how dispatch works and nothing there needs to
+		// know this came from a shop.
+		Status: jobs.StatusRequested,
+		Stops: []jobs.Stop{
+			{Sequence: 0, Type: jobs.StopPickup, Location: pickup, Address: outlet.Address,
+				ContactName: outlet.Name, ContactPhone: m.Phone},
+			{Sequence: 1, Type: jobs.StopDropoff,
+				Location: jobs.Coordinate{
+					Latitude: ready.Delivery.Lat, Longitude: ready.Delivery.Lon,
+				},
+				Address: ready.Delivery.Address},
+		},
+	}, jobs.Actor{Type: jobs.ActorMerchant, ID: m.ID})
+	if err != nil {
+		return ready, "", err
+	}
+
+	if err := s.store.AttachJob(ctx, ready.ID, delivery.ID); err != nil {
+		// The order is ready and a job exists; they are simply not linked.
+		// Reporting it is right — a caller that believed this succeeded would
+		// never retry — and the link is what the next retry repairs.
+		return ready, delivery.ID, err
+	}
+	ready.JobID = delivery.ID
+	return ready, delivery.ID, nil
+}
+
 // owned resolves the caller's merchant and the order, and refuses an order
 // belonging to somebody else.
 //
@@ -222,4 +350,9 @@ var (
 	ErrAwaitingPayment = errors.New("merchant: this order is waiting on payment")
 	// ErrNotPreparable reports Start Preparing before acceptance.
 	ErrNotPreparable = errors.New("merchant: accept this order before preparing it")
+	// ErrNotReadyable reports Mark Ready on an order nobody is picking yet.
+	ErrNotReadyable = errors.New("merchant: start preparing this order before marking it ready")
+	// ErrNoDeliveries reports a deployment with no job store behind the
+	// merchant surface, where marking an order ready would strand it.
+	ErrNoDeliveries = errors.New("merchant: deliveries are unavailable")
 )

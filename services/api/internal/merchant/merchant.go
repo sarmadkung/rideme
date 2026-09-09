@@ -290,6 +290,11 @@ var (
 	// ErrNotActive reports an action attempted by a merchant that is suspended,
 	// closed, or still awaiting verification.
 	ErrNotActive = errors.New("merchant: this merchant is not active")
+	// ErrJobAlreadyAttached reports a second delivery job for one order.
+	ErrJobAlreadyAttached = errors.New("merchant: this order already has a delivery job")
+	// ErrNoPickupPoint reports a store with no coordinates. A pickup nobody can
+	// be routed to is a job no driver can take.
+	ErrNoPickupPoint = errors.New("merchant: this store has no location on the map")
 )
 
 // StoreOpenAt reports whether a store's hours cover a moment.

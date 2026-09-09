@@ -33,6 +33,7 @@ func (h *Handler) Routes(mux *http.ServeMux, authenticate func(http.Handler) htt
 	mux.Handle("POST "+p+"/merchant/orders/{id}/accept", merchantOnly(h.accept))
 	mux.Handle("POST "+p+"/merchant/orders/{id}/reject", merchantOnly(h.reject))
 	mux.Handle("POST "+p+"/merchant/orders/{id}/preparing", merchantOnly(h.preparing))
+	mux.Handle("POST "+p+"/merchant/orders/{id}/ready", merchantOnly(h.ready))
 }
 
 // --- responses ---------------------------------------------------------------
@@ -68,11 +69,16 @@ type OrderResponse struct {
 	RejectionReason      string              `json:"rejection_reason,omitempty"`
 	CreatedAt            time.Time           `json:"created_at"`
 	Items                []OrderItemResponse `json:"items,omitempty"`
+	// JobID is the delivery this order produced, once it is ready. Present so
+	// a dashboard can follow the driver without asking a second endpoint which
+	// job to follow.
+	JobID string `json:"job_id,omitempty"`
 }
 
 func toOrderResponse(order Order, withItems bool) (OrderResponse, error) {
 	out := OrderResponse{
 		ID:                   order.ID,
+		JobID:                order.JobID,
 		Status:               string(order.Status),
 		ItemsTotal:           order.ItemsTotal,
 		AcceptDeadline:       order.AcceptDeadline,
@@ -200,6 +206,17 @@ func (h *Handler) preparing(w http.ResponseWriter, r *http.Request) {
 	writeOrder(w, r, order)
 }
 
+// ready hands a finished order to a driver.
+func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
+	order, _, err := h.service.MarkReady(r.Context(),
+		identity.MustPrincipal(r.Context()).UserID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeOrder(w, r, order)
+}
+
 func writeOrder(w http.ResponseWriter, r *http.Request, order Order) {
 	response, err := toOrderResponse(order, true)
 	if err != nil {
@@ -241,6 +258,20 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, httpx.Conflict("this order is not waiting to be accepted"))
 	case errors.Is(err, ErrNotPreparable):
 		httpx.WriteError(w, r, httpx.Conflict("accept this order before preparing it"))
+	case errors.Is(err, ErrNotReadyable):
+		httpx.WriteError(w, r, httpx.Conflict("start preparing this order before marking it ready"))
+	case errors.Is(err, ErrNoDestination):
+		// An order placed before checkout captured an address. The merchant
+		// cannot fix it, so it says who can.
+		httpx.WriteError(w, r, httpx.Conflict(
+			"this order has no delivery address — support has to add one before it can go out"))
+	case errors.Is(err, ErrNoPickupPoint):
+		httpx.WriteError(w, r, httpx.Conflict(
+			"this store has no location on the map, so no driver can be sent to it"))
+	case errors.Is(err, ErrJobAlreadyAttached):
+		httpx.WriteError(w, r, httpx.Conflict("this order already has a delivery"))
+	case errors.Is(err, ErrNoDeliveries):
+		httpx.WriteError(w, r, httpx.Unavailable("deliveries are unavailable right now"))
 	case errors.Is(err, ErrNotCancellable):
 		httpx.WriteError(w, r, httpx.Conflict(
 			"this order can no longer be rejected — it is already being prepared"))
