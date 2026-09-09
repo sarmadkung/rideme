@@ -71,7 +71,9 @@ func (s *Store) SetConfig(ctx context.Context, c Config) error {
 const orderColumns = `id::text, merchant_id::text, COALESCE(store_id::text, ''),
 	customer_user_id::text, status, COALESCE(job_id::text, ''), currency, items_total_minor,
 	accepted_at, preparation_started_at, ready_at, expected_ready_at, accept_deadline,
-	COALESCE(rejection_reason, ''), created_at, updated_at`
+	COALESCE(rejection_reason, ''), created_at, updated_at,
+	COALESCE(delivery_address, ''), COALESCE(ST_Y(delivery_location::geometry), 0),
+	COALESCE(ST_X(delivery_location::geometry), 0), COALESCE(delivery_notes, '')`
 
 func scanOrder(row pgx.Row) (Order, error) {
 	var o Order
@@ -79,7 +81,8 @@ func scanOrder(row pgx.Row) (Order, error) {
 	var totalMinor int64
 	err := row.Scan(&o.ID, &o.MerchantID, &o.StoreID, &o.CustomerUserID, &o.Status, &o.JobID,
 		&currency, &totalMinor, &o.AcceptedAt, &o.PreparationStart, &o.ReadyAt,
-		&o.ExpectedReadyAt, &o.AcceptDeadline, &o.RejectionReason, &o.CreatedAt, &o.UpdatedAt)
+		&o.ExpectedReadyAt, &o.AcceptDeadline, &o.RejectionReason, &o.CreatedAt, &o.UpdatedAt,
+		&o.Delivery.Address, &o.Delivery.Lat, &o.Delivery.Lon, &o.Delivery.Notes)
 	if err != nil {
 		return Order{}, err
 	}
@@ -199,14 +202,22 @@ func recomputeTotal(ctx context.Context, tx pgx.Tx, orderID string) error {
 	return nil
 }
 
-// Place moves a cart to PLACED and sets the acceptance deadline.
+// Place moves a cart to PLACED, recording where it is going and when the
+// merchant must answer by.
 //
 // It refuses when no timeout is configured. BD-12 is unresolved, and the
 // business decision register asks for "an explicit unset state that fails
 // loudly rather than defaulting silently" — a guessed timeout would either
 // auto-cancel orders merchants were about to accept, or leave customers
 // waiting indefinitely.
-func (s *Store) Place(ctx context.Context, orderID string, now time.Time) (Order, error) {
+func (s *Store) Place(ctx context.Context, orderID string, to Delivery, now time.Time) (Order, error) {
+	// The destination is written by the statement that places the order, not
+	// by a call beside it. Two statements can be interrupted between, and an
+	// order that is PLACED with nowhere to go is one the merchant will accept
+	// and nobody can deliver.
+	if !to.Valid() {
+		return Order{}, ErrNoDestination
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Order{}, fmt.Errorf("begin: %w", err)
@@ -221,7 +232,7 @@ func (s *Store) Place(ctx context.Context, orderID string, now time.Time) (Order
 		return Order{}, fmt.Errorf("load order: %w", err)
 	}
 	if itemCount == 0 {
-		return Order{}, errors.New("merchant: an empty cart cannot be placed")
+		return Order{}, ErrEmptyCart
 	}
 
 	// The merchant's own window if it set one, otherwise the platform default
@@ -246,9 +257,15 @@ func (s *Store) Place(ctx context.Context, orderID string, now time.Time) (Order
 	deadline := now.Add(time.Duration(*timeoutSeconds) * time.Second)
 
 	order, err := scanOrder(tx.QueryRow(ctx,
-		`UPDATE orders SET status = 'PLACED', accept_deadline = $2, updated_at = now()
+		`UPDATE orders SET status = 'PLACED', accept_deadline = $2,
+		                   delivery_address = $3,
+		                   delivery_location = ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography,
+		                   delivery_notes = NULLIF($6, ''),
+		                   updated_at = now()
 		  WHERE id = $1 AND status = 'CART' RETURNING `+orderColumns,
-		orderID, deadline))
+		orderID, deadline, to.Address,
+		to.Lon, to.Lat, // PostGIS takes x=lon, y=lat
+		to.Notes))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrStale
 	}

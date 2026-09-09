@@ -1212,3 +1212,60 @@ respond` against `MERCHANT_ACCEPT_TIMEOUT`), sets no `cancelled_by`, and takes n
 `go test -tags=integration ./tests/` are the assertion. Nothing outside `internal/merchant`
 changed except the router's parameter list and `main.go`'s construction, and no migration was
 added.
+
+## Grocery Ordering — the Customer's Half — 2026-09-09
+
+The merchant queue landed with nothing to put in it: `OpenCart`, `AddItem` and `Place` were
+store methods no endpoint called, so the only orders that queue could show were ones a test
+made. This is the other half — documents 068 and 071 — and the migration the whole lifecycle
+was missing.
+
+**Migration 000012 — an order now has somewhere to go.** Document 071's checkout is
+Browse → Product → Cart → **Address** → Delivery Option → Quote → Payment → Place Order, and the
+Address step had nowhere to land: the only `address` columns in `000009` belong to merchants and
+stores. That is why `READY_FOR_PICKUP` could never produce the delivery Job document 070
+promises — a job needs a dropoff stop and there was nothing to put in one. The address sits on
+the order rather than being read from the customer's profile later: a customer sending groceries
+to their mother's house has given a destination for that order, and a later profile edit must
+not move a delivery that already happened.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `GET /stores` — shops near a point | IMPLEMENTED | 6 | — | nearest first, distance computed in the database over the GIST index that was already there |
+| **A shut shop is listed as shut, not hidden** | IMPLEMENTED | 2 | — | a customer looking for their usual kiryana at 3am needs to see it is closed, not that it has vanished; `Open` applies the store's hours, not its business status |
+| Hours are one query, not one per shop | IMPLEMENTED | n/a | — | thirty shops would otherwise be thirty-one round trips; same for variants |
+| Radius defaults and is capped | IMPLEMENTED | 1 | — | 5 km default, 25 km ceiling — engineering defaults, marked as such: a real service radius is zones (`097`) and they are not built |
+| `GET /stores/{id}/products` with variants | IMPLEMENTED | 2 | — | variants carry a price *difference*, per document 068 |
+| **Availability is this branch's stock** | IMPLEMENTED | 3 | — | document 069: the same product is on the shelf in Gulberg and not in DHA. A product with no inventory row is unavailable, because `Reserve` refuses it — offering it would be a cart that fails at checkout for no visible reason |
+| `POST /orders` · `POST /orders/{id}/items` · `GET /orders/{id}` · `GET /orders` | IMPLEMENTED | 5 | — | adding a line answers with the whole cart, so a running total is the one the server computed |
+| **The cart's merchant comes from the shop** | IMPLEMENTED | 1 | — | never from the client: a caller that could name both could name a mismatched pair, and an order under the wrong merchant is one the right merchant never sees |
+| `POST /orders/{id}/place` records the destination | IMPLEMENTED | 3 | — | written by the statement that places the order, not by a call beside it: two statements can be interrupted between, and a `PLACED` order with nowhere to go is one a merchant accepts and nobody can deliver |
+| **Half a destination is refused twice** | IMPLEMENTED | 3 | — | `Delivery.Valid` in Go and a CHECK constraint in the table. A name with no coordinates cannot be routed to; coordinates with no name cannot be read out to a driver. Null island is rejected as well — it is what an unset pair of floats looks like |
+| Somebody else's cart is invisible | IMPLEMENTED | 3 | — | 404, not 403, for the same reason the merchant surface does it |
+| A placed order can no longer be edited | IMPLEMENTED | 1 | — | the merchant may already be picking it, and a line added after acceptance is one nobody agreed to |
+| A cart is not order history | IMPLEMENTED | 1 | — | an order list containing a cart shows a customer something they have not done yet next to things they have |
+| Quantity and preference are bounded | IMPLEMENTED | 2 | — | 1–100, and document 074's three preferences; a fourth would be stored and then read by `ResolveIssue`'s default, quietly turning a typo into a rule |
+| `ErrEmptyCart` replaces an unwrapped error | IMPLEMENTED | 1 | — | it reached a client as an internal failure the moment a client existed |
+
+**`Store.Place` now takes a destination.** Eleven call sites across three integration test files
+were updated. The signature change is the point: an order that cannot be delivered should not be
+placeable, and making the destination optional would have left the invariant to whichever caller
+remembered it.
+
+**Still not done, and now the only thing between here and a working grocery order:**
+`Mark Ready`. The destination exists, so the blocker is no longer the schema — it is that
+`READY_FOR_PICKUP` must create a `GROCERY` Job with the store as pickup and this address as
+dropoff, and hand it to dispatch. That crosses `jobs` and `dispatch`, which makes it Level 5
+under §E, and it is the next slice.
+
+**Also not done.** Document 071's other checkout validations: store open, prices current,
+quantities available, delivery area supported, minimum order rules. `StoreOpenAt` and `Reserve`
+both exist and are still unused by checkout. They were not added here because every existing
+fixture creates a store with no opening hours, so enforcing "store is open" at `Place` would have
+failed ten tests for a reason unrelated to what they assert. One invariant per slice; this is the
+next one after Mark Ready. `Report Issue` (document 074) still has no route.
+
+**Verification.** Partial, the same as the merchant half: no Go toolchain in this session, so
+nothing was compiled or run. 15 handler tests and 11 integration tests are written and
+unverified. `make verify`, `make migrate-up`/`migrate-down` (schema goes to version 12 and back)
+and `go test -tags=integration ./tests/` are the assertion.

@@ -45,6 +45,18 @@ type shop struct {
 	merchantID, storeID, productID string
 }
 
+// aDestination is somewhere in Lahore to deliver to. Placing an order requires
+// one: document 071 puts the Address step before Place Order, and an order
+// with no destination is one no driver can be given (migration 000012).
+func aDestination() merchant.Delivery {
+	return merchant.Delivery{
+		Address: "House 12, Street 4, Gulberg III, Lahore",
+		Lat:     31.5169,
+		Lon:     74.3484,
+		Notes:   "second gate",
+	}
+}
+
 func (h *merchantHarness) aShop(t *testing.T) shop {
 	t.Helper()
 	ctx := context.Background()
@@ -85,7 +97,7 @@ func TestAMerchantWithNoConfigGetsThePlatformAcceptanceWindow(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	placed, err := h.store.Place(ctx, cart.ID, now)
+	placed, err := h.store.Place(ctx, cart.ID, aDestination(), now)
 	if err != nil {
 		t.Fatalf("an unconfigured merchant could not take an order: %v", err)
 	}
@@ -117,7 +129,7 @@ func TestAMerchantsOwnTimeoutOverridesThePlatformDefault(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	placed, err := h.store.Place(ctx, cart.ID, now)
+	placed, err := h.store.Place(ctx, cart.ID, aDestination(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +154,7 @@ func TestAnOverdueOrderCancelsItself(t *testing.T) {
 		t.Fatal(err)
 	}
 	placed := time.Now().UTC()
-	if _, err := h.store.Place(ctx, cart.ID, placed); err != nil {
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), placed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,7 +220,7 @@ func TestAcceptingAndExpiringTheSameOrderCannotBothHappen(t *testing.T) {
 		t.Fatal(err)
 	}
 	placed := time.Now().UTC()
-	if _, err := h.store.Place(ctx, cart.ID, placed); err != nil {
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), placed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -263,7 +275,7 @@ func TestAnEmptyCartCannotBePlaced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.Place(ctx, cart.ID, time.Now()); err == nil {
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now()); err == nil {
 		t.Fatal("an empty cart was placed")
 	}
 }
@@ -398,7 +410,7 @@ func TestTheAcceptanceTimeoutSweepCancelsUnansweredOrders(t *testing.T) {
 	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 1, merchant.PreferAllow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.Place(ctx, cart.ID, time.Now().UTC()); err != nil {
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -441,7 +453,7 @@ func TestAnAcceptedOrderIsNotSweptAway(t *testing.T) {
 	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 1, merchant.PreferAllow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.Place(ctx, cart.ID, time.Now().UTC()); err != nil {
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.store.Transition(ctx, cart.ID, merchant.StatusPlaced, merchant.StatusConfirmed,
@@ -481,7 +493,7 @@ func TestMerchantTimestampsAreRecordedByTheTransitions(t *testing.T) {
 	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 1, merchant.PreferAllow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.Place(ctx, cart.ID, time.Now().UTC()); err != nil {
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -521,7 +533,7 @@ func TestConcurrentOrderTransitionsProduceOneWinner(t *testing.T) {
 	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 1, merchant.PreferAllow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.Place(ctx, cart.ID, time.Now().UTC()); err != nil {
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 

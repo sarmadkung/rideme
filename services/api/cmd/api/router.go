@@ -27,6 +27,7 @@ func newRouter(
 	driverHandler *driver.Handler,
 	placesHandler *places.Handler,
 	merchantHandler *merchant.Handler,
+	groceryHandler *merchant.CustomerHandler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
@@ -52,6 +53,9 @@ func newRouter(
 	}
 	if merchantHandler != nil {
 		merchantHandler.Routes(mux, authenticate)
+	}
+	if groceryHandler != nil {
+		groceryHandler.Routes(mux, authenticate)
 	}
 
 	// Anything unrouted answers in the platform's error envelope.

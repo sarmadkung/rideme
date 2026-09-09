@@ -195,7 +195,7 @@ func TestTheSweeperEnforcesBothDeadlinesInOnePass(t *testing.T) {
 	if _, err := mh.store.AddItem(ctx, cart.ID, shop.productID, "", 1, merchant.PreferAllow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mh.store.Place(ctx, cart.ID, time.Now().UTC().Add(-time.Hour)); err != nil {
+	if _, err := mh.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
