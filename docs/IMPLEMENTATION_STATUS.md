@@ -1079,3 +1079,33 @@ test asserts that an unstable client identity still produces exactly one call.
 
 **Not done.** No map and no pin. Autocomplete-as-you-type would be a better experience than
 Text Search but costs a second Place Details call per selection. No recent or saved places.
+## Offline Mutation Queue — 2026-09-08
+
+Connectivity in this market is a normal condition, not a rare failure. A driver loses
+signal in a basement car park and regains it two streets later.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `MutationQueue` in `@platform/mobile` | VERIFIED | 16 | YES | durable, bounded, ordered |
+| **The idempotency key is the caller's** | VERIFIED | 1 | YES | generated when the user acted, not at send time (document 377) — a replayed booking must not become a second job |
+| Survives an app kill | VERIFIED | 1 | YES | a second instance is what a cold start looks like |
+| A failed send is retried once, not duplicated | VERIFIED | 1 | YES | the failure path is where a queue quietly does work twice |
+| Order is preserved past a stuck mutation | VERIFIED | 1 | YES | delivering a later intent first puts them out of sequence, which the server cannot unpick |
+| **Racing flushes share one pass** | VERIFIED | 1 | YES | a reconnect event and a foreground event arriving together is ordinary |
+| Bounded, oldest dropped first | VERIFIED | 2 | YES | the newest intent is the likeliest to still be true |
+| Expiry is per kind, with no default | VERIFIED | 2 | YES | a kind nobody has ruled on is never expired — see B-6/BD-21 |
+| A corrupt store is an empty one | VERIFIED | 2 | YES | refusing to start over an unparseable cache takes the app down for data it can live without |
+| An unwritable store still works in memory | VERIFIED | 1 | YES | losing the queue to an app kill is bad; refusing the user's action is worse |
+| Cleared on sign-out | VERIFIED | 1 | YES | one account's intent must never flush under another's session |
+
+`@platform/mobile` now runs its own tests. The placeholder script was honest while the package
+held only `useAuth`, which the customer app exercises; the queue is pure logic and deserves a
+runner rather than borrowing an app's.
+
+**Nothing is wired to it yet, deliberately.** Which mutations may be queued, and for how long,
+is a product decision that no document makes and that `mobile-offline-sync` names as a blocking
+condition. It is recorded as **B-7 / BD-21**. Queuing a driver's job acceptance means a driver
+who lost signal may accept a job that was reassigned four minutes ago, with the customer already
+in another car — defensible, but not the platform's call to make silently.
+
+**Verification.** 16 tests, `vitest run` in `@platform/mobile`.
