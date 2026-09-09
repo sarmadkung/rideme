@@ -983,6 +983,37 @@ and are now recorded as **B-6 / BD-20** in `BLOCKED_TASKS.md`. The hook takes bo
 defaults to 25 m / 5 s — engineering defaults, marked as such, not a decision inferred from
 silence. Nothing state-dependent is built on them.
 
+## Route Caching — 2026-09-08
+
+Every quote was a billed Google call. Documents 101 and 104 both ask for caching;
+104 names route requests among the platform's principal map costs and asks
+directly to "avoid duplicate route requests" and "reuse route estimates".
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `CachingProvider` wraps a provider (`104`) | VERIFIED | 12 | YES | in front of one provider, not the fallback chain — a Google route and a straight-line estimate must never share an entry |
+| **A reused route is labelled `cached`** | VERIFIED | 1 | YES | document 96: "Never present a fallback as exact." `ConfidenceCached` already existed in the enum |
+| TTL is short on purpose | VERIFIED | 1 | YES | 5 minutes: road distance barely changes, but `TrafficDurationSeconds` an hour old is not stale, it is wrong |
+| **A burst is billed once** | VERIFIED | 1 | YES | single-flight. The cache alone does not help a burst — every caller misses because none has returned yet. 20 simultaneous identical quotes → 1 call |
+| Keys do not round a trip into a different one | VERIFIED | 2 | YES | 4 decimal places ≈ 11 m, finer than a GPS fix; a 500 m difference is a different pickup and is priced as one |
+| Mode and provider version are in the key | VERIFIED | 2 | YES | a truck and a car ask different questions; an upgraded provider must not serve the previous one's answers |
+| Failures are not remembered | VERIFIED | 1 | YES | a rate limit clears; caching it would extend the outage past its end |
+| Scheduled trips bypass the cache | VERIFIED | 1 | YES | a 6pm departure is a different question and must not poison the entries meaning "now" |
+| Matrices are not cached | VERIFIED | 1 | YES | a matrix key is the whole grid, so a hit means the same drivers in the same places — when the answer has most likely changed. 104's advice for matrices is to batch, not cache |
+| A broken cache costs money, not bookings | VERIFIED | n/a | — | `RedisCache` swallows and logs every failure; `Cache` cannot return an error by design |
+
+**Verification.** `go test ./pkg/routing/ -race` run 8 times consecutively, all clean.
+
+**A real defect the race detector caught.** The first concurrency test was flaky at about one
+run in five. The race was in the test's own provider — an unsynchronised counter — but chasing
+it exposed a genuine gap in the implementation: `CachingProvider` had no single-flight, so
+twenty customers quoting the same trip in the same second produced twenty billed calls. The
+cache would have looked like it was working while doing nothing for the one case it exists to
+prevent. `singleflight.Group` was added and the test now asserts the collapse rather than
+merely asserting the absence of a race.
+
+**Not done.** No cache warming, no hit-rate metric — there is still no metrics system in the
+service, so the cache's effect is visible only as a fall in provider log lines.
 ## Place Search — 2026-09-08
 
 The customer app picked from five hard-coded Lahore landmarks. Booking anywhere else
