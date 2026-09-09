@@ -1,16 +1,28 @@
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { useState } from 'react';
 import { fareComponentLabel, formatMoney, tokens } from '@platform/ui';
-import type { StopInput } from '@platform/api-client';
+import type { ApiClient, Place, StopInput } from '@platform/api-client';
 import type { BookingActions, BookingState } from '../features/booking/useBooking';
+import { usePlaceSearch } from '../features/places/usePlaceSearch';
 
 /**
- * Named places, standing in for map selection.
+ * Well-known places, kept as a floor under the search box.
  *
- * There is no map here, and pretending otherwise would be worse than saying
- * so: no map provider is integrated yet (CAP-2), so a customer picks from
- * known points rather than dropping a pin. The flow behind this — quote,
- * confirm, track — is the real one, and swapping this control for a map does
- * not change it.
+ * Search can be unavailable — no geocoder configured, the provider down, the
+ * phone offline — and a customer who cannot type an address should still be
+ * able to book. These five are also faster than typing for the trips people
+ * actually make most.
+ *
+ * There is still no map: a customer types or taps, rather than dropping a pin.
+ * The flow behind this — quote, confirm, track — is the real one.
  */
 export const PLACES: Array<{ name: string; stop: StopInput }> = [
   { name: 'Liberty Market', stop: { latitude: 31.5169, longitude: 74.3484 } },
@@ -20,17 +32,25 @@ export const PLACES: Array<{ name: string; stop: StopInput }> = [
   { name: 'Bahria Town', stop: { latitude: 31.3676, longitude: 74.1836 } },
 ];
 
-function nameOf(stop: StopInput | null): string | null {
-  if (stop === null) return null;
-  const match = PLACES.find(
-    (place) => place.stop.latitude === stop.latitude && place.stop.longitude === stop.longitude,
-  );
-  return match?.name ?? `${stop.latitude.toFixed(4)}, ${stop.longitude.toFixed(4)}`;
+function describe(stop: StopInput | null): string {
+  if (stop === null) return '—';
+  return `${stop.latitude.toFixed(4)}, ${stop.longitude.toFixed(4)}`;
 }
 
-export function BookingScreen({ booking }: { booking: BookingState & BookingActions }) {
-  const pickupName = nameOf(booking.pickup);
-  const dropoffName = nameOf(booking.dropoff);
+export function BookingScreen({
+  booking,
+  client,
+  near,
+}: {
+  booking: BookingState & BookingActions;
+  client: ApiClient;
+  near?: { latitude: number; longitude: number };
+}) {
+  // A searched place has a name the platform never stores — StopInput is
+  // coordinates. Holding it here keeps the contract unchanged and still lets
+  // the quote panel say "Liberty Market" rather than two decimals.
+  const [pickupName, setPickupName] = useState<string | null>(null);
+  const [dropoffName, setDropoffName] = useState<string | null>(null);
   const quote = booking.quote;
 
   return (
@@ -41,15 +61,27 @@ export function BookingScreen({ booking }: { booking: BookingState & BookingActi
         label="Pickup"
         testID="pickup-picker"
         selected={booking.pickup}
+        selectedName={pickupName}
         disabled={booking.pending}
-        onSelect={booking.setPickup}
+        client={client}
+        {...(near ? { near } : {})}
+        onSelect={(stop, name) => {
+          booking.setPickup(stop);
+          setPickupName(name);
+        }}
       />
       <PlacePicker
         label="Destination"
         testID="dropoff-picker"
         selected={booking.dropoff}
+        selectedName={dropoffName}
         disabled={booking.pending}
-        onSelect={booking.setDropoff}
+        client={client}
+        {...(near ? { near } : {})}
+        onSelect={(stop, name) => {
+          booking.setDropoff(stop);
+          setDropoffName(name);
+        }}
       />
 
       {booking.error !== null && (
@@ -74,7 +106,7 @@ export function BookingScreen({ booking }: { booking: BookingState & BookingActi
       ) : (
         <View testID="quote-panel" style={styles.panel}>
           <Text style={styles.panelTitle}>
-            {pickupName} → {dropoffName}
+            {pickupName ?? describe(booking.pickup)} → {dropoffName ?? describe(booking.dropoff)}
           </Text>
           <Text style={styles.meta}>
             {(quote.distance_meters / 1000).toFixed(1)} km ·{' '}
@@ -127,36 +159,107 @@ function PlacePicker({
   label,
   testID,
   selected,
+  selectedName,
   disabled,
+  client,
+  near,
   onSelect,
 }: {
   label: string;
   testID: string;
   selected: StopInput | null;
+  selectedName: string | null;
   disabled: boolean;
-  onSelect(stop: StopInput | null): void;
+  client: ApiClient;
+  near?: { latitude: number; longitude: number };
+  onSelect(stop: StopInput | null, name: string | null): void;
 }) {
+  const search = usePlaceSearch(client, near);
+
+  const choose = (stop: StopInput, name: string) => {
+    onSelect(stop, name);
+    search.clear();
+  };
+
   return (
     <View style={styles.picker} testID={testID}>
       <Text style={styles.pickerLabel}>{label}</Text>
-      <View style={styles.chips}>
-        {PLACES.map((place) => {
-          const active =
-            selected?.latitude === place.stop.latitude &&
-            selected?.longitude === place.stop.longitude;
-          return (
+
+      {selected !== null ? (
+        <Pressable
+          testID={`${testID}-clear`}
+          disabled={disabled}
+          style={styles.selected}
+          onPress={() => onSelect(null, null)}
+        >
+          <Text style={styles.selectedName}>{selectedName ?? 'Selected'}</Text>
+          <Text style={styles.selectedChange}>Change</Text>
+        </Pressable>
+      ) : (
+        <>
+          <TextInput
+            testID={`${testID}-input`}
+            style={styles.input}
+            value={search.query}
+            editable={!disabled}
+            placeholder="Search for a place or address"
+            placeholderTextColor={tokens.color.textMuted}
+            autoCorrect={false}
+            onChangeText={search.setQuery}
+          />
+
+          {search.stage === 'searching' && (
+            <ActivityIndicator testID={`${testID}-searching`} color={tokens.color.textMuted} />
+          )}
+
+          {/* An outage and an empty result must not read the same, or a
+              customer retypes their address until they give up. */}
+          {search.stage === 'failed' && (
+            <Text style={styles.searchNotice} testID={`${testID}-search-error`}>
+              {search.error}
+            </Text>
+          )}
+          {search.stage === 'done' && search.results.length === 0 && (
+            <Text style={styles.searchNotice} testID={`${testID}-no-results`}>
+              No places matched. Try a different name.
+            </Text>
+          )}
+
+          {search.results.map((place: Place, index: number) => (
             <Pressable
-              key={place.name}
-              testID={`${testID}-${place.name}`}
+              key={`${place.name}-${index}`}
+              testID={`${testID}-result-${index}`}
               disabled={disabled}
-              style={[styles.chip, active && styles.chipActive]}
-              onPress={() => onSelect(active ? null : place.stop)}
+              style={styles.result}
+              onPress={() =>
+                choose({ latitude: place.latitude, longitude: place.longitude }, place.name)
+              }
             >
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{place.name}</Text>
+              <Text style={styles.resultName}>{place.name}</Text>
+              <Text style={styles.resultAddress} numberOfLines={1}>
+                {place.address}
+              </Text>
             </Pressable>
-          );
-        })}
-      </View>
+          ))}
+
+          {/* The floor: always reachable, whatever search is doing. */}
+          {search.results.length === 0 && (
+            <View style={styles.chips}>
+              {PLACES.map((place) => (
+                <Pressable
+                  key={place.name}
+                  testID={`${testID}-${place.name}`}
+                  disabled={disabled}
+                  style={styles.chip}
+                  onPress={() => choose(place.stop, place.name)}
+                >
+                  <Text style={styles.chipText}>{place.name}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </>
+      )}
     </View>
   );
 }
@@ -184,6 +287,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: tokens.space.md,
   },
   chipActive: { backgroundColor: tokens.color.accent, borderColor: tokens.color.accent },
+  input: {
+    backgroundColor: tokens.color.surface,
+    borderColor: tokens.color.border,
+    borderWidth: 1,
+    borderRadius: tokens.radius.md,
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.md,
+    padding: tokens.space.sm,
+    marginBottom: tokens.space.sm,
+  },
+  selected: {
+    backgroundColor: tokens.color.surface,
+    borderColor: tokens.color.border,
+    borderWidth: 1,
+    borderRadius: tokens.radius.md,
+    padding: tokens.space.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectedName: { color: tokens.color.text, fontSize: tokens.fontSize.md, flexShrink: 1 },
+  selectedChange: { color: tokens.color.textMuted, fontSize: tokens.fontSize.sm },
+  result: {
+    paddingVertical: tokens.space.sm,
+    borderBottomColor: tokens.color.border,
+    borderBottomWidth: 1,
+  },
+  resultName: { color: tokens.color.text, fontSize: tokens.fontSize.md },
+  resultAddress: { color: tokens.color.textMuted, fontSize: tokens.fontSize.sm },
+  searchNotice: {
+    color: tokens.color.textMuted,
+    fontSize: tokens.fontSize.sm,
+    marginBottom: tokens.space.sm,
+  },
   chipText: { color: tokens.color.textMuted, fontSize: tokens.fontSize.sm },
   chipTextActive: { color: tokens.color.text, fontWeight: '600' },
   panel: {
@@ -216,7 +353,11 @@ const styles = StyleSheet.create({
     fontSize: tokens.fontSize.sm,
     marginTop: tokens.space.sm,
   },
-  error: { color: tokens.color.danger, fontSize: tokens.fontSize.sm, marginBottom: tokens.space.md },
+  error: {
+    color: tokens.color.danger,
+    fontSize: tokens.fontSize.sm,
+    marginBottom: tokens.space.md,
+  },
   button: {
     backgroundColor: tokens.color.accent,
     borderRadius: tokens.radius.md,

@@ -133,6 +133,26 @@ export interface ApiClient {
   reportLocation(fixes: PositionInput[]): Promise<LocationReport>;
   /** The offer or trip the driver is holding, or null when they hold nothing. */
   driverAssignment(): Promise<DriverAssignment | null>;
+
+  /**
+   * Places matching free text, biased toward `near` when it is known.
+   *
+   * Resolves to an empty array when nothing matched — that is an answer, and
+   * the caller should say "no results", not "something went wrong". A provider
+   * outage still throws, because the two must not look the same to a customer
+   * who would otherwise retype their address until they gave up.
+   */
+  searchPlaces(query: string, near?: { latitude: number; longitude: number }): Promise<Place[]>;
+}
+
+/** Somewhere a customer can be picked up from or taken to. */
+export interface Place {
+  /** What a customer recognises. */
+  name: string;
+  /** What a driver needs to reach the right one. */
+  address: string;
+  latitude: number;
+  longitude: number;
 }
 
 /** One position report. Timestamped by the device, not the server. */
@@ -452,6 +472,23 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         }),
       );
     },
+    async searchPlaces(query, near) {
+      try {
+        const body = (await request('/places', {
+          query: {
+            q: query,
+            lat: near?.latitude,
+            lon: near?.longitude,
+          },
+        })) as { places?: Array<Record<string, unknown>> };
+        return (body.places ?? []).map(toPlace);
+      } catch (error) {
+        // Nothing matched. An empty list is the honest answer; an error here
+        // would put a normal outcome on the app's failure path.
+        if (error instanceof ApiError && error.status === 404) return [];
+        throw error;
+      }
+    },
     async driverAssignment() {
       try {
         return driverAssignmentSchema.parse(await request('/driver/assignment'));
@@ -462,6 +499,16 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         throw error;
       }
     },
+  };
+}
+
+function toPlace(raw: Record<string, unknown>): Place {
+  const point = (raw['point'] ?? {}) as Record<string, unknown>;
+  return {
+    name: String(raw['name'] ?? ''),
+    address: String(raw['address'] ?? ''),
+    latitude: Number(point['lat']),
+    longitude: Number(point['lon']),
   };
 }
 

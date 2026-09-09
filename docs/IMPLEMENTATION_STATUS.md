@@ -842,7 +842,7 @@ now decodes a real response with `DisallowUnknownFields`.
 
 | Not built | Why |
 |---|---|
-| Map selection | No *on-screen* map is integrated. Server-side routing now uses Google (2026-08-29), so distances are real; pickup and destination are still chosen from named places rather than a pin. The flow behind the control is the real one. |
+| Map selection | No *on-screen* map is integrated. Server-side routing uses Google (2026-08-29) and free-text place search landed 2026-09-08, so a customer can book anywhere in the city by typing — but still by typing, not by dropping a pin. |
 | Navigation stack | The flow is linear with no back destination worth preserving. A navigator before a second flow is scaffolding without a user. |
 | Realtime tracking | The gateway exists; no client transport does. Polling every 5s, stopping at terminal states. |
 | Driver location on a map | Follows map selection. The job's assignment is shown, not its position. |
@@ -1014,3 +1014,68 @@ merely asserting the absence of a race.
 
 **Not done.** No cache warming, no hit-rate metric — there is still no metrics system in the
 service, so the cache's effect is visible only as a fall in provider log lines.
+## Place Search — 2026-09-08
+
+The customer app picked from five hard-coded Lahore landmarks. Booking anywhere else
+was impossible, and the screen said so in a comment. The server can now turn typed
+text into a place.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `Geocoder` is its own boundary (`105`, `346`) | VERIFIED | 13 | YES | routing.go always said "a provider that also geocodes implements Geocoder separately" — routing and geocoding are billed as different products and can come from different vendors |
+| `GET /api/v1/places` and `/places/reverse` (`014`) | VERIFIED | 10 | YES | authenticated: each call costs money |
+| **The key stays on the server** | VERIFIED | n/a | — | a client searching Google directly needs a key in its bundle, and a key in a bundle is a key anyone can spend |
+| The shared Google HTTP call | VERIFIED | 2 | YES | routing and geocoding share one `get`, so the "key never reaches an error" guarantee cannot drift between them; asserted separately for both |
+| **An outage is not an empty result** | VERIFIED | 2 | YES | 404 for no match, 503 for a broken provider. A customer shown "no results" for an outage retypes their address until they give up |
+| The provider's message is not shown | VERIFIED | 1 | YES | it can name a disabled API or a restricted key — an operator's problem, already logged |
+| Search is biased, not filtered | VERIFIED | 2 | YES | "Liberty" matches several Pakistani cities and a customer in Lahore means Lahore, but an airport across town stays findable |
+| Unroutable results are dropped | VERIFIED | 1 | YES | one would sit in the list looking selectable and fail at quote time |
+| Bounded query and result count | VERIFIED | 2 | YES | an unbounded string is a billed call somebody else sized |
+| Reverse keeps the point asked about | VERIFIED | 1 | YES | moving a pickup to the provider's snapped centroid is a worse answer than the one the customer gave |
+| No geocoder → the routes do not exist | VERIFIED | 1 | YES | an endpoint that always fails is worse than an absent one; a client can detect a 404 and fall back to its own list |
+
+**A defect found by running against the real API, not by reading documentation.** Reverse
+geocoding returned `G9C5+5F5` — a Plus Code. Google orders reverse results by specificity and
+for a point that is not on a building the most specific answer is a Plus Code: precise, correct
+and unusable on a screen where a customer is confirming a pickup. `preferNamedResult` now takes
+the first result that is not one, keeping the Plus Code only where it is the sole answer (a
+field, an unaddressed plot). Live re-check: `31.5204,74.3587` now resolves to
+"50-N Gurumangat Rd" instead.
+
+**Verification.** `go vet` and `go test ./...` clean. Live check against the real API resolved
+"Liberty Market", "Emporium Mall" and "Johar Town block G" to correct Lahore coordinates.
+
+**Not done.** No geocode caching — document 104 asks to "cache stable geocoding" and an address
+is genuinely stable, unlike traffic, so this is the clearest remaining saving. Text Search is
+used rather than Autocomplete: Autocomplete is the better as-you-type experience but returns
+identifiers without coordinates, so every selection costs a second Place Details call. No client
+UI yet — the customer app still shows the five landmarks.
+
+## Customer Place Search — 2026-09-08
+
+The booking screen offered five hard-coded Lahore landmarks. Everywhere else in the city
+was unbookable. A customer can now type an address.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `usePlaceSearch` hook | VERIFIED | 9 | YES | debounced, position-biased, cancellable |
+| `searchPlaces` on the client | VERIFIED | n/a | — | 404 → empty list, because nothing matching is an answer |
+| Search field per stop | VERIFIED | 5 | YES | name and address both shown; the address is how two places with one name are told apart |
+| **Debounced at 300ms** | VERIFIED | 1 | YES | document 104 asks to "debounce search"; typing "Liberty" is one billed call, not seven |
+| Under 3 characters does not search | VERIFIED | 1 | YES | one or two match most of the city and tell the customer nothing |
+| **A stale answer never overwrites a newer one** | VERIFIED | 2 | YES | a slow response to "Lib" must not replace the results for "Liberty Market" |
+| An outage is not an empty result | VERIFIED | 2 | YES | asserted at both the hook and the screen |
+| The landmarks remain as a floor | VERIFIED | 1 | YES | search can be unavailable — no geocoder, provider down, phone offline — and a customer must still be able to book |
+| The chosen name survives into the quote | VERIFIED | 1 | YES | `StopInput` is coordinates and the platform never stores a name, so the screen holds it; the contract is unchanged |
+
+**A defect found by the test runner crashing.** The first version of the hook took the client as
+an effect dependency. A caller that rebuilds its client each render — which is ordinary React —
+restarted the search on every re-render, which is an infinite loop rather than a debounce; it
+exhausted the Node heap and killed the runner outright. The client is now held in a ref, and a
+test asserts that an unstable client identity still produces exactly one call.
+
+**Verification.** 49 customer-mobile tests, up from 35. `make lint`, `make typecheck` and
+`make test` clean.
+
+**Not done.** No map and no pin. Autocomplete-as-you-type would be a better experience than
+Text Search but costs a second Place Details call per selection. No recent or saved places.
