@@ -1109,3 +1109,30 @@ who lost signal may accept a job that was reassigned four minutes ago, with the 
 in another car — defensible, but not the platform's call to make silently.
 
 **Verification.** 16 tests, `vitest run` in `@platform/mobile`.
+## Driver Earnings — 2026-09-09
+
+A driver could work a shift and had no way to see what they had made. The ledger held
+the answer and nothing asked it.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `EarningsBetween` / `TripEarningsSince` | VERIFIED | 9 | YES | integration, against a real Postgres ledger |
+| `GET /api/v1/driver/earnings` | VERIFIED | n/a | YES | behind the driver role, like every other driver route |
+| **Read from the ledger, not a counter** | VERIFIED | 9 | YES | a second record of what a driver earned is a second record that can disagree with the books, and the one that disagrees is always the one the driver is looking at |
+| **Net, not gross** | VERIFIED | 1 | YES | BD-05 is a flat 20% commission; a driver shown the gross would query every payout they ever received |
+| **A reversal needs no special case** | VERIFIED | 1 | YES | it writes an opposing entry, so the sum already reflects it — anything that excluded reversals separately would be a second rule to keep in step with document 53 |
+| One driver never sees another's | VERIFIED | 1 | YES | |
+| No history is zero, not an error | VERIFIED | 1 | YES | a new driver must see PKR 0, not a failure |
+| An inverted window is refused | VERIFIED | 1 | YES | zero would read as "you earned nothing", which is a different and alarming statement |
+| Trips listed under the total | VERIFIED | 2 | YES | a driver checking earnings is usually checking one trip they think was underpaid |
+| The list is bounded | VERIFIED | 1 | YES | a driver scrolls a shift, not a career |
+| **An outage never shows as zero** | VERIFIED | 2 | YES | asserted at the endpoint (503, not an empty total) and on the screen |
+| The day is the driver's, not UTC's | VERIFIED | n/a | — | a shift ending at 2am belongs to the day it started; a total resetting mid-shift is a support ticket |
+
+**Verification.** The full integration suite passes against real Postgres, Redis, NATS and
+MinIO — `go test -tags=integration ./tests/` green in 16.5s, schema at version 11. 59
+driver-app tests, up from 51.
+
+**Not done.** No payout view: what a driver has *earned* and what has been *paid out* are
+different questions, and the second needs the payout flow that has no provider yet. No date
+range picker — today and the last seven days are what a driver asks for.

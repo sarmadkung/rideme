@@ -34,6 +34,7 @@ func (h *Handler) Routes(mux *http.ServeMux, authenticate func(http.Handler) htt
 	mux.Handle("POST "+p+"/driver/offline", driverOnly(h.offline))
 	mux.Handle("POST "+p+"/driver/location", driverOnly(h.location))
 	mux.Handle("GET "+p+"/driver/assignment", driverOnly(h.assignment))
+	mux.Handle("GET "+p+"/driver/earnings", driverOnly(h.earnings))
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
@@ -232,4 +233,25 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		}
 		httpx.WriteError(w, r, err)
 	}
+}
+
+// earnings answers "what have I made", read from the ledger.
+//
+// A driver asks this at the end of a shift and after a trip they think was
+// underpaid. The second question is why the individual trips travel with the
+// totals: a figure with no breakdown cannot answer it.
+func (h *Handler) earnings(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.EarningsFor(r.Context(), identity.MustPrincipal(r.Context()).UserID)
+	if err != nil {
+		if errors.Is(err, ErrNoLedger) {
+			// Distinct from "you earned nothing": a driver told zero when the
+			// books were simply unreachable would believe they worked for
+			// free.
+			httpx.WriteError(w, r, httpx.Unavailable("earnings are unavailable right now"))
+			return
+		}
+		writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, result)
 }

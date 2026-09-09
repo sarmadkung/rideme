@@ -20,6 +20,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
+	"github.com/sarmadkung/rideme/services/api/internal/finance"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
@@ -172,9 +173,11 @@ func run() error {
 	// The driver surface. Availability, position reporting and "what am I
 	// holding" — the three things a driver's phone needs that no endpoint
 	// offered before.
+	// The ledger is the only record of what a driver earned, so the earnings
+	// surface reads it directly rather than a total kept beside it.
 	driverHandler := driver.NewHandler(driver.NewService(
 		providerStore, tracking.NewStore(pool.Pool, redis.Client), jobStore,
-		tracking.DefaultLimits(), nil))
+		tracking.DefaultLimits(), nil).WithLedger(finance.NewStore(pool.Pool)))
 
 	// Place search. Built only when a geocoder is configured; the routes are
 	// absent otherwise (see places.NewHandler).

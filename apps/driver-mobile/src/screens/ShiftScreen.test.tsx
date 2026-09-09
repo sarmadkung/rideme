@@ -49,7 +49,9 @@ function shift(driver: DriverProfile | null): ShiftState & ShiftActions {
 describe('ShiftScreen', () => {
   it('goes online from offline', () => {
     const state = shift(aDriver({ status: 'OFFLINE' }));
-    const view = render(<ShiftScreen shift={state} location={located()} />);
+    const view = render(
+      <ShiftScreen shift={state} location={located()} onShowEarnings={jest.fn()} />,
+    );
 
     fireEvent.press(view.getByTestId('shift-toggle'));
     expect(state.goOnline).toHaveBeenCalledWith(HERE);
@@ -58,7 +60,9 @@ describe('ShiftScreen', () => {
 
   it('goes offline from online', () => {
     const state = shift(aDriver({ status: 'AVAILABLE' }));
-    const view = render(<ShiftScreen shift={state} location={located()} />);
+    const view = render(
+      <ShiftScreen shift={state} location={located()} onShowEarnings={jest.fn()} />,
+    );
 
     fireEvent.press(view.getByTestId('shift-toggle'));
     expect(state.goOffline).toHaveBeenCalled();
@@ -68,7 +72,7 @@ describe('ShiftScreen', () => {
   it('says why a driver cannot go online rather than doing nothing', () => {
     // "Go online" that silently fails is the worst version of this screen.
     const unverified = shift(aDriver({ verification_status: 'UNDER_REVIEW' }));
-    render(<ShiftScreen shift={unverified} location={located()} />);
+    render(<ShiftScreen shift={unverified} location={located()} onShowEarnings={jest.fn()} />);
     expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/being verified/i);
 
     fireEvent.press(screen.getByTestId('shift-toggle'));
@@ -79,14 +83,18 @@ describe('ShiftScreen', () => {
     // Dispatch matches jobs to vehicle capabilities, so a driver with none is
     // never offered anything and would sit online wondering why.
     const state = shift(aDriver({ active_vehicle_id: undefined }));
-    render(<ShiftScreen shift={state} location={located()} />);
+    render(<ShiftScreen shift={state} location={located()} onShowEarnings={jest.fn()} />);
     expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/active vehicle/i);
   });
 
   it('waits for a location before letting a driver go online', () => {
     const state = shift(aDriver());
     render(
-      <ShiftScreen shift={state} location={unlocated('starting', 'Waiting for your location.')} />,
+      <ShiftScreen
+        shift={state}
+        location={unlocated('starting', 'Waiting for your location.')}
+        onShowEarnings={jest.fn()}
+      />,
     );
     expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/location/i);
 
@@ -98,7 +106,13 @@ describe('ShiftScreen', () => {
     // Refused and switched-off need different actions from the driver. One
     // sentence covering both sends half of them to the wrong setting.
     const state = shift(aDriver());
-    render(<ShiftScreen shift={state} location={unlocated('denied', 'Enable it in Settings.')} />);
+    render(
+      <ShiftScreen
+        shift={state}
+        location={unlocated('denied', 'Enable it in Settings.')}
+        onShowEarnings={jest.fn()}
+      />,
+    );
     expect(screen.getByTestId('shift-blocker')).toHaveTextContent(/Settings/);
   });
 
@@ -107,7 +121,7 @@ describe('ShiftScreen', () => {
     // app for it to be noticed.
     const state = shift(aDriver());
     const location = unlocated('denied', 'Enable it in Settings.');
-    render(<ShiftScreen shift={state} location={location} />);
+    render(<ShiftScreen shift={state} location={location} onShowEarnings={jest.fn()} />);
 
     fireEvent.press(screen.getByTestId('location-retry'));
     expect(location.retry).toHaveBeenCalled();
@@ -117,7 +131,23 @@ describe('ShiftScreen', () => {
     // Nothing has failed yet; a button implying otherwise invites a driver to
     // fix something that is not broken.
     const state = shift(aDriver());
-    render(<ShiftScreen shift={state} location={unlocated('starting', 'Waiting.')} />);
+    render(
+      <ShiftScreen
+        shift={state}
+        location={unlocated('starting', 'Waiting.')}
+        onShowEarnings={jest.fn()}
+      />,
+    );
     expect(screen.queryByTestId('location-retry')).toBeNull();
+  });
+
+  it('offers a way to see earnings from the idle screen', () => {
+    const onShowEarnings = jest.fn();
+    render(
+      <ShiftScreen shift={shift(aDriver())} location={located()} onShowEarnings={onShowEarnings} />,
+    );
+
+    fireEvent.press(screen.getByTestId('show-earnings'));
+    expect(onShowEarnings).toHaveBeenCalled();
   });
 });
