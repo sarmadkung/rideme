@@ -589,11 +589,15 @@ Documents 17, 28, 48, 116, 179.
 | User-facing error mapping | VERIFIED | 2 | asserted to leak no internal code; preserves the server's deliberate ambiguity about whether an account exists |
 | ADR-006 consequences handled | VERIFIED | n/a | mobile Jest maps `@platform/*` to source, so transitive deps and ESM `.js` specifiers both needed handling |
 
-**Not built.** Screens and navigation for booking, tracking, order history, notifications and
-profile. Driver onboarding, earnings. **Background** location and its native module. Offline
-mutation queue. Push registration. Performance budgets (BD-19 requires real-device measurement).
+**Not built.** Order history and profile screens. Driver onboarding. **Background** location and
+its native module. Push registration and notification preferences. Map display and navigation
+handoff. Performance budgets (BD-19 requires real-device measurement).
 
-Foreground location landed 2026-08-29 — see below.
+**Built since this table was written**, each with its own entry below: customer booking and
+driver trip flows (2026-08-29) · foreground location (2026-08-29) · customer place search
+(2026-09-08) · offline mutation queue (2026-09-08, built and tested but deliberately wired to
+nothing pending B-7/BD-21) · driver earnings (2026-09-09). The per-slice entries are the
+authority; this table is the phase summary and was stale until 2026-09-09.
 
 ## Phase 13 — Operational Dashboards · **PARTIAL**
 
@@ -660,25 +664,15 @@ billing-locked since 2026-08-27, which is external to this repository.
 
 ## Remaining Non-Blocking Work
 
-Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
-`MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
+**Superseded 2026-09-09.** This section held a second phase-status table, written against the
+`IMPLEMENTATION_PLAN.md` spine during Phase 1, when every phase after 1 genuinely was
+`NOT_STARTED`. It was never updated, so by 2026-09-09 it reported eleven verified phases as not
+started and contradicted both the per-phase sections above and the roadmap's live record.
 
-| Phase | Status | Notes |
-|---|---|---|
-| 2 — infrastructure hardening | NOT_STARTED | local infrastructure landed in Phase 1; cloud is Phase 15 |
-| 3 — backend foundation | NOT_STARTED | BD-07 due before financial code |
-| 4 — authentication | NOT_STARTED | |
-| 5 — canonical domain | NOT_STARTED | ADR-004 to resolve here |
-| 6 — pricing / quote | NOT_STARTED | |
-| 7 — dispatch | NOT_STARTED | BD-03, BD-04 |
-| 8 — location + realtime | NOT_STARTED | BD-15, BD-17 |
-| 9 — ride vertical slice | NOT_STARTED | BD-01 … BD-06 |
-| 10 — delivery | NOT_STARTED | BD-10, BD-16 |
-| 11 — grocery | NOT_STARTED | BD-11, BD-12 |
-| 12 — cargo | NOT_STARTED | BD-13 |
-| 13 — financial completeness | NOT_STARTED | BD-08, BD-09 |
-| 14 — operations console | NOT_STARTED | |
-| 15 — production readiness | NOT_STARTED | BD-14, BD-15, BD-19 |
+It is removed rather than corrected. A second place recording which phase is finished is a
+second place that can be wrong, and the roadmap already owns that record:
+`MASTER_IMPLEMENTATION_ROADMAP.md` → **Live record**, in the roadmap's own numbering. Per-phase
+evidence stays in the sections above.
 
 ## Blocked
 
