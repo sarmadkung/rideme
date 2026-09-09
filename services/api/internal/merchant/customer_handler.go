@@ -353,6 +353,11 @@ func customerError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrNotACart):
 		httpx.WriteError(w, r, httpx.Conflict(
 			"this order has been placed and can no longer be changed"))
+	case errors.Is(err, ErrEmptyCart):
+		// A state problem, not a malformed request: the checkout is well
+		// formed and the cart is simply empty. Reaching the default arm made
+		// the customer's own mistake look like a server fault.
+		httpx.WriteError(w, r, httpx.Conflict("there is nothing in this cart yet"))
 	case errors.Is(err, ErrNoDestination):
 		httpx.WriteError(w, r, httpx.Validation("where should this be delivered?",
 			map[string]string{"delivery": "an address and its coordinates are both required"}))
