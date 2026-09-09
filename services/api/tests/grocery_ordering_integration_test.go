@@ -206,7 +206,16 @@ func TestAProductWithNoInventoryRowIsNotOffered(t *testing.T) {
 	// available is a cart that fails at checkout for no visible reason.
 	h := newMerchantHarness(t)
 	ctx := context.Background()
-	s := h.aShop(t) // aShop writes no inventory
+	s := h.aShop(t)
+
+	// A product on the catalogue that never reached a shelf: no inventory row
+	// at this store, which is what Reserve refuses.
+	if err := h.pool.QueryRow(ctx,
+		`INSERT INTO products (merchant_id, name, price_minor, status)
+		 VALUES ($1, 'Imported Olive Oil', 180000, 'ACTIVE') RETURNING id::text`,
+		s.merchantID).Scan(&s.productID); err != nil {
+		t.Fatal(err)
+	}
 
 	products, err := h.store.ProductsAt(ctx, s.storeID, 50)
 	if err != nil {
@@ -375,5 +384,226 @@ func TestACartIsNotOrderHistory(t *testing.T) {
 	}
 	if len(found) != 0 {
 		t.Fatalf("a cart appeared in order history: %+v", found)
+	}
+}
+
+// --- stock a placed order holds (document 069) -------------------------------
+
+// stockOf reads what the shelf says: how much is there and how much is spoken
+// for.
+func (h *merchantHarness) stockOf(t *testing.T, s shop) (quantity *int, reserved int) {
+	t.Helper()
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT quantity, reserved_quantity FROM inventory
+		  WHERE store_id = $1 AND product_id = $2 AND variant_id IS NULL`,
+		s.storeID, s.productID).Scan(&quantity, &reserved); err != nil {
+		t.Fatal(err)
+	}
+	return quantity, reserved
+}
+
+// aStockedShop is a located shop with a counted shelf rather than a shop that
+// merely says "available".
+func (h *merchantHarness) aStockedShop(t *testing.T, units int) shop {
+	t.Helper()
+	s := h.aLocatedShop(t, somewhereNew(), true)
+	if err := h.store.SetInventory(context.Background(), s.storeID, s.productID, "",
+		true, &units); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func (h *merchantHarness) aCartOf(t *testing.T, s shop, units int) merchant.Order {
+	t.Helper()
+	ctx := context.Background()
+	cart, err := h.store.OpenCart(ctx, s.merchantID, s.storeID, h.aUser(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", units, merchant.PreferAsk); err != nil {
+		t.Fatal(err)
+	}
+	return cart
+}
+
+func TestPlacingAnOrderHoldsTheStock(t *testing.T) {
+	h := newMerchantHarness(t)
+	s := h.aStockedShop(t, 10)
+	cart := h.aCartOf(t, s, 3)
+
+	if _, reserved := h.stockOf(t, s); reserved != 0 {
+		t.Fatalf("a cart already holds stock: %d", reserved)
+	}
+	if _, err := h.store.Place(context.Background(), cart.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	quantity, reserved := h.stockOf(t, s)
+	if reserved != 3 {
+		t.Errorf("reserved = %d, want 3", reserved)
+	}
+	// Reserving is not selling. The shelf still holds ten until they are
+	// picked.
+	if quantity == nil || *quantity != 10 {
+		t.Errorf("quantity = %v, want 10 until the goods leave", quantity)
+	}
+}
+
+func TestTheLastBagOfRiceIsSoldOnce(t *testing.T) {
+	// Two customers, one unit. Before this the inventory table's
+	// anti-overselling constraint had nothing to enforce, because nothing ever
+	// wrote a reservation.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 1)
+	first := h.aCartOf(t, s, 1)
+	second := h.aCartOf(t, s, 1)
+
+	if _, err := h.store.Place(ctx, first.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatalf("the first customer could not order: %v", err)
+	}
+	_, err := h.store.Place(ctx, second.ID, aDestination(), time.Now().UTC())
+	if !errors.Is(err, merchant.ErrOutOfStock) {
+		t.Fatalf("the second order took stock that was gone: %v", err)
+	}
+
+	_, reserved := h.stockOf(t, s)
+	if reserved != 1 {
+		t.Errorf("reserved = %d, want 1 — the refused order must hold nothing", reserved)
+	}
+	// And it is still a cart, so the customer can change it rather than
+	// finding a placed order for goods that do not exist.
+	unplaced, err := h.store.OrderByID(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unplaced.Status != merchant.StatusCart {
+		t.Errorf("the refused order is %s", unplaced.Status)
+	}
+}
+
+func TestARejectedOrderGivesTheStockBack(t *testing.T) {
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 5)
+	cart := h.aCartOf(t, s, 2)
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.store.Reject(ctx, cart.ID, merchant.StatusPlaced, s.merchantID,
+		"the delivery did not arrive"); err != nil {
+		t.Fatal(err)
+	}
+	if _, reserved := h.stockOf(t, s); reserved != 0 {
+		t.Errorf("reserved = %d after a rejection, want 0", reserved)
+	}
+}
+
+func TestStockIsNotGivenBackTwice(t *testing.T) {
+	// A second release would invent stock the shop does not have.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 5)
+	cart := h.aCartOf(t, s, 2)
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.Reject(ctx, cart.ID, merchant.StatusPlaced, s.merchantID, "sold out"); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := h.store.ReleaseOrderStock(ctx, cart.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quantity, reserved := h.stockOf(t, s)
+	if reserved != 0 || quantity == nil || *quantity != 5 {
+		t.Errorf("shelf = %v units with %d reserved, want 5 and 0", quantity, reserved)
+	}
+}
+
+func TestPickedGoodsLeaveTheShelf(t *testing.T) {
+	// Consuming is what makes the count fall. Reserved-forever would mean a
+	// shop whose stock level never changes.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 5)
+	cart := h.aCartOf(t, s, 2)
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.store.ConsumeOrderStock(ctx, cart.ID); err != nil {
+		t.Fatal(err)
+	}
+	quantity, reserved := h.stockOf(t, s)
+	if quantity == nil || *quantity != 3 {
+		t.Errorf("quantity = %v, want 3", quantity)
+	}
+	if reserved != 0 {
+		t.Errorf("reserved = %d, want 0 — the hold ends when the goods do", reserved)
+	}
+
+	// And consuming again changes nothing.
+	if err := h.store.ConsumeOrderStock(ctx, cart.ID); err != nil {
+		t.Fatal(err)
+	}
+	if quantity, _ := h.stockOf(t, s); quantity == nil || *quantity != 3 {
+		t.Errorf("quantity = %v after a second consume", quantity)
+	}
+}
+
+func TestAnUncountedShelfStillHoldsAndReleases(t *testing.T) {
+	// A shop that tracks availability but not counts (quantity IS NULL) is a
+	// real shop — most kiryanas. It must still reserve, so the state machine
+	// is the same everywhere, and its null count must survive.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aLocatedShop(t, somewhereNew(), true) // SetInventory(available, nil)
+	cart := h.aCartOf(t, s, 4)
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatalf("an uncounted shelf refused an order: %v", err)
+	}
+	if quantity, reserved := h.stockOf(t, s); quantity != nil || reserved != 4 {
+		t.Errorf("shelf = %v with %d reserved, want null and 4", quantity, reserved)
+	}
+
+	if err := h.store.ConsumeOrderStock(ctx, cart.ID); err != nil {
+		t.Fatal(err)
+	}
+	if quantity, reserved := h.stockOf(t, s); quantity != nil || reserved != 0 {
+		t.Errorf("shelf = %v with %d reserved, want null and 0", quantity, reserved)
+	}
+}
+
+func TestAnOrderForSomethingTheShopDoesNotStockIsRefused(t *testing.T) {
+	// Reserve matches no row, so the placement fails rather than creating an
+	// order for goods the shop was never told it had.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aShop(t)
+
+	// A product on the catalogue that never reached a shelf.
+	var unshelved string
+	if err := h.pool.QueryRow(ctx,
+		`INSERT INTO products (merchant_id, name, price_minor, status)
+		 VALUES ($1, 'Imported Olive Oil', 180000, 'ACTIVE') RETURNING id::text`,
+		s.merchantID).Scan(&unshelved); err != nil {
+		t.Fatal(err)
+	}
+
+	cart, err := h.store.OpenCart(ctx, s.merchantID, s.storeID, h.aUser(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.AddItem(ctx, cart.ID, unshelved, "", 1, merchant.PreferAsk); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); !errors.Is(err, merchant.ErrOutOfStock) {
+		t.Fatalf("err = %v, want ErrOutOfStock", err)
 	}
 }

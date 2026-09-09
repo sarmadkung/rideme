@@ -1416,3 +1416,46 @@ transport.
 **Verification.** Partial: no Go toolchain in this session. 15 handler tests and 3 integration
 tests are written and unverified. The integration tests exercise document 102's authorization SQL
 against a real database for the first time.
+
+## Stock a Placed Order Holds — 2026-09-09
+
+`inventory` has carried the constraint that makes overselling impossible since `000009`:
+`reserved_quantity <= quantity`, enforced by the database rather than by whoever remembered to
+check. `Reserve` and `ReleaseReservation` were written and tested in Phase 10. **Nothing ever
+called either.** So two customers could both place an order for the last bag of rice, and one of
+them was going to be disappointed by a shop rather than by a screen — which is the failure
+document 069 exists to prevent and the one `ErrOutOfStock` was already mapped for.
+
+Reserving is only half a rule, so this slice is the whole of it: an order holds stock from the
+moment it is placed, gives it back on every path that ends it before pickup, and consumes it when
+the goods leave the shelf. Migration `000013` records which of those has happened, because
+releasing twice invents stock and consuming twice loses it.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Placing an order reserves every line | IMPLEMENTED | 2 | — | in the transaction that places it, not after: doing it afterwards leaves a window where an order exists for goods somebody else is being sold |
+| **One statement for the whole cart** | IMPLEMENTED | n/a | — | a cart of twelve lines is one round trip, and cannot half succeed. The row count is compared against the line count, so a single unavailable line refuses the placement |
+| **The last bag of rice is sold once** | IMPLEMENTED | 1 | — | two customers, one unit: the second is refused with `ErrOutOfStock` and their cart is still a cart, so they can change it rather than owning an order for goods that do not exist |
+| A rejected order gives the stock back | IMPLEMENTED | 1 | — | the shop keeps the goods, so the shelf does |
+| An order nobody answered gives it back | IMPLEMENTED | n/a | — | the sweeper releases what each expired order held; ten minutes of held rice for an order that no longer exists is stock the next customer is told the shop lacks |
+| **Neither release nor consume can run twice** | IMPLEMENTED | 2 | — | compare-and-set on `stock_state`. Three releases in a row leave the shelf exactly where one did |
+| Picked goods leave the shelf | IMPLEMENTED | 2 | — | Mark Ready consumes: `quantity` falls and the hold ends. Held-forever would mean a shop whose count never changes, and a shelf empty in the aisle and full in the database sells the next customer nothing |
+| The retry path does not consume twice | IMPLEMENTED | 1 | — | Mark Ready is idempotent, and the second call skips the transition and the consumption with it |
+| **An uncounted shelf still reserves** | IMPLEMENTED | 1 | — | `quantity IS NULL` is a real shop — most kiryanas track availability, not counts. It holds and releases like any other, and its null count survives consumption |
+| A product that never reached a shelf cannot be ordered | IMPLEMENTED | 1 | — | no inventory row means no match, which is the same answer `Reserve` has always given and the same one the catalogue now shows |
+
+**A fixture change that is the point, not noise.** Every integration fixture that placed an order
+had to start stocking its product. `aShop` and `aShopOwnedBy` now write an availability row,
+because a shop with a catalogue and no shelf is a shop that cannot take an order — which is
+correct behaviour and would otherwise have failed a dozen tests about something else.
+
+**Not done.** A customer cannot cancel their own order — there is no endpoint, so the customer's
+release path does not exist yet even though the mechanism does. Consumption happens at
+`READY_FOR_PICKUP` rather than at handover to the driver; if an order is cancelled after being
+bagged, the goods are already counted as gone, which is arguably right and definitely
+undocumented. `ReleaseReservation`, the single-line method, is now the only one of the pair still
+uncalled — the order-level release supersedes it and it should probably go.
+
+**Verification.** Partial: no Go toolchain in this session. 2 handler tests and 7 integration
+tests are written and unverified. Run `make migrate-up`/`migrate-down` too — the schema goes to
+version 13 and back.

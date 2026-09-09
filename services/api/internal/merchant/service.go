@@ -30,6 +30,7 @@ type OrderStore interface {
 	Reject(ctx context.Context, orderID string, from OrderStatus, actorID, reason string) (Order, error)
 	OutletByID(ctx context.Context, id string) (Outlet, error)
 	AttachJob(ctx context.Context, orderID, jobID string) error
+	ConsumeOrderStock(ctx context.Context, orderID string) error
 }
 
 // JobCreator is the delivery half of document 070's two lifecycles.
@@ -250,6 +251,13 @@ func (s *Service) MarkReady(ctx context.Context, userID, orderID string) (Order,
 		ready, err = s.store.Transition(ctx, order.ID, StatusPreparing, StatusReadyForPickup,
 			"MERCHANT", m.ID, nil)
 		if err != nil {
+			return Order{}, "", err
+		}
+		// The goods are off the shelf and in a bag. Held stock that is never
+		// consumed means a shop's count never falls, and a shelf that is empty
+		// in the aisle and full in the database sells the next customer
+		// nothing. Idempotent, so the retry path below does not double-count.
+		if err := s.store.ConsumeOrderStock(ctx, ready.ID); err != nil {
 			return Order{}, "", err
 		}
 	}

@@ -256,11 +256,19 @@ func (s *Store) Place(ctx context.Context, orderID string, to Delivery, now time
 	}
 	deadline := now.Add(time.Duration(*timeoutSeconds) * time.Second)
 
+	// Hold the stock in the same transaction that places the order. Document
+	// 069 asks for atomic reservation, and doing it afterwards means a window
+	// where an order exists for goods somebody else is also being sold.
+	if err := reserveOrderStock(ctx, tx, orderID); err != nil {
+		return Order{}, err
+	}
+
 	order, err := scanOrder(tx.QueryRow(ctx,
 		`UPDATE orders SET status = 'PLACED', accept_deadline = $2,
 		                   delivery_address = $3,
 		                   delivery_location = ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography,
 		                   delivery_notes = NULLIF($6, ''),
+		                   stock_state = 'RESERVED',
 		                   updated_at = now()
 		  WHERE id = $1 AND status = 'CART' RETURNING `+orderColumns,
 		orderID, deadline, to.Address,
@@ -336,6 +344,12 @@ func (s *Store) Reject(ctx context.Context, orderID string, from OrderStatus, ac
 	if _, err := s.pool.Exec(ctx,
 		`UPDATE orders SET rejection_reason = $2 WHERE id = $1`, orderID, reason); err != nil {
 		return Order{}, fmt.Errorf("record rejection reason: %w", err)
+	}
+	// The shop keeps the goods, so the shelf gets them back. A rejection that
+	// left the stock held would take a bag of rice out of circulation for an
+	// order nobody is preparing.
+	if err := s.ReleaseOrderStock(ctx, orderID); err != nil {
+		return Order{}, err
 	}
 	return order, nil
 }
@@ -772,4 +786,116 @@ func (s *Store) AttachJob(ctx context.Context, orderID, jobID string) error {
 		return ErrJobAlreadyAttached
 	}
 	return nil
+}
+
+
+// --- inventory held by an order (document 069) -------------------------------
+
+// reserveOrderStock holds every line of an order against the store's inventory.
+//
+// One statement for the whole cart rather than one per line: a cart of twelve
+// items is one round trip, and — more importantly — one statement cannot half
+// succeed. The `reserved_quantity + i.quantity <= quantity` predicate is the
+// same one Reserve uses, and the table's own CHECK is behind it, so two
+// customers reaching for the last bag of rice cannot both be told yes.
+//
+// A line whose store holds no inventory row for it does not match, which is
+// how a product nobody stocked is refused rather than silently sold.
+func reserveOrderStock(ctx context.Context, tx pgx.Tx, orderID string) error {
+	var lines int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM order_items WHERE order_id = $1`, orderID).Scan(&lines); err != nil {
+		return fmt.Errorf("count order lines: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE inventory inv
+		    SET reserved_quantity = inv.reserved_quantity + i.quantity, updated_at = now()
+		   FROM order_items i
+		   JOIN orders o ON o.id = i.order_id
+		  WHERE i.order_id = $1
+		    AND inv.store_id = o.store_id
+		    AND inv.product_id = i.product_id
+		    AND inv.variant_id IS NOT DISTINCT FROM i.variant_id
+		    AND inv.available
+		    AND (inv.quantity IS NULL OR inv.reserved_quantity + i.quantity <= inv.quantity)`,
+		orderID)
+	if err != nil {
+		return fmt.Errorf("reserve order stock: %w", err)
+	}
+	if int(tag.RowsAffected()) != lines {
+		// Some line could not be held. The caller's transaction rolls back, so
+		// the ones that could are not left reserved for an order that never
+		// existed.
+		return ErrOutOfStock
+	}
+	return nil
+}
+
+// ReleaseOrderStock hands back what a cancelled order was holding.
+//
+// Compare-and-set on the order's stock state, so a release cannot run twice:
+// the second one would invent stock the shop does not have. Cancelling an order
+// that never reserved anything is not an error — it is most orders, since
+// nothing before this held stock at all.
+func (s *Store) ReleaseOrderStock(ctx context.Context, orderID string) error {
+	return s.settleOrderStock(ctx, orderID, "RELEASED")
+}
+
+// ConsumeOrderStock turns a reservation into stock that has gone.
+//
+// Called when the goods leave the shelf. Reserved-but-never-consumed would mean
+// a shop's stock level never falls, and a shelf that is empty in the aisle and
+// full in the database is how the next customer is sold nothing.
+func (s *Store) ConsumeOrderStock(ctx context.Context, orderID string) error {
+	return s.settleOrderStock(ctx, orderID, "CONSUMED")
+}
+
+func (s *Store) settleOrderStock(ctx context.Context, orderID, to string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE orders SET stock_state = $2, updated_at = now()
+		  WHERE id = $1 AND stock_state = 'RESERVED'`, orderID, to)
+	if err != nil {
+		return fmt.Errorf("settle order stock: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		// Nothing was being held, or somebody settled it first. Both are
+		// ordinary and neither should undo the caller's work.
+		return nil
+	}
+
+	// RELEASED gives the reservation back; CONSUMED takes the goods with it.
+	// The quantity column is nullable — a shop that tracks availability but not
+	// counts — and COALESCE keeps that shop's rows untouched by the subtraction
+	// while still clearing the hold.
+	query := `UPDATE inventory inv
+	             SET reserved_quantity = GREATEST(0, inv.reserved_quantity - i.quantity),
+	                 updated_at = now()
+	            FROM order_items i
+	           WHERE i.order_id = $1
+	             AND inv.store_id = (SELECT store_id FROM orders WHERE id = $1)
+	             AND inv.product_id = i.product_id
+	             AND inv.variant_id IS NOT DISTINCT FROM i.variant_id`
+	if to == "CONSUMED" {
+		query = `UPDATE inventory inv
+		            SET reserved_quantity = GREATEST(0, inv.reserved_quantity - i.quantity),
+		                quantity = CASE WHEN inv.quantity IS NULL THEN NULL
+		                                ELSE GREATEST(0, inv.quantity - i.quantity) END,
+		                updated_at = now()
+		           FROM order_items i
+		          WHERE i.order_id = $1
+		            AND inv.store_id = (SELECT store_id FROM orders WHERE id = $1)
+		            AND inv.product_id = i.product_id
+		            AND inv.variant_id IS NOT DISTINCT FROM i.variant_id`
+	}
+	if _, err := tx.Exec(ctx, query, orderID); err != nil {
+		return fmt.Errorf("settle inventory: %w", err)
+	}
+	return tx.Commit(ctx)
 }

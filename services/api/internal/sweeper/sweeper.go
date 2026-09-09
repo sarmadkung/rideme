@@ -73,6 +73,15 @@ func (s *Sweeper) Once(ctx context.Context) {
 		} else if len(expired) > 0 {
 			s.logger.Info("orders expired unanswered", slog.Int("count", len(expired)))
 		}
+		// An order nobody answered was holding stock from the moment it was
+		// placed. Ten minutes of held rice for an order that no longer exists
+		// is stock the next customer is told the shop does not have.
+		for _, order := range expired {
+			if err := s.orders.ReleaseOrderStock(ctx, order.ID); err != nil {
+				s.logger.Error("could not release stock for an expired order",
+					slog.String("order_id", order.ID), slog.String("error", err.Error()))
+			}
+		}
 	}
 	if s.dispatch != nil {
 		// Drive dispatch before expiring searches. A job that has just become
