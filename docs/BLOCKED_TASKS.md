@@ -242,3 +242,49 @@ online is a defensible default and costs nothing to change.
 
 **Status:** **OPEN.** Blocks nothing — foreground tracking ships on the defaults above.
 Background tracking is a separate slice and is not blocked by this.
+
+---
+
+## B-7 — BD-21: which mutations may be queued offline, and for how long
+
+**Task:** Offline mutation queue for the mobile apps (`packages/mobile`, Phase 12).
+
+**Reason:** `mobile-offline-sync` names both halves of this as blocking conditions: "Which
+mutations may be queued at all is undocumented for a flow → queuing a job acceptance has real
+operational consequences" and "Queue expiry windows unspecified → ask rather than choosing."
+
+Documents 184, 344 and 345 own offline behaviour and none of them classifies a single mutation.
+The question is not technical. Queuing a driver's job acceptance means a driver who lost signal
+in a car park may accept a job that was reassigned four minutes ago, and the customer is already
+in another car. Queuing a customer's booking means a ride requested at 6pm may be created at
+6:20pm for someone who has given up and walked. Both are defensible; neither is the platform's
+call to make silently.
+
+**Relevant documents:** `184-offline-network-resilience.md`, `344-mobile-offline-architecture.md`,
+`345-mobile-sync-engine.md`, `185-data-consistency-and-idempotency.md`
+
+**Decision required:** For each mutation, one of three: safe to queue, must be online, or
+optimistic-with-rollback. And for each queueable one, the age past which it should be discarded
+rather than sent.
+
+| Mutation | Consequence of replaying it late |
+|---|---|
+| Driver location report | Low. The server already rejects stale fixes (document 048) |
+| Driver goes online / offline | A driver shown as available who is not, or the reverse |
+| Driver accepts an offer | The offer may be gone; the customer may already have another driver |
+| Driver arrives / starts / completes | A trip completed at a time it was not; affects the fare |
+| Customer creates a booking | A ride appears long after the customer stopped wanting it |
+| Any payment | Never queued — `payment-flow` forbids assuming a payment succeeded |
+
+**What ships in the meantime:** the *mechanism* only — `MutationQueue` in `@platform/mobile`,
+durable, bounded, carrying the idempotency key generated when the user acted. **Nothing is wired
+to it yet.** Expiry is per kind and there is no default: a kind with no configured age is never
+expired, so the queue cannot quietly invent a rule about when someone's intent stops counting.
+The one deliberate absence of a default is the point.
+
+**Recommendation:** Location reports are safe and are the obvious first thing to wire — the
+server already judges freshness, and a driver's trail through a basement is worth having.
+Everything below the first row wants the owner's answer, and job acceptance wants it most.
+
+**Status:** **OPEN.** Blocks nothing that is built. The queue exists and is tested; what may
+travel on it is the open question.

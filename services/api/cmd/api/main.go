@@ -24,6 +24,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
+	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/internal/settings"
@@ -150,7 +151,7 @@ func run() error {
 	// Booking, pricing and routing. The straight-line estimator is always the
 	// last resort, so a fare built on a guess is never presented as a measured
 	// one; a configured provider simply moves most routes off the guess.
-	routingProviders, err := buildRoutingProviders(cfg, logger)
+	routingProviders, err := buildRoutingProviders(cfg, redis, logger)
 	if err != nil {
 		return err
 	}
@@ -178,10 +179,14 @@ func run() error {
 		providerStore, tracking.NewStore(pool.Pool, redis.Client), jobStore,
 		tracking.DefaultLimits(), nil).WithLedger(finance.NewStore(pool.Pool)))
 
+	// Place search. Built only when a geocoder is configured; the routes are
+	// absent otherwise (see places.NewHandler).
+	placesHandler := places.NewHandler(buildGeocoder(cfg, logger))
+
 	server := &http.Server{
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
-			driverHandler, issuer, serviceName, version, logger),
+			driverHandler, placesHandler, issuer, serviceName, version, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -234,18 +239,49 @@ func run() error {
 // estimator and marks every result estimated, which is what a platform without
 // a maps contract should show. Config has already refused a selected provider
 // with no credential, so a failure here is a real one.
-func buildRoutingProviders(cfg *config.Config, logger *slog.Logger) ([]routing.Provider, error) {
+func buildRoutingProviders(cfg *config.Config, redis *cache.Client, logger *slog.Logger) ([]routing.Provider, error) {
 	switch cfg.MapProvider {
 	case "google":
 		provider, err := routing.NewGoogleProvider(cfg.MapsAPIKey, routing.WithGoogleLogger(logger))
 		if err != nil {
 			return nil, fmt.Errorf("routing provider: %w", err)
 		}
-		logger.Info("routing provider configured", "provider", provider.Name())
-		return []routing.Provider{provider}, nil
+		// Every route is billed, and a city quotes the same trips repeatedly
+		// (document 104). The cache sits in front of the provider rather than
+		// in front of the fallback chain, so a Google route and a straight-line
+		// estimate can never share an entry.
+		cached := routing.NewCachingProvider(
+			provider,
+			routing.NewRedisCache(redis.Client, logger),
+			routing.DefaultCacheTTL,
+		)
+		logger.Info("routing provider configured",
+			"provider", provider.Name(), "cache_ttl", routing.DefaultCacheTTL.String())
+		return []routing.Provider{cached}, nil
 	default:
 		logger.Warn("no routing provider configured; distances are straight-line estimates",
 			"map_provider", cfg.MapProvider)
 		return nil, nil
 	}
+}
+
+// buildGeocoder returns the configured geocoder, or nil.
+//
+// Nil is a legitimate outcome and not an error: without a maps provider the
+// platform has no way to turn text into a place, and the honest response is
+// for the search endpoints not to exist rather than to answer badly.
+func buildGeocoder(cfg *config.Config, logger *slog.Logger) routing.Geocoder {
+	if cfg.MapProvider != "google" {
+		return nil
+	}
+	geocoder, err := routing.NewGoogleGeocoder(cfg.MapsAPIKey, routing.WithGoogleLogger(logger))
+	if err != nil {
+		// Config has already refused google with no key, so this cannot happen
+		// from configuration. Log rather than fail: place search is a
+		// convenience, and losing it must not stop the platform booking rides.
+		logger.Error("geocoder could not be built; place search is disabled", "error", err.Error())
+		return nil
+	}
+	logger.Info("geocoder configured", "provider", geocoder.Name())
+	return geocoder
 }

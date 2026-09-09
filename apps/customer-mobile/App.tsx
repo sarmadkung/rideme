@@ -50,7 +50,7 @@ function Shell() {
       {booking.stage === 'tracking' ? (
         <TripScreen booking={booking} />
       ) : (
-        <BookingScreen booking={booking} />
+        <BookingScreen booking={booking} client={client} />
       )}
       <StatusBar style="light" />
     </SafeAreaView>

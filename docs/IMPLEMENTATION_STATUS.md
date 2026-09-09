@@ -842,7 +842,7 @@ now decodes a real response with `DisallowUnknownFields`.
 
 | Not built | Why |
 |---|---|
-| Map selection | No *on-screen* map is integrated. Server-side routing now uses Google (2026-08-29), so distances are real; pickup and destination are still chosen from named places rather than a pin. The flow behind the control is the real one. |
+| Map selection | No *on-screen* map is integrated. Server-side routing uses Google (2026-08-29) and free-text place search landed 2026-09-08, so a customer can book anywhere in the city by typing — but still by typing, not by dropping a pin. |
 | Navigation stack | The flow is linear with no back destination worth preserving. A navigator before a second flow is scaffolding without a user. |
 | Realtime tracking | The gateway exists; no client transport does. Polling every 5s, stopping at terminal states. |
 | Driver location on a map | Follows map selection. The job's assignment is shown, not its position. |
@@ -983,6 +983,132 @@ and are now recorded as **B-6 / BD-20** in `BLOCKED_TASKS.md`. The hook takes bo
 defaults to 25 m / 5 s — engineering defaults, marked as such, not a decision inferred from
 silence. Nothing state-dependent is built on them.
 
+## Route Caching — 2026-09-08
+
+Every quote was a billed Google call. Documents 101 and 104 both ask for caching;
+104 names route requests among the platform's principal map costs and asks
+directly to "avoid duplicate route requests" and "reuse route estimates".
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `CachingProvider` wraps a provider (`104`) | VERIFIED | 12 | YES | in front of one provider, not the fallback chain — a Google route and a straight-line estimate must never share an entry |
+| **A reused route is labelled `cached`** | VERIFIED | 1 | YES | document 96: "Never present a fallback as exact." `ConfidenceCached` already existed in the enum |
+| TTL is short on purpose | VERIFIED | 1 | YES | 5 minutes: road distance barely changes, but `TrafficDurationSeconds` an hour old is not stale, it is wrong |
+| **A burst is billed once** | VERIFIED | 1 | YES | single-flight. The cache alone does not help a burst — every caller misses because none has returned yet. 20 simultaneous identical quotes → 1 call |
+| Keys do not round a trip into a different one | VERIFIED | 2 | YES | 4 decimal places ≈ 11 m, finer than a GPS fix; a 500 m difference is a different pickup and is priced as one |
+| Mode and provider version are in the key | VERIFIED | 2 | YES | a truck and a car ask different questions; an upgraded provider must not serve the previous one's answers |
+| Failures are not remembered | VERIFIED | 1 | YES | a rate limit clears; caching it would extend the outage past its end |
+| Scheduled trips bypass the cache | VERIFIED | 1 | YES | a 6pm departure is a different question and must not poison the entries meaning "now" |
+| Matrices are not cached | VERIFIED | 1 | YES | a matrix key is the whole grid, so a hit means the same drivers in the same places — when the answer has most likely changed. 104's advice for matrices is to batch, not cache |
+| A broken cache costs money, not bookings | VERIFIED | n/a | — | `RedisCache` swallows and logs every failure; `Cache` cannot return an error by design |
+
+**Verification.** `go test ./pkg/routing/ -race` run 8 times consecutively, all clean.
+
+**A real defect the race detector caught.** The first concurrency test was flaky at about one
+run in five. The race was in the test's own provider — an unsynchronised counter — but chasing
+it exposed a genuine gap in the implementation: `CachingProvider` had no single-flight, so
+twenty customers quoting the same trip in the same second produced twenty billed calls. The
+cache would have looked like it was working while doing nothing for the one case it exists to
+prevent. `singleflight.Group` was added and the test now asserts the collapse rather than
+merely asserting the absence of a race.
+
+**Not done.** No cache warming, no hit-rate metric — there is still no metrics system in the
+service, so the cache's effect is visible only as a fall in provider log lines.
+## Place Search — 2026-09-08
+
+The customer app picked from five hard-coded Lahore landmarks. Booking anywhere else
+was impossible, and the screen said so in a comment. The server can now turn typed
+text into a place.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `Geocoder` is its own boundary (`105`, `346`) | VERIFIED | 13 | YES | routing.go always said "a provider that also geocodes implements Geocoder separately" — routing and geocoding are billed as different products and can come from different vendors |
+| `GET /api/v1/places` and `/places/reverse` (`014`) | VERIFIED | 10 | YES | authenticated: each call costs money |
+| **The key stays on the server** | VERIFIED | n/a | — | a client searching Google directly needs a key in its bundle, and a key in a bundle is a key anyone can spend |
+| The shared Google HTTP call | VERIFIED | 2 | YES | routing and geocoding share one `get`, so the "key never reaches an error" guarantee cannot drift between them; asserted separately for both |
+| **An outage is not an empty result** | VERIFIED | 2 | YES | 404 for no match, 503 for a broken provider. A customer shown "no results" for an outage retypes their address until they give up |
+| The provider's message is not shown | VERIFIED | 1 | YES | it can name a disabled API or a restricted key — an operator's problem, already logged |
+| Search is biased, not filtered | VERIFIED | 2 | YES | "Liberty" matches several Pakistani cities and a customer in Lahore means Lahore, but an airport across town stays findable |
+| Unroutable results are dropped | VERIFIED | 1 | YES | one would sit in the list looking selectable and fail at quote time |
+| Bounded query and result count | VERIFIED | 2 | YES | an unbounded string is a billed call somebody else sized |
+| Reverse keeps the point asked about | VERIFIED | 1 | YES | moving a pickup to the provider's snapped centroid is a worse answer than the one the customer gave |
+| No geocoder → the routes do not exist | VERIFIED | 1 | YES | an endpoint that always fails is worse than an absent one; a client can detect a 404 and fall back to its own list |
+
+**A defect found by running against the real API, not by reading documentation.** Reverse
+geocoding returned `G9C5+5F5` — a Plus Code. Google orders reverse results by specificity and
+for a point that is not on a building the most specific answer is a Plus Code: precise, correct
+and unusable on a screen where a customer is confirming a pickup. `preferNamedResult` now takes
+the first result that is not one, keeping the Plus Code only where it is the sole answer (a
+field, an unaddressed plot). Live re-check: `31.5204,74.3587` now resolves to
+"50-N Gurumangat Rd" instead.
+
+**Verification.** `go vet` and `go test ./...` clean. Live check against the real API resolved
+"Liberty Market", "Emporium Mall" and "Johar Town block G" to correct Lahore coordinates.
+
+**Not done.** No geocode caching — document 104 asks to "cache stable geocoding" and an address
+is genuinely stable, unlike traffic, so this is the clearest remaining saving. Text Search is
+used rather than Autocomplete: Autocomplete is the better as-you-type experience but returns
+identifiers without coordinates, so every selection costs a second Place Details call. No client
+UI yet — the customer app still shows the five landmarks.
+
+## Customer Place Search — 2026-09-08
+
+The booking screen offered five hard-coded Lahore landmarks. Everywhere else in the city
+was unbookable. A customer can now type an address.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `usePlaceSearch` hook | VERIFIED | 9 | YES | debounced, position-biased, cancellable |
+| `searchPlaces` on the client | VERIFIED | n/a | — | 404 → empty list, because nothing matching is an answer |
+| Search field per stop | VERIFIED | 5 | YES | name and address both shown; the address is how two places with one name are told apart |
+| **Debounced at 300ms** | VERIFIED | 1 | YES | document 104 asks to "debounce search"; typing "Liberty" is one billed call, not seven |
+| Under 3 characters does not search | VERIFIED | 1 | YES | one or two match most of the city and tell the customer nothing |
+| **A stale answer never overwrites a newer one** | VERIFIED | 2 | YES | a slow response to "Lib" must not replace the results for "Liberty Market" |
+| An outage is not an empty result | VERIFIED | 2 | YES | asserted at both the hook and the screen |
+| The landmarks remain as a floor | VERIFIED | 1 | YES | search can be unavailable — no geocoder, provider down, phone offline — and a customer must still be able to book |
+| The chosen name survives into the quote | VERIFIED | 1 | YES | `StopInput` is coordinates and the platform never stores a name, so the screen holds it; the contract is unchanged |
+
+**A defect found by the test runner crashing.** The first version of the hook took the client as
+an effect dependency. A caller that rebuilds its client each render — which is ordinary React —
+restarted the search on every re-render, which is an infinite loop rather than a debounce; it
+exhausted the Node heap and killed the runner outright. The client is now held in a ref, and a
+test asserts that an unstable client identity still produces exactly one call.
+
+**Verification.** 49 customer-mobile tests, up from 35. `make lint`, `make typecheck` and
+`make test` clean.
+
+**Not done.** No map and no pin. Autocomplete-as-you-type would be a better experience than
+Text Search but costs a second Place Details call per selection. No recent or saved places.
+## Offline Mutation Queue — 2026-09-08
+
+Connectivity in this market is a normal condition, not a rare failure. A driver loses
+signal in a basement car park and regains it two streets later.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `MutationQueue` in `@platform/mobile` | VERIFIED | 16 | YES | durable, bounded, ordered |
+| **The idempotency key is the caller's** | VERIFIED | 1 | YES | generated when the user acted, not at send time (document 377) — a replayed booking must not become a second job |
+| Survives an app kill | VERIFIED | 1 | YES | a second instance is what a cold start looks like |
+| A failed send is retried once, not duplicated | VERIFIED | 1 | YES | the failure path is where a queue quietly does work twice |
+| Order is preserved past a stuck mutation | VERIFIED | 1 | YES | delivering a later intent first puts them out of sequence, which the server cannot unpick |
+| **Racing flushes share one pass** | VERIFIED | 1 | YES | a reconnect event and a foreground event arriving together is ordinary |
+| Bounded, oldest dropped first | VERIFIED | 2 | YES | the newest intent is the likeliest to still be true |
+| Expiry is per kind, with no default | VERIFIED | 2 | YES | a kind nobody has ruled on is never expired — see B-6/BD-21 |
+| A corrupt store is an empty one | VERIFIED | 2 | YES | refusing to start over an unparseable cache takes the app down for data it can live without |
+| An unwritable store still works in memory | VERIFIED | 1 | YES | losing the queue to an app kill is bad; refusing the user's action is worse |
+| Cleared on sign-out | VERIFIED | 1 | YES | one account's intent must never flush under another's session |
+
+`@platform/mobile` now runs its own tests. The placeholder script was honest while the package
+held only `useAuth`, which the customer app exercises; the queue is pure logic and deserves a
+runner rather than borrowing an app's.
+
+**Nothing is wired to it yet, deliberately.** Which mutations may be queued, and for how long,
+is a product decision that no document makes and that `mobile-offline-sync` names as a blocking
+condition. It is recorded as **B-7 / BD-21**. Queuing a driver's job acceptance means a driver
+who lost signal may accept a job that was reassigned four minutes ago, with the customer already
+in another car — defensible, but not the platform's call to make silently.
+
+**Verification.** 16 tests, `vitest run` in `@platform/mobile`.
 ## Driver Earnings — 2026-09-09
 
 A driver could work a shift and had no way to see what they had made. The ledger held
