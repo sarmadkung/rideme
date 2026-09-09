@@ -1269,3 +1269,58 @@ next one after Mark Ready. `Report Issue` (document 074) still has no route.
 nothing was compiled or run. 15 handler tests and 11 integration tests are written and
 unverified. `make verify`, `make migrate-up`/`migrate-down` (schema goes to version 12 and back)
 and `go test -tags=integration ./tests/` are the assertion.
+
+## Dispatch Was Never Called — 2026-09-09
+
+Phase 7 (ride booking) and Phase 8 (dispatch engine) are both recorded above as VERIFIED. There
+was no call between them.
+
+`booking.Create` writes a job as `REQUESTED`. `booking.StartSearching` — the method whose
+comment reads "moves a confirmed job into dispatch" — had **no callers**. `dispatch.NewEngine`
+was **never constructed**: `main.go` built the runner as
+`dispatch.NewRunner(nil, jobStore, ...)`, with a nil engine, because the only thing that used
+the runner was the sweeper's expiry pass. `Runner.Attempt` returns immediately for any job that
+is not already `SEARCHING`, and nothing had any callers outside tests.
+
+So every job any customer had ever created sat at `REQUESTED` and was offered to nobody. The
+scoring engine, the nine-term formula, the widening rings, the reservations, the concurrency
+guarantees document 046 demands — all built, all tested, never once run against a real booking.
+`GET /driver/assignment` could only ever answer 404, and the driver app's offer screen could
+never have shown anything.
+
+Every test in `dispatch_integration_test.go` creates its job already `SEARCHING`. That is why
+the gap survived a phase marked VERIFIED: the tests started downstream of the missing call.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The engine is constructed | IMPLEMENTED | n/a | — | one routing service and one tracking store for the process, so dispatch scores against the same routes a quote was priced from and the same pool a driver reports into |
+| `jobs.NeedingDispatch` | IMPLEMENTED | 4 | — | `REQUESTED`, plus `SEARCHING` with no live assignment — the second is what keeps a search alive after a rejection or a timeout |
+| **A job holding an offer is not offered again** | IMPLEMENTED | 1 | — | two live offers for one job is exactly the defect document 046 is about |
+| `Runner.Round` drives the pass | IMPLEMENTED | 5 | — | expired offers released first, because a job whose offer just timed out is precisely a job that needs the next ring |
+| `REQUESTED` → `SEARCHING` is compare-and-set | IMPLEMENTED | 1 | — | a job cancelled between the query and the write is left alone rather than dragged back into a search |
+| **A scheduled job is not dispatched early** | IMPLEMENTED | 1 | — | a driver sent to a pickup nobody is waiting at is worse than a job that waits for its time |
+| One bad job does not stop the pass | IMPLEMENTED | n/a | — | a job with no pickup stop and a driver accepting mid-round are both ordinary; neither is a reason to leave every other waiting customer unserved |
+| A nil engine stays inert | IMPLEMENTED | 1 | — | `Attempt` would have dereferenced it the moment anything called `Round`. It now no-ops, and does not move jobs into a search nothing can drive |
+| Offer TTLs are swept | IMPLEMENTED | 1 | — | `dispatch.Store.SweepExpired` also had no production caller, so an ignored offer held a customer's booking forever |
+| The sweeper runs the round | IMPLEMENTED | n/a | — | dispatch before expiry: expiring first would end searches that still had rings left |
+
+**Observation, not fixed.** `Attempt` measures the search deadline as
+`now - job.updated_at`, and `release` sets `updated_at` when it returns a job to `SEARCHING`. So
+each released offer restarts the 90-second clock, and the real bound on a search is
+`dispatch_config.max_attempts` rather than BD-04's ninety seconds. Both bounds hold, but they do
+not mean what the names suggest. Recording it rather than changing it: the fix is a
+`search_started_at` column, and that is a migration and a decision about which of the two
+bounds BD-04 actually specifies.
+
+**Not done.** `POST /jobs` still does not trigger a round; a booking waits for the next sweeper
+tick, up to fifteen seconds. Dispatching inline on create would tie a customer's request to a
+routing call and a geo search, so the queue is the right shape — but the first round should be
+kicked immediately rather than waited for, and that is a follow-up. The dispatch outbox
+(`PendingEvents`/`MarkPublished`) still has no publisher, so nothing downstream hears
+`job.assigned`.
+
+**Verification.** Partial: no Go toolchain in this session, so nothing was compiled or run. Six
+integration tests are written and unverified, including the first one that walks a booking from
+`REQUESTED` to an offer in a driver's hands — the ride critical-journey coverage R-3 moved into
+Phase 8 and which has never existed. `go test -tags=integration ./tests/` is the assertion; it
+needs Postgres **and** Redis, because the geo search is the first step of a real dispatch.

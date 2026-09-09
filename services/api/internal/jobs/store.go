@@ -554,3 +554,52 @@ func (s *Store) LiveAssignmentForDriver(ctx context.Context, driverID string) (A
 	}
 	return a, nil
 }
+
+// NeedingDispatch lists jobs waiting for a dispatch round, oldest first.
+//
+// Two states qualify, and the second is the one that keeps a search alive:
+//
+//   - REQUESTED — created and never offered to anybody. Nothing moved these
+//     into dispatch before this query existed, so every job a customer had
+//     ever created sat here.
+//   - SEARCHING with no live assignment — the previous offer was rejected or
+//     timed out, so the next ring is due. A job holding an OFFERED assignment
+//     is waiting on a driver, not on dispatch, and must not be offered again
+//     while that offer stands.
+//
+// A scheduled job is not due until its time. Dispatching one early would send
+// a driver to a pickup nobody is waiting at.
+func (s *Store) NeedingDispatch(ctx context.Context, now time.Time, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT j.id::text
+		   FROM jobs j
+		  WHERE (
+		          j.status = 'REQUESTED'
+		          OR (j.status = 'SEARCHING' AND NOT EXISTS (
+		                SELECT 1 FROM assignments a
+		                 WHERE a.job_id = j.id AND a.status IN ('OFFERED', 'ACCEPTED')))
+		        )
+		    AND (j.scheduled_at IS NULL OR j.scheduled_at <= $1)
+		  ORDER BY j.created_at
+		  LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list jobs needing dispatch: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan job needing dispatch: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list jobs needing dispatch: %w", err)
+	}
+	return out, nil
+}
