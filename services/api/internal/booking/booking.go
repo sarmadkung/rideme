@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/eligibility"
@@ -91,14 +92,58 @@ type Service struct {
 	// settings supplies the values BD-01 decided. It is a dependency rather
 	// than a package-level lookup so a test can drive the policy directly.
 	settings *settings.Store
-	now      func() time.Time
+	// trips closes the tracking session when a job stops moving. Optional:
+	// without it a finished trip stays watchable, which is a privacy leak
+	// rather than a broken trip, so it degrades loudly in the log instead of
+	// refusing the command a driver just completed.
+	trips  TripTracking
+	logger *slog.Logger
+	now    func() time.Time
+}
+
+// TripTracking is the half of tracking a job's lifecycle drives.
+//
+// Document 102 scopes location to "active service", and something has to
+// decide when the service stops being active. A session that is never closed
+// leaves a customer able to watch a driver after their trip ended.
+type TripTracking interface {
+	EndSession(ctx context.Context, jobID string) error
 }
 
 func NewService(jobStore *jobs.Store, quoteStore *Store, engine *pricing.Engine, routes *routing.Service, platformSettings *settings.Store, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{jobs: jobStore, quotes: quoteStore, pricing: engine, routes: routes, settings: platformSettings, now: now}
+	return &Service{jobs: jobStore, quotes: quoteStore, pricing: engine, routes: routes,
+		settings: platformSettings, logger: slog.Default(), now: now}
+}
+
+// WithTracking attaches the tracking session, so a job that stops moving stops
+// being watchable.
+func (s *Service) WithTracking(trips TripTracking, logger *slog.Logger) *Service {
+	s.trips = trips
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
+}
+
+// endTracking closes a job's tracking session, and never fails the caller.
+//
+// The job has already finished or been cancelled by the time this runs. A
+// driver who completed a trip must not be told the command failed because a
+// session would not close, and the sweep that would clean up an orphaned
+// session does not exist yet — so this is logged at error level, which is what
+// it is.
+func (s *Service) endTracking(ctx context.Context, jobID, why string) {
+	if s.trips == nil {
+		return
+	}
+	if err := s.trips.EndSession(ctx, jobID); err != nil {
+		s.logger.Error("could not close tracking for a finished job",
+			slog.String("job_id", jobID), slog.String("reason", why),
+			slog.String("error", err.Error()))
+	}
 }
 
 var (
@@ -309,6 +354,9 @@ func (s *Service) Cancel(ctx context.Context, jobID, actorID string, actorType j
 	if err := s.quotes.RecordCancellation(ctx, jobID, string(actorType), actorID, reason, string(tier), fee); err != nil {
 		return jobs.Job{}, Cancellation{}, httpx.Internal("could not record the cancellation").WithCause(err)
 	}
+	// A cancelled trip stops being watchable, for the same reason a completed
+	// one does (document 102: location for active service only).
+	s.endTracking(ctx, jobID, "job cancelled")
 	return cancelled, Cancellation{Tier: tier, Fee: fee}, nil
 }
 
@@ -448,6 +496,9 @@ func (s *Service) Execute(ctx context.Context, jobID, driverID string, cmd Comma
 			return jobs.Job{}, httpx.Internal("could not run the command").WithCause(err)
 		}
 		job = moved
+	}
+	if job.Finished() {
+		s.endTracking(ctx, jobID, "job finished")
 	}
 	return job, nil
 }

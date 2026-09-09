@@ -40,8 +40,9 @@ func (h *Handler) Routes(mux *http.ServeMux, authenticate func(http.Handler) htt
 	driverOnly := func(fn http.HandlerFunc) http.Handler {
 		return authenticate(identity.RequireRole(identity.RoleDriver)(fn))
 	}
-	mux.Handle("POST "+p+"/driver/jobs/{id}/accept", driverOnly(h.driverCommand(CommandAccept)))
-	mux.Handle("POST "+p+"/driver/jobs/{id}/reject", driverOnly(h.driverCommand(CommandReject)))
+	// accept and reject are dispatch's: they consume an offer and a
+	// reservation, and a second acceptance path is how two drivers end up
+	// holding one job. They are registered by dispatch.Handler.
 	mux.Handle("POST "+p+"/driver/jobs/{id}/arrive", driverOnly(h.driverCommand(CommandArrive)))
 	mux.Handle("POST "+p+"/driver/jobs/{id}/start", driverOnly(h.driverCommand(CommandStart)))
 	mux.Handle("POST "+p+"/driver/jobs/{id}/complete", driverOnly(h.driverCommand(CommandComplete)))
@@ -290,13 +291,6 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
 
 // --- driver handlers ---------------------------------------------------------
 
-// Command values the HTTP surface adds on top of the service's lifecycle
-// commands.
-const (
-	CommandAccept Command = "accept"
-	CommandReject Command = "reject"
-)
-
 func (h *Handler) driverCommand(cmd Command) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal := identity.MustPrincipal(r.Context())
@@ -306,24 +300,12 @@ func (h *Handler) driverCommand(cmd Command) http.HandlerFunc {
 			return
 		}
 
-		jobID := r.PathValue("id")
-		switch cmd {
-		case CommandAccept, CommandReject:
-			// Accept and reject belong to dispatch, which owns the offer and
-			// the reservation. The handler refuses rather than reimplementing
-			// them here — a second acceptance path is exactly how two drivers
-			// end up holding one job.
-			httpx.WriteError(w, r, httpx.Unavailable(
-				"offer responses are served by the dispatch surface"))
+		job, err := h.service.Execute(r.Context(), r.PathValue("id"), driver.ID, cmd)
+		if err != nil {
+			httpx.WriteError(w, r, err)
 			return
-		default:
-			job, err := h.service.Execute(r.Context(), jobID, driver.ID, cmd)
-			if err != nil {
-				httpx.WriteError(w, r, err)
-				return
-			}
-			httpx.WriteJSON(w, r, http.StatusOK, ToJobResponse(job))
 		}
+		httpx.WriteJSON(w, r, http.StatusOK, ToJobResponse(job))
 	}
 }
 

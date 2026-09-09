@@ -31,7 +31,7 @@ func testRouter(t *testing.T, probeErr error) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(checker, identity.NewHandler(nil), nil, nil, nil, nil, nil,
+	return newRouter(checker, identity.NewHandler(nil), nil, nil, nil, nil, nil, nil, nil,
 		issuer, "api", "test", logger)
 }
 

@@ -5,10 +5,12 @@ import (
 	"net/http"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/places"
+	"github.com/sarmadkung/rideme/services/api/internal/tracking"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
@@ -28,6 +30,8 @@ func newRouter(
 	placesHandler *places.Handler,
 	merchantHandler *merchant.Handler,
 	groceryHandler *merchant.CustomerHandler,
+	offerHandler *dispatch.Handler,
+	trackHandler *tracking.Handler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
@@ -56,6 +60,13 @@ func newRouter(
 	}
 	if groceryHandler != nil {
 		groceryHandler.Routes(mux, authenticate)
+	}
+	// The offer responses, and the trip the accepted offer becomes.
+	if offerHandler != nil {
+		offerHandler.Routes(mux, authenticate)
+	}
+	if trackHandler != nil {
+		trackHandler.Routes(mux, authenticate)
 	}
 
 	// Anything unrouted answers in the platform's error envelope.
