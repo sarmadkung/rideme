@@ -18,12 +18,14 @@ import (
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
+	"github.com/sarmadkung/rideme/services/api/internal/finance"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
 	"github.com/sarmadkung/rideme/services/api/pkg/events"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
+	"github.com/sarmadkung/rideme/services/api/pkg/routing"
 )
 
 // Registry builds the contract. It is exported through this package's test so
@@ -79,6 +81,18 @@ func Registry() *contract.Registry {
 	r.Struct("RejectedFix", driver.RejectedFix{})
 	r.Struct("LocationReport", driver.LocationResponse{})
 	r.Struct("DriverAssignment", driver.AssignmentResponse{})
+
+	// Place search (documents 93, 94). Registered late — the slice that built
+	// it hand-wrote a matching TypeScript interface instead, which is the
+	// duplication this file's own comment forbids.
+	r.Struct("Point", routing.Point{})
+	r.Struct("Place", routing.Place{})
+
+	// Driver earnings. Nested inner-first, so the outer struct's fields
+	// resolve to the names registered here rather than to inline shapes.
+	r.Struct("EarningsTotal", finance.Earnings{})
+	r.Struct("TripEarning", finance.TripEarning{})
+	r.Struct("DriverEarnings", driver.Earnings{})
 
 	return r
 }

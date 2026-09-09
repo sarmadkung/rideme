@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { formatMoney, tokens } from '@platform/ui';
-import type { ApiClient, DriverEarnings } from '@platform/api-client';
+import type { ApiClient } from '@platform/api-client';
+import type { DriverEarnings } from '@platform/types';
 
 /**
  * What the driver has made.
@@ -90,7 +91,7 @@ export function EarningsScreen({ client, onBack }: { client: ApiClient; onBack()
           ) : (
             earnings.trips.map((trip, index) => (
               <View
-                key={`${trip.jobId}-${index}`}
+                key={`${trip.job_id}-${index}`}
                 style={styles.trip}
                 testID={`earnings-trip-${index}`}
               >
@@ -135,7 +136,11 @@ function Total({
  * Deliberately not a locale-aware library: one more dependency for a line of
  * text, on an app that must stay small on a low-end phone.
  */
-function formatWhen(at: Date): string {
+// The wire carries an RFC 3339 string (ADR-007), so the screen parses it. A
+// client-side Date on the contract would have meant a hand-written type beside
+// the generated one, which is the duplication ADR-007 exists to prevent.
+function formatWhen(raw: string): string {
+  const at = new Date(raw);
   const hours = at.getHours().toString().padStart(2, '0');
   const minutes = at.getMinutes().toString().padStart(2, '0');
   const isToday = at.toDateString() === new Date().toDateString();

@@ -303,3 +303,80 @@ describe('requests', () => {
     await expect(client.getJob('job-1')).rejects.toThrow();
   });
 });
+
+describe('generated response types', () => {
+  // These two endpoints previously returned hand-written interfaces built by
+  // hand-written mappers, beside the generated types for everything else.
+  // ADR-007 makes the Go type the only description of a response, so the
+  // assertions below are about shape as much as behaviour.
+  const place = {
+    name: 'Packages Mall',
+    address: 'Walton Road, Lahore',
+    point: { lat: 31.4697, lon: 74.2728 },
+  };
+
+  it('returns places in the shape the server sends', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/places': { status: 200, body: { places: [place] } },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    const found = await client.searchPlaces('packages');
+    expect(found).toEqual([place]);
+  });
+
+  it('rejects a place that does not match the contract', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/places': { status: 200, body: { places: [{ name: 'no point' }] } },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    // Silently coercing this is how a customer gets sent to latitude zero.
+    await expect(client.searchPlaces('packages')).rejects.toThrow();
+  });
+
+  it('parses earnings against the generated schema', async () => {
+    const window = { from: '2026-09-02T00:00:00Z', to: '2026-09-09T00:00:00Z' };
+    const earnings = {
+      today: { net: { amount_minor: 240000, currency: 'PKR' }, trips: 6, ...window },
+      week: { net: { amount_minor: 1450000, currency: 'PKR' }, trips: 34, ...window },
+      trips: [
+        {
+          job_id: 'job-1',
+          amount: { amount_minor: 40000, currency: 'PKR' },
+          at: '2026-09-08T18:30:00Z',
+        },
+      ],
+    };
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/driver/earnings': { status: 200, body: earnings },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    expect(await client.driverEarnings()).toEqual(earnings);
+  });
+
+  it('does not report an unreachable ledger as nothing earned', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/driver/earnings': {
+        status: 503,
+        body: {
+          code: 'unavailable',
+          message: 'earnings are unavailable right now',
+          request_id: 'r',
+        },
+      },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    await expect(client.driverEarnings()).rejects.toBeInstanceOf(ApiError);
+  });
+});

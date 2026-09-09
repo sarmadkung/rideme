@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { Quote } from '@platform/types';
-import type { ApiClient, Place } from '@platform/api-client';
+import type { ApiClient } from '@platform/api-client';
+import type { Place } from '@platform/types';
 import { BookingScreen, PLACES } from './BookingScreen';
 import type { BookingActions, BookingState } from '../features/booking/useBooking';
 
@@ -107,7 +108,11 @@ describe('BookingScreen', () => {
 
 describe('BookingScreen place search', () => {
   function aFoundPlace(name: string): Place {
-    return { name, address: `${name}, Gulberg III, Lahore`, latitude: 31.5169, longitude: 74.3484 };
+    return {
+      name,
+      address: `${name}, Gulberg III, Lahore`,
+      point: { lat: 31.5169, lon: 74.3484 },
+    };
   }
 
   it('books somewhere that is not one of the five landmarks', async () => {

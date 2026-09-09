@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ApiClient, Place } from '@platform/api-client';
+import type { ApiClient } from '@platform/api-client';
+import type { Place } from '@platform/types';
 
 /**
  * Free-text place search for the "where to?" field.

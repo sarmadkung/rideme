@@ -1130,3 +1130,36 @@ driver-app tests, up from 51.
 **Not done.** No payout view: what a driver has *earned* and what has been *paid out* are
 different questions, and the second needs the payout flow that has no provider yet. No date
 range picker — today and the last seven days are what a driver asks for.
+
+## Contract Drift Closed — Place Search and Driver Earnings · 2026-09-09
+
+Two slices in a row hand-wrote their TypeScript response types beside the generated ones.
+`packages/api-client` declared `Place`, `EarningsTotal`, `TripEarning` and `DriverEarnings` as
+local interfaces and built them with hand-written `toPlace`, `toEarningsTotal` and
+`toTripEarning` mappers, while `driverAssignment()` two lines away parsed a generated schema.
+ADR-007 exists to make that impossible, and `contractgen`'s own header says a client needing a
+type "must add it here rather than hand-writing a matching interface".
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `Point`, `Place` registered (`093`, `094`) | IMPLEMENTED | 2 | — | inner-first, so `Place.point` resolves to `Point` rather than an inline shape |
+| `EarningsTotal`, `TripEarning`, `DriverEarnings` registered | IMPLEMENTED | 2 | — | |
+| The hand-written interfaces and mappers are gone | IMPLEMENTED | n/a | — | `moneySchema` left `api-client` with them: nothing there parses money by hand any more |
+| **Responses are parsed, not coerced** | IMPLEMENTED | 1 | — | the old `toPlace` read `Number(point['lat'])` on an absent field, so a malformed place became latitude `NaN`; the generated schema rejects it instead |
+| An unreachable ledger still is not zero | IMPLEMENTED | 1 | — | asserted at the client now as well as at the endpoint and the screen |
+| Consumers moved to the generated shape | IMPLEMENTED | n/a | — | `place.point.lat/lon`, `trip.job_id`; `formatWhen` parses the RFC 3339 string the wire carries |
+
+**Why the gate did not catch it.** `make contracts-check` regenerates and diffs, so it fails when
+a *registered* Go type changes without regeneration. A new endpoint whose types were never
+registered changes nothing it can see. The blind spot was already recorded under Phase 2's
+"Remaining Non-Blocking Work" as the hand-maintained registration list; this is what it costs in
+practice. Nothing here closes it — a new unregistered endpoint would still pass.
+
+**Verification.** Partial, and deliberately so: this session had no Go toolchain, so
+`make contracts` was not run and the two `generated.ts` files carry a **predicted** emitter
+output. `make contracts-check` is the assertion — if the prediction is wrong it fails and prints
+the difference. Run on the developer machine: 59 driver-app tests and 49 customer-app tests pass;
+`tsc` clean on both apps and on `types`, `validation` and `api-client`; prettier and eslint clean.
+`@platform/api-client`'s own suite (4 tests added) could not run there — its rollup binary is
+built for the host platform, not the workspace VM — so those four are IMPLEMENTED, not VERIFIED,
+until `pnpm test` runs.

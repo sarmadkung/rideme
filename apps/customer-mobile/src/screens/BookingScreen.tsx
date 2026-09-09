@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { useState } from 'react';
 import { fareComponentLabel, formatMoney, tokens } from '@platform/ui';
-import type { ApiClient, Place, StopInput } from '@platform/api-client';
+import type { ApiClient, StopInput } from '@platform/api-client';
+import type { Place } from '@platform/types';
 import type { BookingActions, BookingState } from '../features/booking/useBooking';
 import { usePlaceSearch } from '../features/places/usePlaceSearch';
 
@@ -232,7 +233,7 @@ function PlacePicker({
               disabled={disabled}
               style={styles.result}
               onPress={() =>
-                choose({ latitude: place.latitude, longitude: place.longitude }, place.name)
+                choose({ latitude: place.point.lat, longitude: place.point.lon }, place.name)
               }
             >
               <Text style={styles.resultName}>{place.name}</Text>
