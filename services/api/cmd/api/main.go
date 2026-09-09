@@ -190,10 +190,16 @@ func run() error {
 	merchantStore := merchant.NewStore(pool.Pool)
 	merchantHandler := merchant.NewHandler(merchant.NewService(merchantStore))
 
+	// The customer's side of the same lifecycle (documents 068, 071): the
+	// shops near them, one shop's catalogue, a cart, and a checkout that
+	// records where the order is going.
+	groceryHandler := merchant.NewCustomerHandler(merchant.NewCustomerService(merchantStore))
+
 	server := &http.Server{
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
-			driverHandler, placesHandler, merchantHandler, issuer, serviceName, version, logger),
+			driverHandler, placesHandler, merchantHandler, groceryHandler,
+			issuer, serviceName, version, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

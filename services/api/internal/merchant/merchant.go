@@ -15,6 +15,7 @@ package merchant
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
@@ -172,6 +173,38 @@ func (i Item) LineTotal() (money.Amount, error) {
 	return i.UnitPrice.MulInt(int64(i.Quantity))
 }
 
+// Delivery is where an order is going — document 071's Address step.
+//
+// It travels with the order rather than being read from the customer's profile
+// at pickup time: a customer sending groceries to their mother's house has
+// given a destination for that order, and a later profile edit must not move a
+// delivery that already happened.
+type Delivery struct {
+	// Address is what is read out to a driver.
+	Address string
+	Lat     float64
+	Lon     float64
+	// Notes is "second gate, ring the bell" — the difference between a
+	// delivery and a failed one.
+	Notes string
+}
+
+// Valid reports whether a destination can be both routed to and read out.
+//
+// Coordinates without a name cannot be given to a driver and a name without
+// coordinates cannot be routed to, so neither half is optional. The exact
+// null island is rejected because it is what an unset pair of floats looks
+// like, and it is 380 nautical miles from the nearest land.
+func (d Delivery) Valid() bool {
+	if strings.TrimSpace(d.Address) == "" {
+		return false
+	}
+	if d.Lat < -90 || d.Lat > 90 || d.Lon < -180 || d.Lon > 180 {
+		return false
+	}
+	return d.Lat != 0 || d.Lon != 0
+}
+
 // Order is a merchant fulfilment.
 type Order struct {
 	ID               string
@@ -188,6 +221,7 @@ type Order struct {
 	ExpectedReadyAt  *time.Time
 	AcceptDeadline   *time.Time
 	RejectionReason  string
+	Delivery         Delivery
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -238,6 +272,14 @@ var (
 	ErrStoreClosed    = errors.New("merchant: the store is not open")
 	ErrOutOfStock     = errors.New("merchant: an item is not available in the requested quantity")
 	ErrStale          = errors.New("merchant: the order changed since it was read")
+	// ErrEmptyCart reports a checkout with nothing in it. It was an unwrapped
+	// error until a customer surface existed to receive it, where it would
+	// have reached the client as an internal failure.
+	ErrEmptyCart = errors.New("merchant: an empty cart cannot be placed")
+	// ErrNoDestination reports an order placed with nowhere to be delivered.
+	// Document 071 puts the Address step before Place Order, and an order with
+	// no destination is one no driver can be given.
+	ErrNoDestination = errors.New("merchant: an order needs somewhere to be delivered")
 
 	// ErrManyMerchants reports an owner operating more than one merchant,
 	// which this surface cannot disambiguate. See Store.MerchantByOwner.

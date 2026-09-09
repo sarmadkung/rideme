@@ -48,7 +48,7 @@ func (h *merchantHarness) aPlacedOrder(t *testing.T, s shop) merchant.Order {
 	if _, err := h.store.AddItem(ctx, cart.ID, s.productID, "", 2, merchant.PreferAsk); err != nil {
 		t.Fatal(err)
 	}
-	placed, err := h.store.Place(ctx, cart.ID, time.Now().UTC())
+	placed, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
