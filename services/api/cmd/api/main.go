@@ -171,7 +171,7 @@ func run() error {
 		routes,
 		platformSettings,
 		nil,
-	)
+	).WithTracking(trackingStore, logger)
 	providerStore := providers.NewStore(pool.Pool)
 	bookingHandler := booking.NewHandler(bookingService, jobStore, providerStore)
 
@@ -203,11 +203,20 @@ func run() error {
 	// records where the order is going.
 	groceryHandler := merchant.NewCustomerHandler(merchant.NewCustomerService(merchantStore))
 
+	// Answering an offer, and watching the trip it becomes. Both surfaces are
+	// new; everything behind them was built and unreachable — the accept and
+	// reject routes answered 503 pointing at a dispatch surface that did not
+	// exist, and no endpoint had ever served a driver's position to the
+	// customer waiting for them.
+	dispatchStore := dispatch.NewStore(pool.Pool)
+	offerHandler := dispatch.NewHandler(dispatchStore, providerStore, trackingStore, logger)
+	trackHandler := tracking.NewHandler(trackingStore, driverIDLookup{providerStore})
+
 	server := &http.Server{
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
 			driverHandler, placesHandler, merchantHandler, groceryHandler,
-			issuer, serviceName, version, logger),
+			offerHandler, trackHandler, issuer, serviceName, version, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -223,7 +232,6 @@ func run() error {
 	// runner was created with a nil engine, nothing called Attempt, and no job
 	// ever left REQUESTED. A customer's booking reached the database and no
 	// driver. Round is the call that closes that gap.
-	dispatchStore := dispatch.NewStore(pool.Pool)
 	dispatchEngine := dispatch.NewEngine(dispatchStore, jobStore, providerStore,
 		trackingStore, routes, logger, nil)
 	dispatchRunner := dispatch.NewRunner(dispatchEngine, jobStore, platformSettings, logger, nil).
@@ -315,4 +323,19 @@ func buildGeocoder(cfg *config.Config, logger *slog.Logger) routing.Geocoder {
 	}
 	logger.Info("geocoder configured", "provider", geocoder.Name())
 	return geocoder
+}
+
+// driverIDLookup narrows the provider store to the one question the tracking
+// surface asks: is the caller the driver they are watching?
+//
+// An adapter rather than a wider interface, so tracking does not import
+// providers to learn one field.
+type driverIDLookup struct{ providers *providers.Store }
+
+func (l driverIDLookup) DriverIDForUser(ctx context.Context, userID string) (string, error) {
+	driver, err := l.providers.DriverByUserID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return driver.ID, nil
 }

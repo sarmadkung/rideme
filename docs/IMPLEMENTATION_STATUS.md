@@ -1365,3 +1365,54 @@ should be an event rather than a shared column.
 **Verification.** Partial: no Go toolchain in this session. 10 handler tests and 4 integration
 tests are written and unverified. The integration tests need Postgres **and** Redis — the last
 one runs a real dispatch round, so it needs the geo pool.
+
+## A Driver Answers, a Customer Watches — 2026-09-09
+
+Two more surfaces that were built and unreachable, and they are the two either side of an
+accepted job.
+
+**A driver could not accept an offer.** `POST /driver/jobs/{id}/accept` and `/reject` existed in
+booking and answered **503 — "offer responses are served by the dispatch surface"** — and no
+dispatch surface was ever built. `dispatch.Store.Accept`, with its offer consumption, its
+reservation, its in-transaction eligibility re-check and its five race sentinels, had no route.
+So the moment the dispatch round started making offers, the driver's app could see one through
+`GET /driver/assignment` and had no way to say yes. The routes are now served by
+`dispatch.Handler` and removed from booking's, because two acceptance paths is how two drivers
+end up holding one job — and `ServeMux` would have panicked on the duplicate pattern anyway.
+
+**A customer could not see their driver.** `tracking.AuthorizeView`, the audit log it writes,
+`LiveSession` and `Current` were all built, tested and callerless, and `StartSession`/`EndSession`
+had no callers either — so document 102's scoping had nothing to scope, because no session was
+ever opened.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /driver/jobs/{id}/accept` · `/reject` | IMPLEMENTED | 8 | — | the paths document 035 gives and the driver app already calls; only the code behind them is new |
+| **Losing a race is a conflict, not a failure** | IMPLEMENTED | 1 | — | four sentinels, three messages: offer gone, another driver took it, and — distinct from both — your account cannot take jobs, because a suspended driver told "somebody was faster" would keep tapping |
+| Accepting leaves the geo pool and opens tracking | IMPLEMENTED | 1 | — | `Accept`'s own comment asks for the first ("cleared by the caller, which owns Redis"); the second is what authorises the customer to watch |
+| **Neither side effect can fail the acceptance** | IMPLEMENTED | 1 | — | both follow a committed transaction: a driver told the request failed would tap again on a job they already hold. Logged, not returned |
+| A lost race opens no tracking | IMPLEMENTED | 1 | — | |
+| A customer cannot answer an offer | IMPLEMENTED | 2 | — | role-gated, and an account with no driver record is refused before the store is touched |
+| `GET /jobs/{id}/track` | IMPLEMENTED | 7 | — | current position, heading and speed, scoped and audited |
+| **The scope is chosen by who is asking** | IMPLEMENTED | 1 | — | five cases asserted. The role passed to `AuthorizeView` is the one that justified the scope, not whichever the token listed first: an operator who is also a customer would otherwise be refused their own console |
+| A driver watching somebody else's trip is just a customer | IMPLEMENTED | 1 | — | `ScopeAssignedJob` only when the caller is the driver on that job |
+| **A frozen marker says so** | IMPLEMENTED | 1 | — | a position that has not moved for two minutes is a phone that lost signal, not a parked car. Returned and labelled `stale`, because the last known place is still useful |
+| An unknown position is not an untracked trip | IMPLEMENTED | 1 | — | 503, so a client keeps asking; a shift starting indoors is not a finished job |
+| An untracked job is a 404, and permission is not checked for it | IMPLEMENTED | 1 | — | the ordinary state of every job before acceptance and after it ends |
+| Somebody else's trip is 403, and the refusal is logged | IMPLEMENTED | 2 | — | the audit row exists before anyone asks who looked; the refusals are the interesting half |
+| A finished trip stops being watchable | IMPLEMENTED | 2 | — | `booking.Execute` closes the session when the job finishes and `Cancel` when it is cancelled — the only two ways a trip stops |
+
+**Where the session close sits, and why it cannot fail.** `booking.Service` takes tracking as an
+optional dependency and logs at error level if a session will not close. The job has already
+finished by then: a driver who completed a trip must not be told the command failed. That does
+mean an unclosed session leaves a trip watchable, and there is no sweep for it yet — recorded
+here rather than pretended away.
+
+**Not done.** `tracking.JobTrack` — the durable breadcrumb — still has no caller: this serves the
+live marker, and the trip's path belongs to a receipt or a replay, which is its own surface.
+Nothing pushes; a customer's app still polls this endpoint, and the realtime hub still has no
+transport.
+
+**Verification.** Partial: no Go toolchain in this session. 15 handler tests and 3 integration
+tests are written and unverified. The integration tests exercise document 102's authorization SQL
+against a real database for the first time.

@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -162,6 +163,18 @@ func (h *wireHarness) aRequestedJob(t *testing.T, pickup jobs.Coordinate, schedu
 		t.Fatal(err)
 	}
 	return job
+}
+
+// aCustomer is somebody with an account and no job.
+func (h *wireHarness) aCustomer(t *testing.T) string {
+	t.Helper()
+	var id string
+	if err := h.pool.QueryRow(context.Background(),
+		`INSERT INTO users (phone) VALUES ('+9236' || lpad((floor(random()*100000000))::text, 8, '0'))
+		 RETURNING id::text`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 // somewhereQuiet keeps each test's geo search to its own patch of the map: the
@@ -349,5 +362,92 @@ func TestARunnerWithNoEngineDispatchesNothing(t *testing.T) {
 	}
 	if unchanged.Status != jobs.StatusRequested {
 		t.Errorf("job is %s, want it left REQUESTED and visibly undispatched", unchanged.Status)
+	}
+}
+
+// --- watching the trip (document 102) ---------------------------------------
+
+// aTrackableTrip is an accepted job with tracking open: a job, its requester,
+// the driver on it, and the session that authorises the customer to watch.
+func (h *wireHarness) aTrackableTrip(t *testing.T) (jobID, customerID, driverID string) {
+	t.Helper()
+	ctx := context.Background()
+	pickup := somewhereQuiet()
+	driverID = h.aDispatchableDriver(t, pickup)
+	job := h.aRequestedJob(t, pickup, nil)
+	h.abandon(t, job.ID)
+
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE jobs SET assigned_driver_id = $2, status = 'ACCEPTED' WHERE id = $1`,
+		job.ID, driverID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.track.StartSession(ctx, job.ID, driverID); err != nil {
+		t.Fatal(err)
+	}
+	return job.ID, job.RequesterUserID, driverID
+}
+
+func TestOnlyTheCustomerOnTheJobMayWatchIt(t *testing.T) {
+	// The SQL behind document 102's scopes. It had never run outside its own
+	// unit tests, because nothing served a position to a customer.
+	h := newWireHarness(t)
+	ctx := context.Background()
+	jobID, customerID, driverID := h.aTrackableTrip(t)
+
+	if err := h.track.AuthorizeView(ctx, customerID, "CUSTOMER", driverID, jobID,
+		tracking.ScopeOwnJob); err != nil {
+		t.Errorf("the customer on the job was refused their own trip: %v", err)
+	}
+
+	stranger := h.aCustomer(t)
+	if err := h.track.AuthorizeView(ctx, stranger, "CUSTOMER", driverID, jobID,
+		tracking.ScopeOwnJob); !errors.Is(err, tracking.ErrNotPermitted) {
+		t.Errorf("a stranger could watch somebody's driver: %v", err)
+	}
+}
+
+func TestATripThatEndedCanNoLongerBeWatched(t *testing.T) {
+	// Document 102 scopes location to active service, and the session is what
+	// decides when the service stops. Closing it is what makes the customer's
+	// permission expire.
+	h := newWireHarness(t)
+	ctx := context.Background()
+	jobID, customerID, driverID := h.aTrackableTrip(t)
+
+	if err := h.track.EndSession(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.track.AuthorizeView(ctx, customerID, "CUSTOMER", driverID, jobID,
+		tracking.ScopeOwnJob); !errors.Is(err, tracking.ErrNotPermitted) {
+		t.Errorf("a finished trip was still watchable: %v", err)
+	}
+	if _, live, err := h.track.LiveSession(ctx, jobID); err != nil || live {
+		t.Errorf("the session is still live (err %v)", err)
+	}
+}
+
+func TestEveryLocationLookupIsRecorded(t *testing.T) {
+	// "Audit privileged access" means the log exists before anyone asks who
+	// looked — including the refusals, which are the interesting half.
+	h := newWireHarness(t)
+	ctx := context.Background()
+	jobID, customerID, driverID := h.aTrackableTrip(t)
+	stranger := h.aCustomer(t)
+
+	if err := h.track.AuthorizeView(ctx, customerID, "CUSTOMER", driverID, jobID,
+		tracking.ScopeOwnJob); err != nil {
+		t.Fatal(err)
+	}
+	_ = h.track.AuthorizeView(ctx, stranger, "CUSTOMER", driverID, jobID, tracking.ScopeOwnJob)
+
+	var granted, refused int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE granted), count(*) FILTER (WHERE NOT granted)
+		   FROM location_access_log WHERE job_id = $1`, jobID).Scan(&granted, &refused); err != nil {
+		t.Fatal(err)
+	}
+	if granted != 1 || refused != 1 {
+		t.Errorf("audit log has %d granted and %d refused, want 1 and 1", granted, refused)
 	}
 }
