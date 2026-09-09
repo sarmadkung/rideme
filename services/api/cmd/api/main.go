@@ -183,10 +183,17 @@ func run() error {
 	// absent otherwise (see places.NewHandler).
 	placesHandler := places.NewHandler(buildGeocoder(cfg, logger))
 
+	// The merchant surface (document 072). The order lifecycle and the
+	// acceptance deadline were both built and verified in Phase 10; until now
+	// nothing served them, so the sweeper below was cancelling orders that no
+	// merchant had any way to answer.
+	merchantStore := merchant.NewStore(pool.Pool)
+	merchantHandler := merchant.NewHandler(merchant.NewService(merchantStore))
+
 	server := &http.Server{
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
-			driverHandler, placesHandler, issuer, serviceName, version, logger),
+			driverHandler, placesHandler, merchantHandler, issuer, serviceName, version, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -197,7 +204,7 @@ func run() error {
 	// this is the thing that acts on them. Without it an unanswered grocery
 	// order and a job that found no driver both wait forever.
 	dispatchRunner := dispatch.NewRunner(nil, jobStore, platformSettings, logger, nil)
-	deadlines := sweeper.New(merchant.NewStore(pool.Pool), dispatchRunner, logger, 0, nil)
+	deadlines := sweeper.New(merchantStore, dispatchRunner, logger, 0, nil)
 	sweepCtx, stopSweeping := context.WithCancel(context.Background())
 	defer stopSweeping()
 	go deadlines.Run(sweepCtx)

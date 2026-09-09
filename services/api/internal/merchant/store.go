@@ -653,3 +653,88 @@ func (s *Store) ExpireOverdue(ctx context.Context, now time.Time, limit int) ([]
 	}
 	return expired, nil
 }
+
+// --- the merchant's own view -------------------------------------------------
+
+// MerchantByOwner finds the merchant a signed-in owner operates.
+//
+// It refuses rather than guesses when an owner has more than one. The column
+// is indexed, not unique, so two shops under one account is representable, and
+// document 76's OWNER/MANAGER/STAFF roles — which is where "which shop am I
+// acting for" belongs — are not built. Showing one shop's queue to an owner who
+// meant the other is a merchant accepting an order they cannot fulfil.
+func (s *Store) MerchantByOwner(ctx context.Context, userID string) (Merchant, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text, owner_user_id::text, name, status,
+		        COALESCE(phone, ''), COALESCE(address, ''), created_at
+		   FROM merchants WHERE owner_user_id = $1 ORDER BY created_at LIMIT 2`, userID)
+	if err != nil {
+		return Merchant{}, fmt.Errorf("load merchant: %w", err)
+	}
+	defer rows.Close()
+
+	var found []Merchant
+	for rows.Next() {
+		var m Merchant
+		if err := rows.Scan(&m.ID, &m.OwnerUserID, &m.Name, &m.Status,
+			&m.Phone, &m.Address, &m.CreatedAt); err != nil {
+			return Merchant{}, fmt.Errorf("scan merchant: %w", err)
+		}
+		found = append(found, m)
+	}
+	if err := rows.Err(); err != nil {
+		return Merchant{}, fmt.Errorf("load merchant: %w", err)
+	}
+	switch len(found) {
+	case 0:
+		return Merchant{}, ErrNotFound
+	case 1:
+		return found[0], nil
+	default:
+		return Merchant{}, ErrManyMerchants
+	}
+}
+
+// OrdersFor lists one merchant's orders in the given states, newest first.
+//
+// Deliberately without items: a queue of thirty orders would be thirty-one
+// queries, and a queue view shows counts and deadlines rather than lines. The
+// detail endpoint loads the lines for the one order a merchant opened.
+//
+// (merchant_id, status, created_at DESC) is indexed for exactly this.
+func (s *Store) OrdersFor(ctx context.Context, merchantID string, statuses []OrderStatus,
+	before *time.Time, limit int) ([]Order, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	wanted := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		wanted = append(wanted, string(status))
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+orderColumns+`
+		   FROM orders
+		  WHERE merchant_id = $1
+		    AND status = ANY($2::text[])
+		    AND ($3::timestamptz IS NULL OR created_at < $3)
+		  ORDER BY created_at DESC
+		  LIMIT $4`, merchantID, wanted, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list merchant orders: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Order
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan merchant order: %w", err)
+		}
+		out = append(out, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list merchant orders: %w", err)
+	}
+	return out, nil
+}

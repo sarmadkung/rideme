@@ -1163,3 +1163,52 @@ the difference. Run on the developer machine: 59 driver-app tests and 49 custome
 `@platform/api-client`'s own suite (4 tests added) could not run there — its rollup binary is
 built for the host platform, not the workspace VM — so those four are IMPLEMENTED, not VERIFIED,
 until `pnpm test` runs.
+
+## Merchant Order Management — 2026-09-09
+
+Phase 10 built and verified the grocery order lifecycle, the acceptance deadline BD-12 set, and
+the sweep that enforces it. Nothing served any of it. `internal/merchant` had a domain and a
+store and no handler, so for eleven days the platform has been cancelling orders that no
+merchant had any way to answer. This is document 072's surface.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `GET /merchant/orders` — document 072's five queues | IMPLEMENTED | 4 | — | `new`, `preparing`, `ready`, `completed`, `cancelled`; cursor paging like every other list |
+| **Eleven states into five queues is a decision** | IMPLEMENTED | 1 | — | asserted per queue: `CONFIRMED` sits in Preparing, not New, or the queue that must be watched is never empty; `PICKED_UP`/`DELIVERING` sit in Completed, because from the shop's side the work is done |
+| `GET /merchant/orders/{id}` with lines | IMPLEMENTED | 1 | — | line totals computed, and each line's substitution preference — a picker needs it before they reach the gap on the shelf |
+| **The queue carries no lines** | IMPLEMENTED | 1 | — | thirty orders would otherwise be thirty-one queries; `(merchant_id, status, created_at DESC)` was already indexed for this |
+| `Accept` · `Reject` · `Start Preparing` | IMPLEMENTED | 6 | — | compare-and-set on the status the surface read, so an order the sweeper cancelled a moment ago is not confirmed on top of the cancellation |
+| **Accepting twice is not an error** | IMPLEMENTED | 1 | — | a merchant on a bad connection taps Accept twice; they answered once |
+| **An unpaid order is not confirmed** | IMPLEMENTED | 1 | — | `PAYMENT_PENDING` is visible in New but refused by Accept: confirming commits the shop's stock, and no payment surface exists to ask whether the money arrived |
+| A rejection needs a reason | IMPLEMENTED | 2 | — | absent, empty and whitespace all refused; a customer cannot act on a rejection that says nothing |
+| Rejection is impossible once picking started | IMPLEMENTED | 1 | — | document 070; after that the resolution is operational, not a rejection |
+| **The role says a merchant is calling, not which one** | IMPLEMENTED | 4 | — | every action is scoped to the merchant the caller operates; another shop's order answers 404, not 403, because "this id exists but is not yours" is itself a disclosure |
+| Two shops under one account are refused | IMPLEMENTED | 2 | — | `owner_user_id` is indexed, not unique. Guessing would show an owner the wrong queue, and an order accepted from the wrong queue is one nobody can fulfil. Document 076's OWNER/MANAGER/STAFF roles are where this belongs and are not built |
+| A suspended merchant can look but not act | IMPLEMENTED | 1 | — | they still need to see what happened to their orders |
+| **The customer is not named to the shop** | IMPLEMENTED | 1 | — | a shop needs what to pick and by when; a field nobody needs is a field that leaks |
+
+**Not done, and why: `Mark Ready`.** Document 072's definition of done is acceptance *to
+ready-for-pickup*, and this stops at `PREPARING`. `READY_FOR_PICKUP` is the transition that
+produces the delivery Job (document 070), and an order has nowhere to be delivered: document
+071's checkout flow includes an Address step, and the `orders` table has no delivery address —
+the only `address` columns in migration `000009` belong to merchants and stores. Marking an
+order ready today would strand it in a state with no driver and no destination, silently. The
+missing column belongs to the checkout slice, which also has no surface yet.
+
+**Also not done.** No customer surface: `OpenCart`, `AddItem` and `Place` are still store
+methods nobody serves, so in production the only orders this queue can show are ones a test
+made. That is the other half of the loop and the next slice. `Report Issue` (document 074's
+substitution flow) has its domain logic and its store method and no route.
+
+**Found while reading.** `Store.SweepAcceptTimeouts` and `Store.ExpireOverdue` both cancel
+unanswered orders. The running sweeper calls `ExpireOverdue`; `SweepAcceptTimeouts` is
+reachable only from its own tests, writes a different `cancelled_reason` (`merchant did not
+respond` against `MERCHANT_ACCEPT_TIMEOUT`), sets no `cancelled_by`, and takes no
+`FOR UPDATE SKIP LOCKED`. Two implementations of one rule, one of them dead. Not touched here
+— it predates this slice and deleting it means moving its tests.
+
+**Verification.** Partial: this session had no Go toolchain, so nothing Go was compiled or run.
+17 handler tests and 7 integration tests are written and unverified — `make verify` and
+`go test -tags=integration ./tests/` are the assertion. Nothing outside `internal/merchant`
+changed except the router's parameter list and `main.go`'s construction, and no migration was
+added.
