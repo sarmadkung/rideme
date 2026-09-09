@@ -149,7 +149,7 @@ func run() error {
 	// Booking, pricing and routing. The straight-line estimator is always the
 	// last resort, so a fare built on a guess is never presented as a measured
 	// one; a configured provider simply moves most routes off the guess.
-	routingProviders, err := buildRoutingProviders(cfg, logger)
+	routingProviders, err := buildRoutingProviders(cfg, redis, logger)
 	if err != nil {
 		return err
 	}
@@ -231,15 +231,25 @@ func run() error {
 // estimator and marks every result estimated, which is what a platform without
 // a maps contract should show. Config has already refused a selected provider
 // with no credential, so a failure here is a real one.
-func buildRoutingProviders(cfg *config.Config, logger *slog.Logger) ([]routing.Provider, error) {
+func buildRoutingProviders(cfg *config.Config, redis *cache.Client, logger *slog.Logger) ([]routing.Provider, error) {
 	switch cfg.MapProvider {
 	case "google":
 		provider, err := routing.NewGoogleProvider(cfg.MapsAPIKey, routing.WithGoogleLogger(logger))
 		if err != nil {
 			return nil, fmt.Errorf("routing provider: %w", err)
 		}
-		logger.Info("routing provider configured", "provider", provider.Name())
-		return []routing.Provider{provider}, nil
+		// Every route is billed, and a city quotes the same trips repeatedly
+		// (document 104). The cache sits in front of the provider rather than
+		// in front of the fallback chain, so a Google route and a straight-line
+		// estimate can never share an entry.
+		cached := routing.NewCachingProvider(
+			provider,
+			routing.NewRedisCache(redis.Client, logger),
+			routing.DefaultCacheTTL,
+		)
+		logger.Info("routing provider configured",
+			"provider", provider.Name(), "cache_ttl", routing.DefaultCacheTTL.String())
+		return []routing.Provider{cached}, nil
 	default:
 		logger.Warn("no routing provider configured; distances are straight-line estimates",
 			"map_provider", cfg.MapProvider)
