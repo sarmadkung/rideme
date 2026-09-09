@@ -27,6 +27,16 @@ import (
 // the caller sees ConfidenceEstimated. That is the point of document 95's
 // warning: "Do not assume a car route is always valid for a truck."
 type GoogleProvider struct {
+	google
+}
+
+// google is the shared Google Maps HTTP call.
+//
+// It exists so the routing provider and the geocoder cannot drift apart on the
+// one thing here that must not be got wrong twice: the API key travels as a
+// query parameter, so the request URL is itself a credential and no error path
+// may carry it.
+type google struct {
 	apiKey  string
 	baseURL string
 	client  *http.Client
@@ -55,24 +65,24 @@ var (
 )
 
 // GoogleOption configures a GoogleProvider.
-type GoogleOption func(*GoogleProvider)
+type GoogleOption func(*google)
 
 // WithGoogleHTTPClient replaces the default client. Tests use it to point at an
 // httptest server; production has no reason to.
 func WithGoogleHTTPClient(client *http.Client) GoogleOption {
-	return func(p *GoogleProvider) { p.client = client }
+	return func(g *google) { g.client = client }
 }
 
 // WithGoogleBaseURL replaces the API host, for tests.
 func WithGoogleBaseURL(baseURL string) GoogleOption {
-	return func(p *GoogleProvider) { p.baseURL = strings.TrimSuffix(baseURL, "/") }
+	return func(g *google) { g.baseURL = strings.TrimSuffix(baseURL, "/") }
 }
 
 // WithGoogleLogger attaches a logger. Document 104 asks for request count,
 // success rate, latency and fallback rate; with no metrics system in the
 // service yet, structured log lines carry them.
 func WithGoogleLogger(logger *slog.Logger) GoogleOption {
-	return func(p *GoogleProvider) { p.logger = logger }
+	return func(g *google) { g.logger = logger }
 }
 
 // NewGoogleProvider builds a provider. The key is required: a provider that
@@ -82,19 +92,22 @@ func NewGoogleProvider(apiKey string, opts ...GoogleOption) (*GoogleProvider, er
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, ErrNoAPIKey
 	}
-	p := &GoogleProvider{
+	return &GoogleProvider{google: newGoogle(apiKey, opts...)}, nil
+}
+
+func newGoogle(apiKey string, opts ...GoogleOption) google {
+	g := google{
 		apiKey:  apiKey,
 		baseURL: "https://maps.googleapis.com/maps/api",
-		// A routing call sits in the path of a customer waiting for a fare.
-		// Waiting longer than this for a road distance is worse than falling
-		// back to an estimate.
+		// A maps call sits in the path of a customer waiting for a fare or a
+		// search result. Waiting longer than this is worse than falling back.
 		client: &http.Client{Timeout: 5 * time.Second},
 		logger: slog.New(slog.DiscardHandler),
 	}
 	for _, opt := range opts {
-		opt(p)
+		opt(&g)
 	}
-	return p, nil
+	return g
 }
 
 func (p *GoogleProvider) Name() string    { return "google" }
@@ -262,9 +275,9 @@ func (p *GoogleProvider) Matrix(ctx context.Context, origins, destinations []Poi
 // The API key is a query parameter, which makes the request URL a credential.
 // It is added here, at the last moment, and no error path below ever includes
 // the URL — an error that logs the key turns every failure into a disclosure.
-func (p *GoogleProvider) get(ctx context.Context, path string, query url.Values, out any) error {
-	query.Set("key", p.apiKey)
-	endpoint := p.baseURL + "/" + path + "?" + query.Encode()
+func (g *google) get(ctx context.Context, path string, query url.Values, out any) error {
+	query.Set("key", g.apiKey)
+	endpoint := g.baseURL + "/" + path + "?" + query.Encode()
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -272,7 +285,7 @@ func (p *GoogleProvider) get(ctx context.Context, path string, query url.Values,
 	}
 
 	started := time.Now()
-	response, err := p.client.Do(request)
+	response, err := g.client.Do(request)
 	elapsed := time.Since(started)
 	if err != nil {
 		// url.Error stringifies the URL, and the URL holds the key.
@@ -280,21 +293,21 @@ func (p *GoogleProvider) get(ctx context.Context, path string, query url.Values,
 		if errors.As(err, &urlErr) {
 			err = urlErr.Err
 		}
-		p.logger.WarnContext(ctx, "google maps request failed",
+		g.logger.WarnContext(ctx, "google maps request failed",
 			"endpoint", path, "duration_ms", elapsed.Milliseconds(), "error", err.Error())
 		return fmt.Errorf("routing: google %s: %w", path, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		p.logger.WarnContext(ctx, "google maps returned a non-200",
+		g.logger.WarnContext(ctx, "google maps returned a non-200",
 			"endpoint", path, "status", response.StatusCode, "duration_ms", elapsed.Milliseconds())
 		return fmt.Errorf("routing: google %s: http %d", path, response.StatusCode)
 	}
 	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
 		return fmt.Errorf("routing: decode google %s: %w", path, err)
 	}
-	p.logger.DebugContext(ctx, "google maps request",
+	g.logger.DebugContext(ctx, "google maps request",
 		"endpoint", path, "duration_ms", elapsed.Milliseconds())
 	return nil
 }

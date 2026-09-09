@@ -14,10 +14,7 @@ function aJob(status: string, overrides: Partial<Job> = {}): Job {
   } as Job;
 }
 
-function tracking(
-  job: Job,
-  overrides: Partial<BookingState> = {},
-): BookingState & BookingActions {
+function tracking(job: Job, overrides: Partial<BookingState> = {}): BookingState & BookingActions {
   return {
     stage: 'tracking',
     pickup: null,
