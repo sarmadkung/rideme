@@ -7,6 +7,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
+	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
@@ -25,6 +26,7 @@ func newRouter(
 	bookingHandler *booking.Handler,
 	driverHandler *driver.Handler,
 	placesHandler *places.Handler,
+	merchantHandler *merchant.Handler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
@@ -47,6 +49,9 @@ func newRouter(
 	// existing and always failing.
 	if placesHandler != nil {
 		placesHandler.Routes(mux, authenticate)
+	}
+	if merchantHandler != nil {
+		merchantHandler.Routes(mux, authenticate)
 	}
 
 	// Anything unrouted answers in the platform's error envelope.

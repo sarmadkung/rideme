@@ -238,6 +238,16 @@ var (
 	ErrStoreClosed    = errors.New("merchant: the store is not open")
 	ErrOutOfStock     = errors.New("merchant: an item is not available in the requested quantity")
 	ErrStale          = errors.New("merchant: the order changed since it was read")
+
+	// ErrManyMerchants reports an owner operating more than one merchant,
+	// which this surface cannot disambiguate. See Store.MerchantByOwner.
+	ErrManyMerchants = errors.New("merchant: this account operates more than one merchant")
+	// ErrNotAMerchant reports a caller holding the role but owning no merchant
+	// record — a role granted before onboarding finished.
+	ErrNotAMerchant = errors.New("merchant: this account does not operate a merchant")
+	// ErrNotActive reports an action attempted by a merchant that is suspended,
+	// closed, or still awaiting verification.
+	ErrNotActive = errors.New("merchant: this merchant is not active")
 )
 
 // StoreOpenAt reports whether a store's hours cover a moment.
