@@ -31,6 +31,7 @@ type OrderStore interface {
 	OutletByID(ctx context.Context, id string) (Outlet, error)
 	AttachJob(ctx context.Context, orderID, jobID string) error
 	ConsumeOrderStock(ctx context.Context, orderID string) error
+	OrderByJobID(ctx context.Context, jobID string) (Order, error)
 }
 
 // JobCreator is the delivery half of document 070's two lifecycles.
@@ -364,3 +365,95 @@ var (
 	// merchant surface, where marking an order ready would strand it.
 	ErrNoDeliveries = errors.New("merchant: deliveries are unavailable")
 )
+
+// --- following the delivery (document 070) -----------------------------------
+
+// deliveryFlow is the order's side of a delivery, in order.
+//
+// The order and the job move through different states for the same journey,
+// and walking this path rather than jumping means the order's history records
+// that the goods were collected before they were on their way — which is what
+// a customer asking "when did the driver pick it up?" is asking.
+var deliveryFlow = []OrderStatus{
+	StatusReadyForPickup, StatusPickedUp, StatusDelivering, StatusDelivered,
+}
+
+// DeliveryProgress maps a delivery job's state onto the order's.
+//
+// Only three job states move an order, and the gaps are deliberate. A driver
+// arriving at the shop (AT_PICKUP) has not collected anything yet, and an
+// order that said PICKED_UP then would be one the shop believes has left while
+// the bags are still on the counter.
+func DeliveryProgress(status jobs.Status) (OrderStatus, bool) {
+	switch status {
+	case jobs.StatusInProgress, jobs.StatusAtDropoff:
+		// The driver has the goods and is moving. The walk records PICKED_UP
+		// on the way through.
+		return StatusDelivering, true
+	case jobs.StatusCompleted:
+		return StatusDelivered, true
+	case jobs.StatusCancelled, jobs.StatusExpired, jobs.StatusFailed:
+		// The goods were picked and the delivery did not happen. FAILED rather
+		// than CANCELLED: somebody has to deal with a bagged order nobody
+		// collected, and cancelled would suggest nothing was ever done.
+		return StatusFailed, true
+	default:
+		return "", false
+	}
+}
+
+// FollowDelivery moves an order to wherever its delivery has got to.
+//
+// Document 070: the two lifecycles "communicate through explicit events". This
+// is that communication, narrowed to one direction — a job tells the order it
+// produced what happened to it. The order never pushes back, and nothing in
+// the job's own flow depends on this succeeding.
+//
+// A job with no order is the ordinary case: every ride and every parcel.
+func (s *Service) FollowDelivery(ctx context.Context, jobID string, status jobs.Status) error {
+	target, moves := DeliveryProgress(status)
+	if !moves {
+		return nil
+	}
+	order, err := s.store.OrderByJobID(ctx, jobID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if target == StatusFailed {
+		if Machine.Terminal(order.Status) {
+			return nil
+		}
+		_, err := s.store.Transition(ctx, order.ID, order.Status, StatusFailed,
+			"SYSTEM", "", map[string]any{"reason": "delivery " + string(status)})
+		return err
+	}
+
+	from, to := flowIndexOf(order.Status), flowIndexOf(target)
+	if from < 0 || to <= from {
+		// Already there, or further on. A repeated event is ordinary — the
+		// driver's client retries — and moving backwards is not.
+		return nil
+	}
+	for i := from; i < to; i++ {
+		moved, err := s.store.Transition(ctx, order.ID, deliveryFlow[i], deliveryFlow[i+1],
+			"SYSTEM", "", map[string]any{"delivery": jobID})
+		if err != nil {
+			return err
+		}
+		order = moved
+	}
+	return nil
+}
+
+func flowIndexOf(status OrderStatus) int {
+	for i, s := range deliveryFlow {
+		if s == status {
+			return i
+		}
+	}
+	return -1
+}

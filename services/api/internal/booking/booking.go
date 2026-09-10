@@ -96,9 +96,23 @@ type Service struct {
 	// without it a finished trip stays watchable, which is a privacy leak
 	// rather than a broken trip, so it degrades loudly in the log instead of
 	// refusing the command a driver just completed.
-	trips  TripTracking
-	logger *slog.Logger
-	now    func() time.Time
+	trips TripTracking
+	// deliveries is the order a job was created for, when it was created for
+	// one. Optional and one-directional: a job tells the order it produced
+	// what happened to it, and nothing in the job's own flow depends on the
+	// answer (document 070).
+	deliveries DeliveryFollower
+	logger     *slog.Logger
+	now        func() time.Time
+}
+
+// DeliveryFollower is the order side of document 070's link.
+//
+// Declared here rather than imported, so booking stays generic over job type:
+// it knows that some jobs were produced by something and tells that something
+// what happened, without knowing that groceries exist.
+type DeliveryFollower interface {
+	FollowDelivery(ctx context.Context, jobID string, status jobs.Status) error
 }
 
 // TripTracking is the half of tracking a job's lifecycle drives.
@@ -126,6 +140,32 @@ func (s *Service) WithTracking(trips TripTracking, logger *slog.Logger) *Service
 		s.logger = logger
 	}
 	return s
+}
+
+// WithDeliveries attaches whatever follows a job on behalf of the order that
+// produced it.
+func (s *Service) WithDeliveries(follower DeliveryFollower) *Service {
+	s.deliveries = follower
+	return s
+}
+
+// followDelivery tells the order what its delivery just did, and never fails
+// the driver's command.
+//
+// The job has already moved. A driver who tapped "delivered" must not be told
+// it failed because a grocery order would not follow, and the order is
+// recoverable — the next event, or an operator, moves it. Logged at error
+// level because a customer looking at an order that says PICKED_UP after their
+// shopping arrived has been told something false.
+func (s *Service) followDelivery(ctx context.Context, jobID string, status jobs.Status) {
+	if s.deliveries == nil {
+		return
+	}
+	if err := s.deliveries.FollowDelivery(ctx, jobID, status); err != nil {
+		s.logger.Error("an order did not follow its delivery",
+			slog.String("job_id", jobID), slog.String("job_status", string(status)),
+			slog.String("error", err.Error()))
+	}
 }
 
 // endTracking closes a job's tracking session, and never fails the caller.
@@ -357,6 +397,7 @@ func (s *Service) Cancel(ctx context.Context, jobID, actorID string, actorType j
 	// A cancelled trip stops being watchable, for the same reason a completed
 	// one does (document 102: location for active service only).
 	s.endTracking(ctx, jobID, "job cancelled")
+	s.followDelivery(ctx, jobID, cancelled.Status)
 	return cancelled, Cancellation{Tier: tier, Fee: fee}, nil
 }
 
@@ -497,6 +538,7 @@ func (s *Service) Execute(ctx context.Context, jobID, driverID string, cmd Comma
 		}
 		job = moved
 	}
+	s.followDelivery(ctx, jobID, job.Status)
 	if job.Finished() {
 		s.endTracking(ctx, jobID, "job finished")
 	}
