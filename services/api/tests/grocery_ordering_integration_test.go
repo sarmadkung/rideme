@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
+	"github.com/sarmadkung/rideme/services/api/pkg/money"
 )
 
 // point is somewhere on the map, and every test below works relative to one of
@@ -605,5 +606,167 @@ func TestAnOrderForSomethingTheShopDoesNotStockIsRefused(t *testing.T) {
 
 	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); !errors.Is(err, merchant.ErrOutOfStock) {
 		t.Fatalf("err = %v, want ErrOutOfStock", err)
+	}
+}
+
+// --- substitutions against a real total (document 074, BD-11) ---------------
+
+func (h *merchantHarness) aPickingOrder(t *testing.T, s shop, units int) merchant.Order {
+	t.Helper()
+	ctx := context.Background()
+	cart := h.aCartOf(t, s, units)
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.Transition(ctx, cart.ID, merchant.StatusPlaced,
+		merchant.StatusConfirmed, "MERCHANT", s.merchantID, nil); err != nil {
+		t.Fatal(err)
+	}
+	picking, err := h.store.Transition(ctx, cart.ID, merchant.StatusConfirmed,
+		merchant.StatusPreparing, "MERCHANT", s.merchantID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return picking
+}
+
+func TestAnUnansweredSubstitutionLeavesTheTotalAlone(t *testing.T) {
+	// BD-11 charges the substitute's price, but only once it is settled.
+	// Until the customer answers, they owe what they ordered.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 10)
+	order := h.aPickingOrder(t, s, 2)
+	before := order.ItemsTotal.Minor
+
+	dearer := money.MustNew(40000, money.PKR)
+	items, err := h.store.ItemsOf(ctx, order.ID, money.PKR)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items = %+v (%v)", items, err)
+	}
+	if _, err := h.store.RecordIssue(ctx, merchant.Issue{
+		OrderID: order.ID, OrderItemID: items[0].ID, Reason: "shelf empty",
+		Action: merchant.ActionAsk, SubstituteName: "Nurpur 1L",
+		SubstitutePrice: &dearer, Resolution: merchant.ResolutionPending,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := h.store.OrderByID(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.ItemsTotal.Minor != before {
+		t.Errorf("total = %d, want it unchanged at %d until they answer",
+			pending.ItemsTotal.Minor, before)
+	}
+}
+
+func TestAcceptingADearerSubstituteRaisesTheTotal(t *testing.T) {
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 10)
+	order := h.aPickingOrder(t, s, 2) // 2 × 250.00 = 500.00
+	items, err := h.store.ItemsOf(ctx, order.ID, money.PKR)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dearer := money.MustNew(40000, money.PKR) // 400.00 each
+	issue, err := h.store.RecordIssue(ctx, merchant.Issue{
+		OrderID: order.ID, OrderItemID: items[0].ID, Reason: "shelf empty",
+		Action: merchant.ActionAsk, SubstituteName: "Nurpur 1L",
+		SubstitutePrice: &dearer, Resolution: merchant.ResolutionPending,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.store.SettleIssue(ctx, order.ID, issue.ID,
+		merchant.ResolutionCustomerAccepted, merchant.ItemSubstituted); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := h.store.OrderByID(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.ItemsTotal.Minor != 80000 {
+		t.Errorf("total = %d, want 80000 — two at the substitute's price",
+			settled.ItemsTotal.Minor)
+	}
+}
+
+func TestDecliningLeavesTheLineOutOfTheTotal(t *testing.T) {
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 10)
+	order := h.aPickingOrder(t, s, 2)
+	items, err := h.store.ItemsOf(ctx, order.ID, money.PKR)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dearer := money.MustNew(40000, money.PKR)
+	issue, err := h.store.RecordIssue(ctx, merchant.Issue{
+		OrderID: order.ID, OrderItemID: items[0].ID, Reason: "shelf empty",
+		Action: merchant.ActionAsk, SubstituteName: "Nurpur 1L",
+		SubstitutePrice: &dearer, Resolution: merchant.ResolutionPending,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.store.SettleIssue(ctx, order.ID, issue.ID,
+		merchant.ResolutionCustomerDeclined, merchant.ItemRemoved); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := h.store.OrderByID(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.ItemsTotal.Minor != 0 {
+		t.Errorf("total = %d, want 0 — the only line was removed", settled.ItemsTotal.Minor)
+	}
+	// Document 074: the original line is never mutated. What was ordered
+	// stays readable after what was supplied changed.
+	if len(settled.Items) != 1 || settled.Items[0].UnitPrice.Minor != 25000 {
+		t.Errorf("the original line was rewritten: %+v", settled.Items)
+	}
+}
+
+func TestAnAnsweredSubstitutionCannotBeAnsweredAgain(t *testing.T) {
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 10)
+	order := h.aPickingOrder(t, s, 1)
+	items, err := h.store.ItemsOf(ctx, order.ID, money.PKR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dearer := money.MustNew(40000, money.PKR)
+	issue, err := h.store.RecordIssue(ctx, merchant.Issue{
+		OrderID: order.ID, OrderItemID: items[0].ID, Reason: "shelf empty",
+		Action: merchant.ActionAsk, SubstituteName: "Nurpur 1L",
+		SubstitutePrice: &dearer, Resolution: merchant.ResolutionPending,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.SettleIssue(ctx, order.ID, issue.ID,
+		merchant.ResolutionCustomerAccepted, merchant.ItemSubstituted); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.store.SettleIssue(ctx, order.ID, issue.ID,
+		merchant.ResolutionCustomerDeclined, merchant.ItemRemoved); !errors.Is(err, merchant.ErrIssueSettled) {
+		t.Fatalf("err = %v, want ErrIssueSettled", err)
+	}
+	// And the total still reflects the answer that won.
+	settled, err := h.store.OrderByID(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.ItemsTotal.Minor != 40000 {
+		t.Errorf("total = %d, want the accepted substitute's price", settled.ItemsTotal.Minor)
 	}
 }

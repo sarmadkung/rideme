@@ -513,9 +513,12 @@ func (s *Store) RecordIssue(ctx context.Context, issue Issue, itemStatus string)
 // IssuesOf returns an order's recorded item problems.
 func (s *Store) IssuesOf(ctx context.Context, orderID string) ([]Issue, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text, order_id::text, order_item_id::text, reason, action,
-		        COALESCE(substitute_name, ''), resolution, created_at
-		   FROM order_item_issues WHERE order_id = $1 ORDER BY created_at`, orderID)
+		`SELECT i.id::text, i.order_id::text, i.order_item_id::text, i.reason, i.action,
+		        COALESCE(i.substitute_name, ''), i.substitute_unit_price_minor,
+		        i.price_difference_minor, i.resolution, i.created_at, o.currency
+		   FROM order_item_issues i
+		   JOIN orders o ON o.id = i.order_id
+		  WHERE i.order_id = $1 ORDER BY i.created_at`, orderID)
 	if err != nil {
 		return nil, fmt.Errorf("load item issues: %w", err)
 	}
@@ -523,14 +526,90 @@ func (s *Store) IssuesOf(ctx context.Context, orderID string) ([]Issue, error) {
 
 	var out []Issue
 	for rows.Next() {
-		var issue Issue
-		if err := rows.Scan(&issue.ID, &issue.OrderID, &issue.OrderItemID, &issue.Reason,
-			&issue.Action, &issue.SubstituteName, &issue.Resolution, &issue.CreatedAt); err != nil {
+		issue, err := scanIssue(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, issue)
 	}
 	return out, rows.Err()
+}
+
+// scanIssue reads an issue and the money on it.
+//
+// The prices are what a customer is being asked about — "we have this instead,
+// it costs this much" — so an issue without them is a question nobody can
+// answer.
+func scanIssue(row pgx.Row) (Issue, error) {
+	var issue Issue
+	var substituteMinor, differenceMinor *int64
+	var currency money.Currency
+	if err := row.Scan(&issue.ID, &issue.OrderID, &issue.OrderItemID, &issue.Reason,
+		&issue.Action, &issue.SubstituteName, &substituteMinor, &differenceMinor,
+		&issue.Resolution, &issue.CreatedAt, &currency); err != nil {
+		return Issue{}, err
+	}
+	if substituteMinor != nil {
+		amount, err := money.New(*substituteMinor, currency)
+		if err != nil {
+			return Issue{}, err
+		}
+		issue.SubstitutePrice = &amount
+	}
+	if differenceMinor != nil {
+		amount, err := money.New(*differenceMinor, currency)
+		if err != nil {
+			return Issue{}, err
+		}
+		issue.PriceDifference = &amount
+	}
+	return issue, nil
+}
+
+// SettleIssue records the customer's answer to a substitution.
+//
+// Compare-and-set on PENDING, so a customer tapping twice — or tapping as the
+// merchant gives up and removes the item — settles it once. BD-11 only reaches
+// the total through this: an unanswered substitution changes nothing, and an
+// accepted one is charged at what was actually supplied.
+func (s *Store) SettleIssue(ctx context.Context, orderID, issueID, resolution,
+	itemStatus string) (Issue, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Issue{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	issue, err := scanIssue(tx.QueryRow(ctx,
+		`UPDATE order_item_issues i SET resolution = $3
+		   FROM orders o
+		  WHERE i.id = $2 AND i.order_id = $1 AND o.id = i.order_id AND i.resolution = 'PENDING'
+		 RETURNING i.id::text, i.order_id::text, i.order_item_id::text, i.reason, i.action,
+		           COALESCE(i.substitute_name, ''), i.substitute_unit_price_minor,
+		           i.price_difference_minor, i.resolution, i.created_at, o.currency`,
+		orderID, issueID, resolution))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Issue{}, ErrIssueSettled
+	}
+	if err != nil {
+		return Issue{}, fmt.Errorf("settle issue: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE order_items SET status = $2 WHERE id = $1`, issue.OrderItemID, itemStatus); err != nil {
+		return Issue{}, fmt.Errorf("update item status: %w", err)
+	}
+	// The total is read from the lines and the settled substitutions, so it
+	// has to be recomputed here rather than adjusted: document 74 forbids
+	// mutating the original line, and the substitute's price lives on the
+	// issue row this statement just settled.
+	if err := recomputeTotal(ctx, tx, orderID); err != nil {
+		return Issue{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Issue{}, fmt.Errorf("commit: %w", err)
+	}
+	return issue, nil
 }
 
 // --- inventory (document 69) -------------------------------------------------

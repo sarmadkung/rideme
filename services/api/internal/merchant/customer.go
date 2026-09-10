@@ -33,6 +33,8 @@ type CatalogStore interface {
 	OrderByID(ctx context.Context, id string) (Order, error)
 	OrdersOf(ctx context.Context, customerUserID string, limit int) ([]Order, error)
 	Place(ctx context.Context, orderID string, to Delivery, now time.Time) (Order, error)
+	IssuesOf(ctx context.Context, orderID string) ([]Issue, error)
+	SettleIssue(ctx context.Context, orderID, issueID, resolution, itemStatus string) (Issue, error)
 }
 
 // CustomerService is the customer's side of a grocery order (documents 068, 071).
@@ -136,6 +138,32 @@ func (s *CustomerService) Place(ctx context.Context, userID, orderID string,
 		return Order{}, err
 	}
 	return s.store.Place(ctx, order.ID, to, s.now())
+}
+
+// DecideIssue records the customer's answer to a proposed substitution
+// (document 074).
+//
+// Only the customer answers, and only on their own order: the whole point of
+// ASK_ME is that the shop does not get to decide.
+func (s *CustomerService) DecideIssue(ctx context.Context, userID, orderID, issueID string,
+	accept bool) (Issue, error) {
+	order, err := s.Order(ctx, userID, orderID)
+	if err != nil {
+		return Issue{}, err
+	}
+	if accept {
+		// BD-11: the customer pays the substitute's actual price, up or down.
+		return s.store.SettleIssue(ctx, order.ID, issueID,
+			ResolutionCustomerAccepted, ItemSubstituted)
+	}
+	// Declined means the line is gone, not that the original appears — the
+	// shelf is empty, which is why they were asked at all.
+	return s.store.SettleIssue(ctx, order.ID, issueID, ResolutionCustomerDeclined, ItemRemoved)
+}
+
+// Issues lists what the shop found missing on an order.
+func (s *CustomerService) Issues(ctx context.Context, orderID string) ([]Issue, error) {
+	return s.store.IssuesOf(ctx, orderID)
 }
 
 // ownCart resolves an order the caller owns and that is still a cart.

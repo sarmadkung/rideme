@@ -16,15 +16,18 @@ const customerID = "customer-1"
 
 // stubCatalog stands in for Postgres on the customer side.
 type stubCatalog struct {
-	outlets   []merchant.Outlet
-	outlet    merchant.Outlet
-	outletErr error
-	products  []merchant.Product
-	cart      merchant.Order
-	order     merchant.Order
-	orderErr  error
-	addErr    error
-	placeErr  error
+	outlets    []merchant.Outlet
+	outlet     merchant.Outlet
+	outletErr  error
+	products   []merchant.Product
+	cart       merchant.Order
+	order      merchant.Order
+	orderErr   error
+	addErr     error
+	placeErr   error
+	settleErr  error
+	openIssues []merchant.Issue
+	decisions  []decision
 
 	askedLat, askedLon, askedRadius float64
 	askedAt                         time.Time
@@ -32,6 +35,8 @@ type stubCatalog struct {
 	added                           []addedLine
 	placed                          []merchant.Delivery
 }
+
+type decision struct{ orderID, issueID, resolution, itemStatus string }
 
 type addedLine struct {
 	orderID, productID, variantID string
@@ -79,6 +84,19 @@ func (s *stubCatalog) OrderByID(_ context.Context, _ string) (merchant.Order, er
 
 func (s *stubCatalog) OrdersOf(_ context.Context, _ string, _ int) ([]merchant.Order, error) {
 	return []merchant.Order{s.order}, nil
+}
+
+func (s *stubCatalog) IssuesOf(_ context.Context, _ string) ([]merchant.Issue, error) {
+	return s.openIssues, nil
+}
+
+func (s *stubCatalog) SettleIssue(_ context.Context, orderID, issueID, resolution,
+	itemStatus string) (merchant.Issue, error) {
+	if s.settleErr != nil {
+		return merchant.Issue{}, s.settleErr
+	}
+	s.decisions = append(s.decisions, decision{orderID, issueID, resolution, itemStatus})
+	return merchant.Issue{ID: issueID, Resolution: resolution}, nil
 }
 
 func (s *stubCatalog) Place(_ context.Context, _ string, to merchant.Delivery,
@@ -446,5 +464,107 @@ func TestAnEmptyCartIsNotAnInternalFailure(t *testing.T) {
 	if response.Code >= 500 {
 		t.Fatalf("status = %d; an empty cart is the customer's mistake, not the server's",
 			response.Code)
+	}
+}
+
+// --- answering a substitution (document 074, BD-11) -------------------------
+
+func aPendingIssue() merchant.Issue {
+	price := money.MustNew(62000, money.PKR)
+	difference := money.MustNew(4000, money.PKR)
+	return merchant.Issue{
+		ID: "issue-1", OrderID: "order-1", OrderItemID: "item-1",
+		Reason: "shelf empty", Action: merchant.ActionAsk,
+		SubstituteName: "Nurpur 1L", SubstitutePrice: &price, PriceDifference: &difference,
+		Resolution: merchant.ResolutionPending,
+	}
+}
+
+func TestAPendingSubstitutionTravelsWithTheOrder(t *testing.T) {
+	// A question waiting on this customer has to reach the screen they are
+	// looking at, not sit behind a request they would have to know to make.
+	store := &stubCatalog{order: aCart(), openIssues: []merchant.Issue{aPendingIssue()}}
+	response := call(t, serveCustomer(store), http.MethodGet, "/api/v1/orders/order-1", "")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	var body merchant.CartResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Issues) != 1 {
+		t.Fatalf("issues = %+v", body.Issues)
+	}
+	if body.Issues[0].SubstituteName != "Nurpur 1L" || body.Issues[0].SubstitutePrice == nil {
+		t.Errorf("the customer was asked about nothing in particular: %+v", body.Issues[0])
+	}
+	if body.Issues[0].PriceDifference == nil || body.Issues[0].PriceDifference.Minor != 4000 {
+		t.Errorf("price difference = %+v; BD-11 sends it to the customer",
+			body.Issues[0].PriceDifference)
+	}
+}
+
+func TestAcceptingASubstituteTakesItAtItsPrice(t *testing.T) {
+	store := &stubCatalog{order: aCart()}
+	response := call(t, serveCustomer(store), http.MethodPost,
+		"/api/v1/orders/order-1/issues/issue-1/decision", `{"accept":true}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(store.decisions) != 1 {
+		t.Fatalf("decisions = %+v", store.decisions)
+	}
+	if store.decisions[0].resolution != merchant.ResolutionCustomerAccepted {
+		t.Errorf("resolution = %s", store.decisions[0].resolution)
+	}
+	if store.decisions[0].itemStatus != merchant.ItemSubstituted {
+		t.Errorf("item status = %s", store.decisions[0].itemStatus)
+	}
+}
+
+func TestDecliningLosesTheLineRatherThanRestoringIt(t *testing.T) {
+	// The shelf is empty — that is why they were asked. Declining cannot put
+	// the original in the bag.
+	store := &stubCatalog{order: aCart()}
+	response := call(t, serveCustomer(store), http.MethodPost,
+		"/api/v1/orders/order-1/issues/issue-1/decision", `{"accept":false}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(store.decisions) != 1 || store.decisions[0].itemStatus != merchant.ItemRemoved {
+		t.Fatalf("decisions = %+v", store.decisions)
+	}
+	if store.decisions[0].resolution != merchant.ResolutionCustomerDeclined {
+		t.Errorf("resolution = %s", store.decisions[0].resolution)
+	}
+}
+
+func TestAnAnswerToSomebodyElsesOrderIsRefused(t *testing.T) {
+	theirs := aCart()
+	theirs.CustomerUserID = "someone-else"
+	store := &stubCatalog{order: theirs}
+	response := call(t, serveCustomer(store), http.MethodPost,
+		"/api/v1/orders/order-1/issues/issue-1/decision", `{"accept":true}`)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.Code)
+	}
+	if len(store.decisions) != 0 {
+		t.Errorf("somebody else answered for this customer: %+v", store.decisions)
+	}
+}
+
+func TestAnsweringTwiceIsRefusedRatherThanRepriced(t *testing.T) {
+	// The merchant may have given up and removed the item while the customer
+	// was thinking. Whoever got there first decided.
+	store := &stubCatalog{order: aCart(), settleErr: merchant.ErrIssueSettled}
+	response := call(t, serveCustomer(store), http.MethodPost,
+		"/api/v1/orders/order-1/issues/issue-1/decision", `{"accept":true}`)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", response.Code)
 	}
 }
