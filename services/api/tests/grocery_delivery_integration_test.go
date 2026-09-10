@@ -241,3 +241,101 @@ func TestAttachingASecondJobIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want ErrJobAlreadyAttached", err)
 	}
 }
+
+func TestTheOrderFollowsTheDeliveryToTheDoor(t *testing.T) {
+	// The last link. Before this the order stopped at READY_FOR_PICKUP for
+	// good: the delivery job moved through its own states as the driver
+	// worked, and nothing told the shop or the customer that their shopping
+	// had been collected, was on its way, or had arrived.
+	h := newMerchantHarness(t)
+	wire := newWireHarness(t)
+	ctx := context.Background()
+
+	shopAt := somewhereNew()
+	owner := h.aUser(t)
+	s := h.aShopReadyToTrade(t, owner, shopAt)
+	order := h.aPreparedOrder(t, s, merchant.Delivery{
+		Address: "House 12, Gulberg III, Lahore",
+		Lat:     shopAt.lat + 0.004,
+		Lon:     shopAt.lon,
+	})
+
+	service := merchant.NewService(h.store).WithJobs(wire.jobs)
+	_, jobID, err := service.MarkReady(ctx, owner, order.ID)
+	if err != nil {
+		t.Fatalf("MarkReady: %v", err)
+	}
+
+	// The driver has the goods.
+	if err := service.FollowDelivery(ctx, jobID, jobs.StatusInProgress); err != nil {
+		t.Fatal(err)
+	}
+	moving, err := h.store.OrderByID(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moving.Status != merchant.StatusDelivering {
+		t.Fatalf("order is %s, want DELIVERING", moving.Status)
+	}
+
+	// And PICKED_UP is in the history, because a customer asking when their
+	// shopping left the shop is asking about that row.
+	var pickedUp bool
+	if err := h.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM order_status_history
+		                 WHERE order_id = $1 AND to_status = 'PICKED_UP')`,
+		order.ID).Scan(&pickedUp); err != nil {
+		t.Fatal(err)
+	}
+	if !pickedUp {
+		t.Error("the order jumped to DELIVERING with no record of being collected")
+	}
+
+	// It arrives.
+	if err := service.FollowDelivery(ctx, jobID, jobs.StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := h.store.OrderByID(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered.Status != merchant.StatusDelivered {
+		t.Fatalf("order is %s, want DELIVERED", delivered.Status)
+	}
+}
+
+func TestARepeatedDeliveryEventIsHarmlessAgainstTheDatabase(t *testing.T) {
+	h := newMerchantHarness(t)
+	wire := newWireHarness(t)
+	ctx := context.Background()
+
+	shopAt := somewhereNew()
+	owner := h.aUser(t)
+	s := h.aShopReadyToTrade(t, owner, shopAt)
+	order := h.aPreparedOrder(t, s, merchant.Delivery{
+		Address: "House 12, Gulberg III, Lahore",
+		Lat:     shopAt.lat + 0.004,
+		Lon:     shopAt.lon,
+	})
+	service := merchant.NewService(h.store).WithJobs(wire.jobs)
+	_, jobID, err := service.MarkReady(ctx, owner, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := service.FollowDelivery(ctx, jobID, jobs.StatusCompleted); err != nil {
+			t.Fatalf("repeat %d: %v", i, err)
+		}
+	}
+
+	var rows int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM order_status_history WHERE order_id = $1 AND to_status = 'DELIVERED'`,
+		order.ID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Errorf("the order was delivered %d times", rows)
+	}
+}

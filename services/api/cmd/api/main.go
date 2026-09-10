@@ -165,6 +165,7 @@ func run() error {
 	// and reads the same position pool a driver reports into.
 	routes := routing.NewService(routingProviders...)
 	trackingStore := tracking.NewStore(pool.Pool, redis.Client)
+	merchantStore := merchant.NewStore(pool.Pool)
 	bookingService := booking.NewService(
 		jobStore, bookingStore,
 		pricing.NewEngine(nil),
@@ -172,6 +173,10 @@ func run() error {
 		platformSettings,
 		nil,
 	).WithTracking(trackingStore, logger)
+	// An order follows the delivery it produced (document 070). Wired after
+	// construction because booking is generic over job type and knows nothing
+	// about shops — only that some jobs were made on something's behalf.
+	bookingService.WithDeliveries(merchant.NewService(merchantStore))
 	providerStore := providers.NewStore(pool.Pool)
 	bookingHandler := booking.NewHandler(bookingService, jobStore, providerStore)
 
@@ -192,7 +197,6 @@ func run() error {
 	// acceptance deadline were both built and verified in Phase 10; until now
 	// nothing served them, so the sweeper below was cancelling orders that no
 	// merchant had any way to answer.
-	merchantStore := merchant.NewStore(pool.Pool)
 	// WithJobs is what turns a ready order into a delivery: document 070's two
 	// lifecycles, linked at READY_FOR_PICKUP and nowhere else.
 	merchantHandler := merchant.NewHandler(

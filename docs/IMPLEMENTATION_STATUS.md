@@ -1459,3 +1459,39 @@ uncalled — the order-level release supersedes it and it should probably go.
 **Verification.** Partial: no Go toolchain in this session. 2 handler tests and 7 integration
 tests are written and unverified. Run `make migrate-up`/`migrate-down` too — the schema goes to
 version 13 and back.
+
+## The Order Follows Its Delivery — 2026-09-10
+
+The grocery lifecycle stopped at `READY_FOR_PICKUP`. The delivery job moved through its own
+states as the driver worked — accepted, at the shop, on the way, delivered — and nothing told the
+order. A customer's shopping could arrive at their door while the order still said the shop had
+finished bagging it, and `PICKED_UP`, `DELIVERING` and `DELIVERED` were three states in a machine
+nothing could reach.
+
+Document 070 is explicit that the two lifecycles "communicate through explicit events", and this
+is that communication in one direction: a job tells the order it produced what happened to it.
+The order never pushes back, and nothing in the job's flow depends on the answer.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `DeliveryProgress` maps job states onto order states | IMPLEMENTED | 1 | — | ten job states asserted, and **seven of them move nothing**: the gaps are the decision |
+| **Arriving at the shop collects nothing** | IMPLEMENTED | 1 | — | `AT_PICKUP` deliberately does not move the order. One that said `PICKED_UP` then is an order the shop believes has left while the bags are on the counter |
+| The order walks rather than jumps | IMPLEMENTED | 2 | — | `IN_PROGRESS` takes it through `PICKED_UP` to `DELIVERING`, so "when did the driver collect it?" has a row to answer from |
+| A repeated event moves nothing | IMPLEMENTED | 2 | — | the driver's client retries; an order already delivered stays delivered and one ahead of the event does not go backwards |
+| **A ride moves no order** | IMPLEMENTED | 1 | — | every ride and every parcel takes this path and finds no order, which is the ordinary case rather than a failure |
+| A failed delivery fails the order | IMPLEMENTED | 2 | — | `FAILED`, not `CANCELLED`: the goods were picked and somebody has to deal with a bagged order nobody collected, and cancelled would suggest nothing was ever done |
+| An order that already ended is not ended again | IMPLEMENTED | 1 | — | |
+| **Following never fails the driver's command** | IMPLEMENTED | n/a | — | the job has already moved. A driver who tapped "delivered" must not be told it failed because a grocery order would not follow; logged at error level, because a customer looking at an order that says `PICKED_UP` after their shopping arrived has been told something false |
+| Booking stays generic over job type | IMPLEMENTED | n/a | — | the interface is declared in booking and implemented by merchant, so booking knows some jobs were made on something's behalf and nothing about shops |
+
+**Where this is weaker than document 070 asks.** The link is a synchronous interface call, not an
+event. The dispatch outbox exists (`PendingEvents`/`MarkPublished`) and still has no publisher;
+when it gets one, this is the first thing that should move onto it — a delivery that fails to
+notify its order would then retry instead of being logged.
+
+**Not done.** A customer still cannot cancel their own order, so the customer's stock-release path
+still does not exist. `Report Issue` (document 074) still has no route.
+
+**Verification.** Partial: no Go toolchain in this session. 6 handler tests and 2 integration
+tests are written and unverified; the integration pair walks a real order from ready to delivered
+and asserts the history rows behind it.

@@ -34,6 +34,7 @@ type stubStore struct {
 	outletErr   error
 	attachErr   error
 	consumeErr  error
+	byJobErr    error
 	transitions []transition
 	rejections  []rejection
 	attached    []attachment
@@ -104,6 +105,13 @@ func (s *stubStore) OutletByID(_ context.Context, _ string) (merchant.Outlet, er
 		return merchant.Outlet{}, s.outletErr
 	}
 	return s.outlet, nil
+}
+
+func (s *stubStore) OrderByJobID(_ context.Context, _ string) (merchant.Order, error) {
+	if s.byJobErr != nil {
+		return merchant.Order{}, s.byJobErr
+	}
+	return s.order, nil
 }
 
 func (s *stubStore) ConsumeOrderStock(_ context.Context, orderID string) error {
@@ -773,5 +781,121 @@ func TestARetryDoesNotConsumeTheStockTwice(t *testing.T) {
 
 	if len(store.consumed) != 0 {
 		t.Errorf("stock was consumed again on a retry: %+v", store.consumed)
+	}
+}
+
+// --- an order follows its delivery (document 070) ---------------------------
+
+func TestOnlyThreeJobStatesMoveAnOrder(t *testing.T) {
+	// The gaps are the decision. A driver arriving at the shop has not
+	// collected anything, and an order that said PICKED_UP then is one the
+	// shop believes has left while the bags are on the counter.
+	for _, testCase := range []struct {
+		job   jobs.Status
+		want  merchant.OrderStatus
+		moves bool
+	}{
+		{jobs.StatusAssigned, "", false},
+		{jobs.StatusAccepted, "", false},
+		{jobs.StatusArriving, "", false},
+		{jobs.StatusAtPickup, "", false},
+		{jobs.StatusInProgress, merchant.StatusDelivering, true},
+		{jobs.StatusAtDropoff, merchant.StatusDelivering, true},
+		{jobs.StatusCompleted, merchant.StatusDelivered, true},
+		{jobs.StatusCancelled, merchant.StatusFailed, true},
+		{jobs.StatusExpired, merchant.StatusFailed, true},
+		{jobs.StatusFailed, merchant.StatusFailed, true},
+	} {
+		got, moves := merchant.DeliveryProgress(testCase.job)
+		if moves != testCase.moves || got != testCase.want {
+			t.Errorf("%s → %q (%v), want %q (%v)",
+				testCase.job, got, moves, testCase.want, testCase.moves)
+		}
+	}
+}
+
+func TestAnOrderWalksToWhereItsDeliveryGot(t *testing.T) {
+	// Walking rather than jumping: a customer asking when the driver collected
+	// their shopping needs PICKED_UP in the history, not only DELIVERING.
+	ready := aPreparedOrder()
+	ready.Status = merchant.StatusReadyForPickup
+	store := &stubStore{order: ready}
+
+	if err := merchant.NewService(store).FollowDelivery(
+		context.Background(), "job-1", jobs.StatusInProgress); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.transitions) != 2 {
+		t.Fatalf("transitions = %+v", store.transitions)
+	}
+	if store.transitions[0].to != merchant.StatusPickedUp {
+		t.Errorf("first move = %s, want PICKED_UP", store.transitions[0].to)
+	}
+	if store.transitions[1].to != merchant.StatusDelivering {
+		t.Errorf("second move = %s, want DELIVERING", store.transitions[1].to)
+	}
+}
+
+func TestARepeatedDeliveryEventMovesNothing(t *testing.T) {
+	// The driver's client retries. An order already delivered must not be
+	// walked anywhere, and an order ahead of the event must not go backwards.
+	delivered := aPreparedOrder()
+	delivered.Status = merchant.StatusDelivered
+	store := &stubStore{order: delivered}
+
+	for _, status := range []jobs.Status{
+		jobs.StatusInProgress, jobs.StatusCompleted, jobs.StatusAtDropoff,
+	} {
+		if err := merchant.NewService(store).FollowDelivery(
+			context.Background(), "job-1", status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(store.transitions) != 0 {
+		t.Errorf("a delivered order was moved again: %+v", store.transitions)
+	}
+}
+
+func TestARideMovesNoOrder(t *testing.T) {
+	// Every ride and every parcel takes this path. A job with no order is the
+	// ordinary case, not a failure.
+	store := &stubStore{byJobErr: merchant.ErrNotFound}
+	if err := merchant.NewService(store).FollowDelivery(
+		context.Background(), "job-1", jobs.StatusCompleted); err != nil {
+		t.Fatalf("a plain ride reported an error: %v", err)
+	}
+	if len(store.transitions) != 0 {
+		t.Errorf("transitions = %+v", store.transitions)
+	}
+}
+
+func TestADeliveryThatFailsFailsTheOrder(t *testing.T) {
+	// The goods were picked and never arrived. Somebody has to deal with a
+	// bagged order nobody collected, and CANCELLED would suggest nothing was
+	// ever done.
+	delivering := aPreparedOrder()
+	delivering.Status = merchant.StatusDelivering
+	store := &stubStore{order: delivering}
+
+	if err := merchant.NewService(store).FollowDelivery(
+		context.Background(), "job-1", jobs.StatusFailed); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.transitions) != 1 || store.transitions[0].to != merchant.StatusFailed {
+		t.Fatalf("transitions = %+v", store.transitions)
+	}
+}
+
+func TestAnOrderThatAlreadyEndedIsNotFailedAgain(t *testing.T) {
+	cancelled := aPreparedOrder()
+	cancelled.Status = merchant.StatusCancelled
+	store := &stubStore{order: cancelled}
+
+	if err := merchant.NewService(store).FollowDelivery(
+		context.Background(), "job-1", jobs.StatusCancelled); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.transitions) != 0 {
+		t.Errorf("a cancelled order was moved: %+v", store.transitions)
 	}
 }

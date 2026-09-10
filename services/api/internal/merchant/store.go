@@ -899,3 +899,20 @@ func (s *Store) settleOrderStock(ctx context.Context, orderID, to string) error 
 	}
 	return tx.Commit(ctx)
 }
+
+// OrderByJobID finds the order a delivery job was created for.
+//
+// The link document 070 describes, read from the other end: the job knows
+// nothing about the order, so following a delivery back to the shop that
+// produced it starts here.
+func (s *Store) OrderByJobID(ctx context.Context, jobID string) (Order, error) {
+	order, err := scanOrder(s.pool.QueryRow(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE job_id = $1`, jobID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Order{}, ErrNotFound
+	}
+	if err != nil {
+		return Order{}, fmt.Errorf("load order by job: %w", err)
+	}
+	return order, nil
+}
