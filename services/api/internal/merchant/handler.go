@@ -22,6 +22,20 @@ type Handler struct{ service *Service }
 
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
+// issuesOf is best-effort: an order that renders without its issue list is
+// worse than no order at all only if the list was the point, and the caller
+// here is a dashboard that has just acted on the order.
+func (h *Handler) issuesOf(r *http.Request, orderID string) ([]IssueResponse, error) {
+	issues, err := h.service.Issues(r.Context(), orderID)
+	if err != nil {
+		return nil, err
+	}
+	if len(issues) == 0 {
+		return nil, nil
+	}
+	return ToIssueResponses(issues), nil
+}
+
 func (h *Handler) Routes(mux *http.ServeMux, authenticate func(http.Handler) http.Handler) {
 	const p = httpx.APIVersionPrefix
 	merchantOnly := func(fn http.HandlerFunc) http.Handler {
@@ -34,6 +48,7 @@ func (h *Handler) Routes(mux *http.ServeMux, authenticate func(http.Handler) htt
 	mux.Handle("POST "+p+"/merchant/orders/{id}/reject", merchantOnly(h.reject))
 	mux.Handle("POST "+p+"/merchant/orders/{id}/preparing", merchantOnly(h.preparing))
 	mux.Handle("POST "+p+"/merchant/orders/{id}/ready", merchantOnly(h.ready))
+	mux.Handle("POST "+p+"/merchant/orders/{id}/items/{itemId}/issue", merchantOnly(h.reportIssue))
 }
 
 // --- responses ---------------------------------------------------------------
@@ -73,6 +88,46 @@ type OrderResponse struct {
 	// a dashboard can follow the driver without asking a second endpoint which
 	// job to follow.
 	JobID string `json:"job_id,omitempty"`
+	// Issues are the problems a picker found, and what happened about them.
+	Issues []IssueResponse `json:"issues,omitempty"`
+}
+
+// IssueResponse is one item problem (document 074).
+type IssueResponse struct {
+	ID          string `json:"id"`
+	OrderItemID string `json:"order_item_id"`
+	Reason      string `json:"reason"`
+	// Action is what is happening, after the customer's standing preference
+	// has been applied — not what the shop proposed.
+	Action string `json:"action"`
+	// Resolution is PENDING while the customer has been asked and has not
+	// answered. Nothing is repriced until it is not.
+	Resolution      string        `json:"resolution"`
+	SubstituteName  string        `json:"substitute_name,omitempty"`
+	SubstitutePrice *money.Amount `json:"substitute_price,omitempty"`
+	// PriceDifference is what the substitution changes for the customer,
+	// positive or negative — BD-11 sends both directions to them.
+	PriceDifference *money.Amount `json:"price_difference,omitempty"`
+	CreatedAt       time.Time     `json:"created_at"`
+}
+
+// ToIssueResponses renders an order's item problems.
+func ToIssueResponses(issues []Issue) []IssueResponse {
+	out := make([]IssueResponse, 0, len(issues))
+	for _, issue := range issues {
+		out = append(out, IssueResponse{
+			ID:              issue.ID,
+			OrderItemID:     issue.OrderItemID,
+			Reason:          issue.Reason,
+			Action:          string(issue.Action),
+			Resolution:      issue.Resolution,
+			SubstituteName:  issue.SubstituteName,
+			SubstitutePrice: issue.SubstitutePrice,
+			PriceDifference: issue.PriceDifference,
+			CreatedAt:       issue.CreatedAt,
+		})
+	}
+	return out
 }
 
 func toOrderResponse(order Order, withItems bool) (OrderResponse, error) {
@@ -164,7 +219,7 @@ func (h *Handler) order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeOrder(w, r, order)
+	h.writeOrder(w, r, order)
 }
 
 func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +229,7 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeOrder(w, r, order)
+	h.writeOrder(w, r, order)
 }
 
 type rejectBody struct {
@@ -193,7 +248,7 @@ func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeOrder(w, r, order)
+	h.writeOrder(w, r, order)
 }
 
 func (h *Handler) preparing(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +258,45 @@ func (h *Handler) preparing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeOrder(w, r, order)
+	h.writeOrder(w, r, order)
+}
+
+type issueBody struct {
+	Reason string `json:"reason"`
+	// Action is what the shop proposes. What actually happens is decided by
+	// the customer's standing preference on the line.
+	Action               string `json:"action"`
+	SubstituteName       string `json:"substitute_name,omitempty"`
+	SubstitutePriceMinor *int64 `json:"substitute_price_minor,omitempty"`
+}
+
+// reportIssue records an empty shelf and what is being done about it.
+func (h *Handler) reportIssue(w http.ResponseWriter, r *http.Request) {
+	var body issueBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.WriteError(w, r, httpx.Validation("the request body could not be read", nil))
+		return
+	}
+
+	var substitute *money.Amount
+	if body.SubstitutePriceMinor != nil {
+		amount, err := money.New(*body.SubstitutePriceMinor, money.PKR)
+		if err != nil {
+			httpx.WriteError(w, r, httpx.Validation("that is not a price",
+				map[string]string{"substitute_price_minor": err.Error()}))
+			return
+		}
+		substitute = &amount
+	}
+
+	issue, err := h.service.ReportIssue(r.Context(), identity.MustPrincipal(r.Context()).UserID,
+		r.PathValue("id"), r.PathValue("itemId"), body.Reason,
+		IssueAction(body.Action), body.SubstituteName, substitute)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, ToIssueResponses([]Issue{issue})[0])
 }
 
 // ready hands a finished order to a driver.
@@ -214,14 +307,19 @@ func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeOrder(w, r, order)
+	h.writeOrder(w, r, order)
 }
 
-func writeOrder(w http.ResponseWriter, r *http.Request, order Order) {
+func (h *Handler) writeOrder(w http.ResponseWriter, r *http.Request, order Order) {
 	response, err := toOrderResponse(order, true)
 	if err != nil {
 		httpx.WriteError(w, r, httpx.Internal("could not render the order").WithCause(err))
 		return
+	}
+	// A picker looking at an order needs to see what was already reported
+	// against it, or they report the same empty shelf twice.
+	if issues, err := h.issuesOf(r, order.ID); err == nil {
+		response.Issues = issues
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, response)
 }
@@ -256,6 +354,16 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, httpx.Conflict("this order is waiting on payment"))
 	case errors.Is(err, ErrNotAcceptable):
 		httpx.WriteError(w, r, httpx.Conflict("this order is not waiting to be accepted"))
+	case errors.Is(err, ErrBadAction):
+		httpx.WriteError(w, r, httpx.Validation("no such action",
+			map[string]string{"action": "SUBSTITUTE, REMOVE or REQUEST_CUSTOMER_DECISION"}))
+	case errors.Is(err, ErrNotPicking):
+		httpx.WriteError(w, r, httpx.Conflict("this order is not being prepared"))
+	case errors.Is(err, ErrSubstituteIncomplete):
+		httpx.WriteError(w, r, httpx.Validation("a substitute needs a name and a price",
+			map[string]string{"substitute_name": "required", "substitute_price_minor": "required"}))
+	case errors.Is(err, ErrIssueSettled):
+		httpx.WriteError(w, r, httpx.Conflict("this has already been decided"))
 	case errors.Is(err, ErrNotPreparable):
 		httpx.WriteError(w, r, httpx.Conflict("accept this order before preparing it"))
 	case errors.Is(err, ErrNotReadyable):

@@ -295,6 +295,10 @@ var (
 	// ErrNoPickupPoint reports a store with no coordinates. A pickup nobody can
 	// be routed to is a job no driver can take.
 	ErrNoPickupPoint = errors.New("merchant: this store has no location on the map")
+	// ErrIssueSettled reports an answer to a question somebody already
+	// answered — the customer twice, or the merchant giving up while they
+	// thought about it.
+	ErrIssueSettled = errors.New("merchant: this has already been decided")
 )
 
 // StoreOpenAt reports whether a store's hours cover a moment.

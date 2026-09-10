@@ -34,6 +34,7 @@ func (h *CustomerHandler) Routes(mux *http.ServeMux, authenticate func(http.Hand
 	mux.Handle("GET "+p+"/orders/{id}", auth(h.order))
 	mux.Handle("POST "+p+"/orders/{id}/items", auth(h.addItem))
 	mux.Handle("POST "+p+"/orders/{id}/place", auth(h.place))
+	mux.Handle("POST "+p+"/orders/{id}/issues/{issueId}/decision", auth(h.decideIssue))
 }
 
 // --- responses ---------------------------------------------------------------
@@ -82,6 +83,10 @@ type CartResponse struct {
 	Delivery       *DeliveryResponse `json:"delivery,omitempty"`
 	AcceptDeadline *time.Time        `json:"accept_deadline,omitempty"`
 	CreatedAt      time.Time         `json:"created_at"`
+	// Issues are what the shop found missing. A PENDING one is a question
+	// waiting on this customer, and the screen that shows the order is the
+	// one that has to ask it.
+	Issues []IssueResponse `json:"issues,omitempty"`
 }
 
 // CartLine is one line as the customer sees it.
@@ -223,7 +228,7 @@ func (h *CustomerHandler) openCart(w http.ResponseWriter, r *http.Request) {
 		customerError(w, r, err)
 		return
 	}
-	writeCart(w, r, cart)
+	h.writeCart(w, r, cart)
 }
 
 type addItemBody struct {
@@ -260,7 +265,7 @@ func (h *CustomerHandler) addItem(w http.ResponseWriter, r *http.Request) {
 		customerError(w, r, err)
 		return
 	}
-	writeCart(w, r, cart)
+	h.writeCart(w, r, cart)
 }
 
 func (h *CustomerHandler) order(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +275,7 @@ func (h *CustomerHandler) order(w http.ResponseWriter, r *http.Request) {
 		customerError(w, r, err)
 		return
 	}
-	writeCart(w, r, order)
+	h.writeCart(w, r, order)
 }
 
 func (h *CustomerHandler) orders(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +298,36 @@ func (h *CustomerHandler) orders(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, r, http.StatusOK,
 		map[string]any{"items": items, "page": httpx.PageInfo{Limit: limit}})
+}
+
+type decisionBody struct {
+	// Accept is the whole question: take the substitute at its price, or go
+	// without the line.
+	Accept bool `json:"accept"`
+}
+
+// decideIssue answers a substitution the shop asked about.
+func (h *CustomerHandler) decideIssue(w http.ResponseWriter, r *http.Request) {
+	var body decisionBody
+	if !decodeBody(w, r, &body) {
+		return
+	}
+
+	if _, err := h.service.DecideIssue(r.Context(), identity.MustPrincipal(r.Context()).UserID,
+		r.PathValue("id"), r.PathValue("issueId"), body.Accept); err != nil {
+		customerError(w, r, err)
+		return
+	}
+
+	// The whole order back, because the answer changed the total and that is
+	// the number the customer is now looking at (BD-11).
+	order, err := h.service.Order(r.Context(),
+		identity.MustPrincipal(r.Context()).UserID, r.PathValue("id"))
+	if err != nil {
+		customerError(w, r, err)
+		return
+	}
+	h.writeCart(w, r, order)
 }
 
 type placeBody struct {
@@ -321,14 +356,20 @@ func (h *CustomerHandler) place(w http.ResponseWriter, r *http.Request) {
 		customerError(w, r, err)
 		return
 	}
-	writeCart(w, r, placed)
+	h.writeCart(w, r, placed)
 }
 
-func writeCart(w http.ResponseWriter, r *http.Request, order Order) {
+func (h *CustomerHandler) writeCart(w http.ResponseWriter, r *http.Request, order Order) {
 	response, err := toCartResponse(order)
 	if err != nil {
 		httpx.WriteError(w, r, httpx.Internal("could not render the order").WithCause(err))
 		return
+	}
+	// A pending substitution is a question waiting on this customer, so it
+	// travels with the order rather than behind another request they would
+	// have to know to make.
+	if issues, err := h.service.Issues(r.Context(), order.ID); err == nil && len(issues) > 0 {
+		response.Issues = ToIssueResponses(issues)
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, response)
 }
@@ -376,6 +417,8 @@ func customerError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, httpx.Conflict("that is not available at this shop right now"))
 	case errors.Is(err, ErrAcceptTimeoutUnset):
 		httpx.WriteError(w, r, httpx.Unavailable("this shop cannot take orders right now"))
+	case errors.Is(err, ErrIssueSettled):
+		httpx.WriteError(w, r, httpx.Conflict("this has already been decided"))
 	case errors.Is(err, ErrStale):
 		httpx.WriteError(w, r, httpx.Conflict("this order changed, please reload it"))
 	default:

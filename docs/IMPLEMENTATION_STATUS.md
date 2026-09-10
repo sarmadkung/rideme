@@ -1495,3 +1495,35 @@ still does not exist. `Report Issue` (document 074) still has no route.
 **Verification.** Partial: no Go toolchain in this session. 6 handler tests and 2 integration
 tests are written and unverified; the integration pair walks a real order from ready to delivered
 and asserts the history rows behind it.
+
+## Report Issue — the Empty Shelf — 2026-09-10
+
+Document 072 lists five merchant actions and four were built. This is the fifth, and behind it
+the last substantial body of grocery logic that had been written, tested and left unreachable:
+`ResolveIssue`, `PriceDifference`, `RecordIssue` and `IssuesOf`. A picker who found an empty
+shelf had no way to say so, and BD-11 — resolved by the owner on 2026-08-28, "the customer pays
+the substitute's actual price, up or down" — had nothing that could trigger it.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /merchant/orders/{id}/items/{itemId}/issue` | IMPLEMENTED | 8 | — | document 072's Report Issue |
+| **The customer's preference decides, not the shop's proposal** | IMPLEMENTED | 3 | — | a substitute offered for a line marked `DO_NOT_ALLOW` becomes a removal. `ResolveIssue` owns that rule and the surface asks it rather than repeating it |
+| An `ALLOW` substitution applies at once | IMPLEMENTED | 1 | — | `AUTO_APPLIED`, the line becomes `SUBSTITUTED`, and BD-11 reprices it |
+| **An `ASK_ME` substitution changes nothing yet** | IMPLEMENTED | 2 | — | the line is untouched and so is the total. The customer owes what they ordered until they answer — and the price they are being asked about travels with the question |
+| A substitute needs a name and a price | IMPLEMENTED | 1 | — | "something else" is neither something a picker can bag nor something a customer can be charged for |
+| Only while somebody is picking | IMPLEMENTED | 1 | — | before `PREPARING` nobody has looked at the shelf; after it the order has left the shop |
+| `POST /orders/{id}/issues/{issueId}/decision` | IMPLEMENTED | 5 | — | the customer's answer, and only theirs: the point of `ASK_ME` is that the shop does not decide |
+| **Accepting charges the substitute's price** | IMPLEMENTED | 2 | — | asserted against a real total: two lines at 250 become 400 each, and the total follows |
+| **Declining loses the line rather than restoring it** | IMPLEMENTED | 2 | — | the shelf is empty, which is why they were asked |
+| Answering twice is refused | IMPLEMENTED | 2 | — | compare-and-set on `PENDING`. The merchant may have given up and removed the item while the customer thought about it; whoever got there first decided |
+| The original line is never rewritten | IMPLEMENTED | 1 | — | document 074. What was ordered stays readable after what was supplied changed — the substitute's price lives on the issue row and the total is recomputed from both |
+| Issues travel with the order, both sides | IMPLEMENTED | 2 | — | a picker sees what was already reported so they do not report it twice, and a customer sees the question on the screen they are already looking at |
+
+**Not done.** A customer still cannot cancel their own order. `IssuesOf` now carries the money on
+an issue, which it did not before — the previous query selected the substitute's name and not
+its price, so an issue was a question nobody could have answered.
+
+**Verification.** Partial: no Go toolchain in this session. 13 handler tests and 4 integration
+tests are written and unverified. The integration tests are the ones that matter here: they run
+BD-11's repricing through `recomputeTotal` against a real order rather than asserting what a stub
+was told.

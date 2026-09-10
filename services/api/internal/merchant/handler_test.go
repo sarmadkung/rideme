@@ -39,10 +39,19 @@ type stubStore struct {
 	rejections  []rejection
 	attached    []attachment
 	consumed    []string
+	issues      []recorded
+	settled     []settlement
 	askedFor    []merchant.OrderStatus
 }
 
 type attachment struct{ orderID, jobID string }
+
+type recorded struct {
+	issue      merchant.Issue
+	itemStatus string
+}
+
+type settlement struct{ orderID, issueID, resolution, itemStatus string }
 
 // stubJobs stands in for the job store on the other side of document 070's
 // link.
@@ -105,6 +114,23 @@ func (s *stubStore) OutletByID(_ context.Context, _ string) (merchant.Outlet, er
 		return merchant.Outlet{}, s.outletErr
 	}
 	return s.outlet, nil
+}
+
+func (s *stubStore) RecordIssue(_ context.Context, issue merchant.Issue,
+	itemStatus string) (merchant.Issue, error) {
+	issue.ID = "issue-new"
+	s.issues = append(s.issues, recorded{issue, itemStatus})
+	return issue, nil
+}
+
+func (s *stubStore) SettleIssue(_ context.Context, orderID, issueID, resolution,
+	itemStatus string) (merchant.Issue, error) {
+	s.settled = append(s.settled, settlement{orderID, issueID, resolution, itemStatus})
+	return merchant.Issue{ID: issueID, Resolution: resolution}, nil
+}
+
+func (s *stubStore) IssuesOf(_ context.Context, _ string) ([]merchant.Issue, error) {
+	return nil, nil
 }
 
 func (s *stubStore) OrderByJobID(_ context.Context, _ string) (merchant.Order, error) {
@@ -897,5 +923,169 @@ func TestAnOrderThatAlreadyEndedIsNotFailedAgain(t *testing.T) {
 	}
 	if len(store.transitions) != 0 {
 		t.Errorf("a cancelled order was moved: %+v", store.transitions)
+	}
+}
+
+// --- item issues (document 074) ---------------------------------------------
+
+func aLine(preference merchant.SubstitutionPreference) merchant.Order {
+	order := aPreparedOrder()
+	order.Status = merchant.StatusPreparing
+	order.Items[0].Preference = preference
+	return order
+}
+
+func reportIssue(t *testing.T, store *stubStore, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return call(t, serveWithJobs(store, &stubJobs{}, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/items/item-1/issue", body)
+}
+
+func TestTheCustomersPreferenceDecidesNotTheShops(t *testing.T) {
+	// Document 074, and the reason ResolveIssue exists. A shop proposing a
+	// substitute for a line marked DO_NOT_ALLOW does not get to make it.
+	store := &stubStore{shop: anActiveShop(), order: aLine(merchant.PreferDoNotAllow)}
+	response := reportIssue(t, store,
+		`{"reason":"shelf empty","action":"SUBSTITUTE","substitute_name":"Nurpur 1L",`+
+			`"substitute_price_minor":62000}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(store.issues) != 1 {
+		t.Fatalf("issues = %+v", store.issues)
+	}
+	recordedIssue := store.issues[0]
+	if recordedIssue.issue.Action != merchant.ActionRemove {
+		t.Errorf("action = %s, want REMOVE — the customer refused substitutions",
+			recordedIssue.issue.Action)
+	}
+	if recordedIssue.itemStatus != merchant.ItemRemoved {
+		t.Errorf("item status = %s", recordedIssue.itemStatus)
+	}
+}
+
+func TestASubstitutionForAWillingCustomerAppliesAtOnce(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), order: aLine(merchant.PreferAllow)}
+	response := reportIssue(t, store,
+		`{"reason":"shelf empty","action":"SUBSTITUTE","substitute_name":"Nurpur 1L",`+
+			`"substitute_price_minor":62000}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	recordedIssue := store.issues[0]
+	if recordedIssue.issue.Resolution != merchant.ResolutionAutoApplied {
+		t.Errorf("resolution = %s, want AUTO_APPLIED", recordedIssue.issue.Resolution)
+	}
+	if recordedIssue.itemStatus != merchant.ItemSubstituted {
+		t.Errorf("item status = %s", recordedIssue.itemStatus)
+	}
+	// Two units at 600.00 replaced by two at 620.00: BD-11 sends the
+	// difference to the customer, in this direction and the other.
+	if recordedIssue.issue.PriceDifference == nil ||
+		recordedIssue.issue.PriceDifference.Minor != 4000 {
+		t.Errorf("price difference = %+v, want 4000", recordedIssue.issue.PriceDifference)
+	}
+}
+
+func TestACustomerWhoAskedToBeAskedIsAsked(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), order: aLine(merchant.PreferAsk)}
+	response := reportIssue(t, store,
+		`{"reason":"shelf empty","action":"SUBSTITUTE","substitute_name":"Nurpur 1L",`+
+			`"substitute_price_minor":62000}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	recordedIssue := store.issues[0]
+	if recordedIssue.issue.Action != merchant.ActionAsk {
+		t.Errorf("action = %s, want REQUEST_CUSTOMER_DECISION", recordedIssue.issue.Action)
+	}
+	if recordedIssue.issue.Resolution != merchant.ResolutionPending {
+		t.Errorf("resolution = %s, want PENDING", recordedIssue.issue.Resolution)
+	}
+	// The line is untouched, so the total is too: an unanswered substitution
+	// changes nothing (BD-11).
+	if recordedIssue.itemStatus != "" {
+		t.Errorf("item status = %q, want the line left alone until they answer",
+			recordedIssue.itemStatus)
+	}
+	// But they are told what they are being asked about.
+	if recordedIssue.issue.SubstitutePrice == nil {
+		t.Error("the customer was asked about a substitute with no price")
+	}
+}
+
+func TestASubstituteNeedsANameAndAPrice(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), order: aLine(merchant.PreferAllow)}
+	for _, body := range []string{
+		`{"reason":"shelf empty","action":"SUBSTITUTE"}`,
+		`{"reason":"shelf empty","action":"SUBSTITUTE","substitute_name":"Nurpur 1L"}`,
+		`{"reason":"shelf empty","action":"SUBSTITUTE","substitute_price_minor":62000}`,
+	} {
+		if response := reportIssue(t, store, body); response.Code == http.StatusOK {
+			t.Errorf("%s was accepted", body)
+		}
+	}
+	if len(store.issues) != 0 {
+		t.Errorf("issues = %+v", store.issues)
+	}
+}
+
+func TestAnIssueNeedsAReasonAndAKnownAction(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), order: aLine(merchant.PreferAllow)}
+	for _, body := range []string{
+		`{"action":"REMOVE"}`,
+		`{"reason":"   ","action":"REMOVE"}`,
+		`{"reason":"shelf empty","action":"SET_ON_FIRE"}`,
+		`{"reason":"shelf empty"}`,
+	} {
+		if response := reportIssue(t, store, body); response.Code == http.StatusOK {
+			t.Errorf("%s was accepted", body)
+		}
+	}
+	if len(store.issues) != 0 {
+		t.Errorf("issues = %+v", store.issues)
+	}
+}
+
+func TestAProblemIsOnlyReportedWhileSomebodyIsPicking(t *testing.T) {
+	// Before PREPARING nobody has looked at the shelf; after it the order has
+	// left the shop.
+	store := &stubStore{shop: anActiveShop()}
+	for _, status := range []merchant.OrderStatus{
+		merchant.StatusPlaced, merchant.StatusConfirmed,
+		merchant.StatusReadyForPickup, merchant.StatusDelivered,
+	} {
+		store.order = anOrder(status)
+		response := reportIssue(t, store, `{"reason":"shelf empty","action":"REMOVE"}`)
+		if response.Code != http.StatusConflict {
+			t.Errorf("%s: status = %d, want 409", status, response.Code)
+		}
+	}
+	if len(store.issues) != 0 {
+		t.Errorf("issues = %+v", store.issues)
+	}
+}
+
+func TestAProblemOnALineThatIsNotOnTheOrder(t *testing.T) {
+	store := &stubStore{shop: anActiveShop(), order: aLine(merchant.PreferAllow)}
+	response := call(t, serveWithJobs(store, &stubJobs{}, identity.RoleMerchant), http.MethodPost,
+		"/api/v1/merchant/orders/order-1/items/item-99/issue",
+		`{"reason":"shelf empty","action":"REMOVE"}`)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.Code)
+	}
+}
+
+func TestAnotherShopCannotReportOnMyOrder(t *testing.T) {
+	elsewhere := aLine(merchant.PreferAllow)
+	elsewhere.MerchantID = otherShop
+	store := &stubStore{shop: anActiveShop(), order: elsewhere}
+
+	if response := reportIssue(t, store, `{"reason":"shelf empty","action":"REMOVE"}`); response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.Code)
 	}
 }

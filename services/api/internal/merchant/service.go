@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
+	"github.com/sarmadkung/rideme/services/api/pkg/money"
 )
 
 // StatusActive is the only merchant status that may act on an order.
@@ -32,6 +33,9 @@ type OrderStore interface {
 	AttachJob(ctx context.Context, orderID, jobID string) error
 	ConsumeOrderStock(ctx context.Context, orderID string) error
 	OrderByJobID(ctx context.Context, jobID string) (Order, error)
+	RecordIssue(ctx context.Context, issue Issue, itemStatus string) (Issue, error)
+	SettleIssue(ctx context.Context, orderID, issueID, resolution, itemStatus string) (Issue, error)
+	IssuesOf(ctx context.Context, orderID string) ([]Issue, error)
 }
 
 // JobCreator is the delivery half of document 070's two lifecycles.
@@ -457,3 +461,132 @@ func flowIndexOf(status OrderStatus) int {
 	}
 	return -1
 }
+
+// --- item issues and substitutions (document 074) ----------------------------
+
+// ItemStatus values an issue can leave a line in.
+const (
+	ItemOrdered     = "ORDERED"
+	ItemSubstituted = "SUBSTITUTED"
+	ItemRemoved     = "REMOVED"
+)
+
+// MaxIssueReason bounds what a picker types at the shelf.
+const MaxIssueReason = 300
+
+// ReportIssue records what a picker found and what happens about it
+// (document 072's Report Issue, document 074's rules).
+//
+// The customer's standing instruction decides, not the merchant's proposal.
+// A shop offering a substitute for a line marked DO_NOT_ALLOW does not get to
+// make it — the item is removed and the customer gets a partial order rather
+// than something they explicitly refused. ResolveIssue owns that rule and this
+// asks it rather than repeating it.
+func (s *Service) ReportIssue(ctx context.Context, userID, orderID, itemID, reason string,
+	proposed IssueAction, substituteName string, substitutePrice *money.Amount) (Issue, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return Issue{}, ErrReasonRequired
+	}
+	if len(reason) > MaxIssueReason {
+		reason = reason[:MaxIssueReason]
+	}
+	switch proposed {
+	case ActionSubstitute, ActionRemove, ActionAsk:
+	default:
+		return Issue{}, ErrBadAction
+	}
+
+	m, order, err := s.owned(ctx, userID, orderID)
+	if err != nil {
+		return Issue{}, err
+	}
+	if err := active(m); err != nil {
+		return Issue{}, err
+	}
+	// A problem is found while picking. Before that nobody has looked at the
+	// shelf, and after it the order has left the shop.
+	if order.Status != StatusPreparing {
+		return Issue{}, ErrNotPicking
+	}
+
+	item, found := lineOf(order, itemID)
+	if !found {
+		return Issue{}, ErrNotFound
+	}
+
+	action := ResolveIssue(item.Preference, proposed)
+	if action == ActionSubstitute {
+		if strings.TrimSpace(substituteName) == "" || substitutePrice == nil {
+			// "Something else" is not a substitution a customer can be
+			// charged for or a picker can put in the bag.
+			return Issue{}, ErrSubstituteIncomplete
+		}
+	}
+
+	issue := Issue{
+		OrderID: order.ID, OrderItemID: item.ID, Reason: reason, Action: action,
+	}
+	itemStatus := ""
+
+	switch action {
+	case ActionSubstitute:
+		difference, err := PriceDifference(item.UnitPrice, *substitutePrice, item.Quantity)
+		if err != nil {
+			return Issue{}, err
+		}
+		issue.SubstituteName = strings.TrimSpace(substituteName)
+		issue.SubstitutePrice = substitutePrice
+		issue.PriceDifference = &difference
+		// The customer said ALLOW, so this is settled the moment it is
+		// recorded and BD-11 reprices the line with it.
+		issue.Resolution = ResolutionAutoApplied
+		itemStatus = ItemSubstituted
+
+	case ActionRemove:
+		// Nothing to ask: removal is what happens by default when nothing can
+		// be supplied, and the customer pays for what arrives.
+		issue.Resolution = ResolutionAutoApplied
+		itemStatus = ItemRemoved
+
+	case ActionAsk:
+		issue.SubstituteName = strings.TrimSpace(substituteName)
+		issue.SubstitutePrice = substitutePrice
+		if substitutePrice != nil {
+			difference, err := PriceDifference(item.UnitPrice, *substitutePrice, item.Quantity)
+			if err != nil {
+				return Issue{}, err
+			}
+			issue.PriceDifference = &difference
+		}
+		issue.Resolution = ResolutionPending
+		// The line is untouched and so is the total: an unanswered
+		// substitution changes nothing (BD-11). Passing no status is what
+		// keeps recomputeTotal out of it.
+	}
+
+	return s.store.RecordIssue(ctx, issue, itemStatus)
+}
+
+// Issues lists an order's item problems for whoever owns the order.
+func (s *Service) Issues(ctx context.Context, orderID string) ([]Issue, error) {
+	return s.store.IssuesOf(ctx, orderID)
+}
+
+func lineOf(order Order, itemID string) (Item, bool) {
+	for _, item := range order.Items {
+		if item.ID == itemID {
+			return item, true
+		}
+	}
+	return Item{}, false
+}
+
+var (
+	// ErrBadAction reports an action outside document 074's three.
+	ErrBadAction = errors.New("merchant: no such action for an item problem")
+	// ErrNotPicking reports an item problem on an order nobody is picking.
+	ErrNotPicking = errors.New("merchant: this order is not being prepared")
+	// ErrSubstituteIncomplete reports a substitution with no name or no price.
+	ErrSubstituteIncomplete = errors.New("merchant: a substitute needs a name and a price")
+)
