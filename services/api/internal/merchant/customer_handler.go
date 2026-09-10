@@ -35,6 +35,7 @@ func (h *CustomerHandler) Routes(mux *http.ServeMux, authenticate func(http.Hand
 	mux.Handle("POST "+p+"/orders/{id}/items", auth(h.addItem))
 	mux.Handle("POST "+p+"/orders/{id}/place", auth(h.place))
 	mux.Handle("POST "+p+"/orders/{id}/issues/{issueId}/decision", auth(h.decideIssue))
+	mux.Handle("POST "+p+"/orders/{id}/cancel", auth(h.cancel))
 }
 
 // --- responses ---------------------------------------------------------------
@@ -300,6 +301,26 @@ func (h *CustomerHandler) orders(w http.ResponseWriter, r *http.Request) {
 		map[string]any{"items": items, "page": httpx.PageInfo{Limit: limit}})
 }
 
+type cancelBody struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// cancel ends the customer's own order.
+func (h *CustomerHandler) cancel(w http.ResponseWriter, r *http.Request) {
+	var body cancelBody
+	// An absent body is a cancellation with no reason, which is allowed: a
+	// customer who changed their mind owes nobody an explanation.
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	cancelled, err := h.service.Cancel(r.Context(), identity.MustPrincipal(r.Context()).UserID,
+		r.PathValue("id"), body.Reason)
+	if err != nil {
+		customerError(w, r, err)
+		return
+	}
+	h.writeCart(w, r, cancelled)
+}
+
 type decisionBody struct {
 	// Accept is the whole question: take the substitute at its price, or go
 	// without the line.
@@ -417,6 +438,11 @@ func customerError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, httpx.Conflict("that is not available at this shop right now"))
 	case errors.Is(err, ErrAcceptTimeoutUnset):
 		httpx.WriteError(w, r, httpx.Unavailable("this shop cannot take orders right now"))
+	case errors.Is(err, ErrTooLateToCancel), errors.Is(err, ErrNotCancellable):
+		// Not "no": "not any more, and here is who can help". Somebody has
+		// handled the goods, so this is a conversation rather than a tap.
+		httpx.WriteError(w, r, httpx.Conflict(
+			"this order is already being prepared — contact support to cancel it"))
 	case errors.Is(err, ErrIssueSettled):
 		httpx.WriteError(w, r, httpx.Conflict("this has already been decided"))
 	case errors.Is(err, ErrStale):

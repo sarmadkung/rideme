@@ -1527,3 +1527,29 @@ its price, so an issue was a question nobody could have answered.
 tests are written and unverified. The integration tests are the ones that matter here: they run
 BD-11's repricing through `recomputeTotal` against a real order rather than asserting what a stub
 was told.
+
+## A Customer Calls Off Their Own Order — 2026-09-10
+
+`CustomerCancellable` has existed since Phase 10 and nothing asked it. A customer who ordered by
+mistake, or whose plans changed, could do nothing about it: their order sat in the shop's New
+queue until a merchant answered or the ten-minute sweep cancelled it for them. It also left the
+one release path the reservation slice could not reach — stock held by an order only the customer
+wanted to end.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /orders/{id}/cancel` | IMPLEMENTED | 4 | — | their own order, and only theirs |
+| **Cancellation depends on state, and the state rule already existed** | IMPLEMENTED | 2 | — | `CART`, `PLACED`, `PAYMENT_PENDING`, `CONFIRMED` — asserted per state, and the five later states asserted refused |
+| **A refusal names who can help** | IMPLEMENTED | 1 | — | "already being prepared — contact support to cancel it". Once a picker has walked the aisles, calling it off wastes goods somebody handled, and that is a conversation rather than a tap |
+| No reason required | IMPLEMENTED | 1 | — | absent body, empty object and empty string all accepted. A customer who changed their mind owes nobody an explanation, and a required field collects "asdf" |
+| **The stock comes back with the cancellation** | IMPLEMENTED | 1 | — | in `CancelByCustomer`, not in a later pass: an order cancelled while holding a shop's last bag of rice keeps it out of circulation until somebody notices |
+| Who cancelled it is recorded | IMPLEMENTED | 1 | — | `cancelled_by = 'CUSTOMER'` and the reason. "The shop had no stock" and "I changed my mind" are different conversations with support and different numbers in a merchant's report |
+| An order being picked keeps its stock held | IMPLEMENTED | 1 | — | the refusal changes nothing, including the reservation |
+
+**Grocery is now reachable end to end.** Browse a shop, fill a cart, check out to an address,
+have it accepted, picked, have an empty shelf reported and answered, marked ready, dispatched,
+offered, accepted by a driver, tracked to the door, and delivered — or cancelled, by the
+customer, the merchant, or the clock, with the stock returning in each case.
+
+**Verification.** Partial: no Go toolchain in this session. 4 handler tests and 2 integration
+tests are written and unverified.

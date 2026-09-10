@@ -29,6 +29,8 @@ type stubCatalog struct {
 	openIssues []merchant.Issue
 	decisions  []decision
 
+	cancellations []cancellation
+
 	askedLat, askedLon, askedRadius float64
 	askedAt                         time.Time
 	openedMerchant, openedStore     string
@@ -37,6 +39,12 @@ type stubCatalog struct {
 }
 
 type decision struct{ orderID, issueID, resolution, itemStatus string }
+
+type cancellation struct {
+	orderID string
+	from    merchant.OrderStatus
+	reason  string
+}
 
 type addedLine struct {
 	orderID, productID, variantID string
@@ -84,6 +92,14 @@ func (s *stubCatalog) OrderByID(_ context.Context, _ string) (merchant.Order, er
 
 func (s *stubCatalog) OrdersOf(_ context.Context, _ string, _ int) ([]merchant.Order, error) {
 	return []merchant.Order{s.order}, nil
+}
+
+func (s *stubCatalog) CancelByCustomer(_ context.Context, orderID string,
+	from merchant.OrderStatus, reason string) (merchant.Order, error) {
+	s.cancellations = append(s.cancellations, cancellation{orderID, from, reason})
+	cancelled := s.order
+	cancelled.Status = merchant.StatusCancelled
+	return cancelled, nil
 }
 
 func (s *stubCatalog) IssuesOf(_ context.Context, _ string) ([]merchant.Issue, error) {
@@ -566,5 +582,82 @@ func TestAnsweringTwiceIsRefusedRatherThanRepriced(t *testing.T) {
 
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", response.Code)
+	}
+}
+
+// --- cancelling your own order (document 070) --------------------------------
+
+func TestACustomerCanCallOffAnOrderNobodyHasPicked(t *testing.T) {
+	for _, status := range []merchant.OrderStatus{
+		merchant.StatusCart, merchant.StatusPlaced,
+		merchant.StatusPaymentPending, merchant.StatusConfirmed,
+	} {
+		order := aCart()
+		order.Status = status
+		store := &stubCatalog{order: order}
+		response := call(t, serveCustomer(store), http.MethodPost,
+			"/api/v1/orders/order-1/cancel", `{"reason":"ordered by mistake"}`)
+
+		if response.Code != http.StatusOK {
+			t.Errorf("%s: status = %d, body %s", status, response.Code, response.Body)
+			continue
+		}
+		if len(store.cancellations) != 1 || store.cancellations[0].from != status {
+			t.Errorf("%s: cancellations = %+v", status, store.cancellations)
+		}
+	}
+}
+
+func TestCancellingNeedsNoReason(t *testing.T) {
+	// A customer who changed their mind owes nobody an explanation, and a
+	// required field would only collect "asdf".
+	store := &stubCatalog{order: aCart()}
+	mux := serveCustomer(store)
+
+	for _, body := range []string{"", `{}`, `{"reason":""}`} {
+		response := call(t, mux, http.MethodPost, "/api/v1/orders/order-1/cancel", body)
+		if response.Code != http.StatusOK {
+			t.Errorf("body %q: status = %d, body %s", body, response.Code, response.Body)
+		}
+	}
+	if len(store.cancellations) != 3 {
+		t.Errorf("cancellations = %+v", store.cancellations)
+	}
+}
+
+func TestAnOrderBeingPickedCannotBeCalledOff(t *testing.T) {
+	// Document 070: once a picker has walked the aisles, cancelling wastes
+	// goods somebody has handled. The answer says who can help instead.
+	for _, status := range []merchant.OrderStatus{
+		merchant.StatusPreparing, merchant.StatusReadyForPickup,
+		merchant.StatusPickedUp, merchant.StatusDelivering, merchant.StatusDelivered,
+	} {
+		order := aCart()
+		order.Status = status
+		store := &stubCatalog{order: order}
+		response := call(t, serveCustomer(store), http.MethodPost,
+			"/api/v1/orders/order-1/cancel", "")
+
+		if response.Code != http.StatusConflict {
+			t.Errorf("%s: status = %d, want 409", status, response.Code)
+		}
+		if len(store.cancellations) != 0 {
+			t.Errorf("%s: an order being prepared was cancelled: %+v", status, store.cancellations)
+		}
+	}
+}
+
+func TestSomebodyElsesOrderCannotBeCancelled(t *testing.T) {
+	theirs := aCart()
+	theirs.CustomerUserID = "someone-else"
+	store := &stubCatalog{order: theirs}
+	response := call(t, serveCustomer(store), http.MethodPost,
+		"/api/v1/orders/order-1/cancel", "")
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.Code)
+	}
+	if len(store.cancellations) != 0 {
+		t.Errorf("cancellations = %+v", store.cancellations)
 	}
 }

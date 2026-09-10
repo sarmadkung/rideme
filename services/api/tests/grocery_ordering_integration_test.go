@@ -770,3 +770,63 @@ func TestAnAnsweredSubstitutionCannotBeAnsweredAgain(t *testing.T) {
 		t.Errorf("total = %d, want the accepted substitute's price", settled.ItemsTotal.Minor)
 	}
 }
+
+func TestCancellingAnOrderGivesTheStockBack(t *testing.T) {
+	// The customer's release path. The mechanism has existed since the
+	// reservation slice and nothing could reach it: there was no way for a
+	// customer to call off their own order.
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 6)
+	cart := h.aCartOf(t, s, 2)
+	if _, err := h.store.Place(ctx, cart.ID, aDestination(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, reserved := h.stockOf(t, s); reserved != 2 {
+		t.Fatalf("reserved = %d before cancelling", reserved)
+	}
+
+	cancelled, err := h.store.CancelByCustomer(ctx, cart.ID, merchant.StatusPlaced,
+		"ordered by mistake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != merchant.StatusCancelled {
+		t.Fatalf("order is %s", cancelled.Status)
+	}
+	quantity, reserved := h.stockOf(t, s)
+	if reserved != 0 {
+		t.Errorf("reserved = %d after cancelling, want 0", reserved)
+	}
+	if quantity == nil || *quantity != 6 {
+		t.Errorf("quantity = %v, want 6 — cancelling sells nothing", quantity)
+	}
+
+	// Who called it off is recorded, because "the shop had no stock" and "I
+	// changed my mind" are different conversations with support.
+	var by, reason string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT COALESCE(cancelled_by, ''), COALESCE(cancelled_reason, '')
+		   FROM orders WHERE id = $1`, cart.ID).Scan(&by, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if by != "CUSTOMER" || reason != "ordered by mistake" {
+		t.Errorf("cancelled_by = %q, reason = %q", by, reason)
+	}
+}
+
+func TestAnOrderBeingPickedIsNotCancellableByTheCustomer(t *testing.T) {
+	h := newMerchantHarness(t)
+	ctx := context.Background()
+	s := h.aStockedShop(t, 6)
+	order := h.aPickingOrder(t, s, 2)
+
+	if _, err := h.store.CancelByCustomer(ctx, order.ID, merchant.StatusPreparing,
+		"changed my mind"); !errors.Is(err, merchant.ErrNotCancellable) {
+		t.Fatalf("err = %v, want ErrNotCancellable", err)
+	}
+	// The stock stays held: somebody is picking it.
+	if _, reserved := h.stockOf(t, s); reserved != 2 {
+		t.Errorf("reserved = %d, want the goods still held for the picker", reserved)
+	}
+}
