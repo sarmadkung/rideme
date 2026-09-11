@@ -35,6 +35,8 @@ type CatalogStore interface {
 	Place(ctx context.Context, orderID string, to Delivery, now time.Time) (Order, error)
 	IssuesOf(ctx context.Context, orderID string) ([]Issue, error)
 	SettleIssue(ctx context.Context, orderID, issueID, resolution, itemStatus string) (Issue, error)
+	CancelByCustomer(ctx context.Context, orderID string, from OrderStatus,
+		reason string) (Order, error)
 }
 
 // CustomerService is the customer's side of a grocery order (documents 068, 071).
@@ -161,6 +163,33 @@ func (s *CustomerService) DecideIssue(ctx context.Context, userID, orderID, issu
 	return s.store.SettleIssue(ctx, order.ID, issueID, ResolutionCustomerDeclined, ItemRemoved)
 }
 
+// MaxCancelReason bounds what a customer types.
+const MaxCancelReason = 300
+
+// Cancel ends the customer's own order (document 070).
+//
+// Document 070 makes cancellation depend on state, and CustomerCancellable is
+// where that rule lives: once a picker has started walking the aisles, calling
+// off the order wastes goods somebody has handled, and the resolution is an
+// operational one rather than a tap. The refusal says which it is.
+//
+// A reason is optional. A customer who has changed their mind owes nobody an
+// explanation, and a required field would only collect "asdf".
+func (s *CustomerService) Cancel(ctx context.Context, userID, orderID, reason string) (Order, error) {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > MaxCancelReason {
+		reason = reason[:MaxCancelReason]
+	}
+	order, err := s.Order(ctx, userID, orderID)
+	if err != nil {
+		return Order{}, err
+	}
+	if !CustomerCancellable(order.Status) {
+		return Order{}, ErrTooLateToCancel
+	}
+	return s.store.CancelByCustomer(ctx, order.ID, order.Status, reason)
+}
+
 // Issues lists what the shop found missing on an order.
 func (s *CustomerService) Issues(ctx context.Context, orderID string) ([]Issue, error) {
 	return s.store.IssuesOf(ctx, orderID)
@@ -190,4 +219,7 @@ var (
 	ErrBadPreference = errors.New("merchant: no such substitution preference")
 	// ErrNotACart reports an edit to an order the customer has already placed.
 	ErrNotACart = errors.New("merchant: this order has been placed and can no longer be changed")
+	// ErrTooLateToCancel reports a cancellation of an order somebody is
+	// already picking.
+	ErrTooLateToCancel = errors.New("merchant: this order is already being prepared")
 )

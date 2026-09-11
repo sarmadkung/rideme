@@ -995,3 +995,35 @@ func (s *Store) OrderByJobID(ctx context.Context, jobID string) (Order, error) {
 	}
 	return order, nil
 }
+
+// CancelByCustomer ends an order at the customer's request.
+//
+// Distinct from Reject, which is the shop declining: the same terminal state
+// reached for a different reason, recorded as such, because "the shop had no
+// stock" and "I changed my mind" are different conversations with support and
+// different numbers in a merchant's report.
+//
+// The stock comes back here rather than in a later pass. An order cancelled
+// while still holding a shop's last bag of rice keeps it out of circulation
+// for as long as nobody notices.
+func (s *Store) CancelByCustomer(ctx context.Context, orderID string, from OrderStatus,
+	reason string) (Order, error) {
+	if !CustomerCancellable(from) {
+		return Order{}, fmt.Errorf("%w: an order that is %s cannot be cancelled by the customer",
+			ErrNotCancellable, from)
+	}
+	order, err := s.Transition(ctx, orderID, from, StatusCancelled, "CUSTOMER", "",
+		map[string]any{"reason": reason, "cancelled_by": "customer"})
+	if err != nil {
+		return Order{}, err
+	}
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE orders SET cancelled_by = 'CUSTOMER', cancelled_reason = NULLIF($2, '')
+		  WHERE id = $1`, orderID, reason); err != nil {
+		return Order{}, fmt.Errorf("record cancellation: %w", err)
+	}
+	if err := s.ReleaseOrderStock(ctx, orderID); err != nil {
+		return Order{}, err
+	}
+	return order, nil
+}
