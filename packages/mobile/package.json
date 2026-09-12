@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@platform/api-client": "workspace:*",
+    "@platform/auth": "workspace:*",
     "expo-secure-store": "~15.0.7"
   },
   "peerDependencies": {

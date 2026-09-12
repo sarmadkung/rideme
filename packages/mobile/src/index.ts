@@ -9,7 +9,16 @@
  *
  * Screens stay in the apps. Only what is genuinely identical lives here.
  */
-export { useAuth, messageFor, type AuthActions, type AuthStage, type AuthState } from './useAuth.js';
+// The login flow now lives in `@platform/auth`: it is not mobile-specific and
+// a web client cannot import this package, which pulls in the device keystore.
+// Re-exported so the apps' imports did not have to move with it.
+export {
+  useAuth,
+  messageFor,
+  type AuthActions,
+  type AuthStage,
+  type AuthState,
+} from '@platform/auth';
 export { secureTokenStorage } from './tokenStorage.js';
 export {
   MutationQueue,

@@ -1,9 +1,17 @@
 /**
- * Authentication abstractions (document 23).
+ * Authentication abstractions (document 23), and the login flow itself.
  *
- * Phase 1 defines the seam only. Registration, OTP, sessions, refresh and RBAC
- * are Phase 4 — nothing here talks to the API or decodes a token.
+ * The token abstractions below are the Phase 1 seam. The phone-OTP flow
+ * arrived later, in `@platform/mobile`, because the mobile apps were its only
+ * consumers; the merchant dashboard is the second, and a web build cannot
+ * import a package that reaches for the device keystore. So it moved here —
+ * CAP-6's rule is that a shared primitive is extracted when a second consumer
+ * appears, which is now. `@platform/mobile` re-exports it, so the apps that
+ * had it did not have to change.
  */
+
+export { useAuth, messageFor } from './useAuth.js';
+export type { AuthActions, AuthStage, AuthState } from './useAuth.js';
 
 export interface AuthTokens {
   readonly accessToken: string;
