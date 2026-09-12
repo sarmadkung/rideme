@@ -333,3 +333,45 @@ detectable.
 
 **Affects:** `pkg/statemachine`, `internal/jobs`, and every module with a lifecycle from Phase 5
 onward.
+
+---
+
+## ADR-011 — The dashboards use the workspace's own client conventions, not document 77's library list
+
+**Date:** 2026-09-11 · **Status:** Accepted
+
+**Context:** `077` specifies the merchant dashboard's technology as React, TypeScript, React
+Router, TanStack Query, Zustand "where justified", a Tailwind/CSS system, and Playwright. ADR-002
+settled React + Vite. The remaining four are libraries the workspace does not contain: the
+admin console — built against the same documents, and verified — uses plain hooks over
+`@platform/api-client`, inline styles over `@platform/ui` tokens, and no router.
+
+**Decision:** The merchant dashboard ships with **no new runtime dependency**. Server state is a
+hook per resource, as in `admin-dashboard`. Styling is `@platform/ui` tokens inline. There is no
+router: the console is two views, and which order is selected is component state.
+
+Each library is adopted at the point it earns its place, not before:
+
+- **React Router** — when a third view exists, or when a shop needs to send a colleague a link
+  to one order. The screens are shaped so this is an additive change.
+- **TanStack Query** — when caching, deduplication or invalidation across screens is what the
+  hooks are re-implementing. Today one queue and one order is not that.
+- **Zustand** — `077` already says "where justified". No state outlives a screen yet.
+- **Tailwind** — when a second web surface needs the same components; a build-time CSS pipeline
+  for two views is cost without a consumer.
+- **Playwright** — with the E2E harness, which does not exist for any surface (§F).
+
+**Alternatives:** (a) Adopt all five now, as written. It is what the document says, and it adds
+four dependency trees, a second styling system, and a build step, to a console with two views —
+`IMPLEMENTATION_EXECUTION_POLICY.md` §J forbids exactly this ("do not create an interface or
+framework without a current consumer"). (b) Adopt only React Router. Closest call: deep links to
+an order are genuinely useful to a shop. Deferred because the value appears with the second
+screen, and the URL is not load-bearing while the queue is.
+
+**Consequences:** Two dashboards share one set of conventions, so a change to how a console
+talks to the API is made once. The deferred libraries each have a stated trigger, so this is a
+decision with an expiry rather than a permanent divergence. Against: the hooks re-implement a
+little of what TanStack Query gives — polling, cursor paging, refresh-after-mutation — and when
+the third of those appears, the trigger has fired.
+
+**Affects:** `apps/merchant-dashboard`, `apps/admin-dashboard`, `077`.
