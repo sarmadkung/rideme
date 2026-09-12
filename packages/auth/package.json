@@ -21,6 +21,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@platform/api-client": "workspace:*",
     "@platform/types": "workspace:*"
   },
   "devDependencies": {
@@ -28,6 +29,11 @@
     "vitest": "^3.2.4",
     "eslint": "^9.39.0",
     "typescript-eslint": "^8.46.0",
-    "@eslint/js": "^9.39.0"
+    "@eslint/js": "^9.39.0",
+    "react": "19.2.3",
+    "@types/react": "^19.2.0"
+  },
+  "peerDependencies": {
+    "react": ">=19"
   }
 }
