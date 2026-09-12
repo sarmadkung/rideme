@@ -69,6 +69,12 @@ func Registry() *contract.Registry {
 		string(merchant.ActionRemove),
 		string(merchant.ActionAsk),
 	)
+	r.Enum("SubstitutionPreference", "SUBSTITUTION_PREFERENCES",
+		reflect.TypeOf(merchant.SubstitutionPreference("")),
+		string(merchant.PreferAllow),
+		string(merchant.PreferDoNotAllow),
+		string(merchant.PreferAsk),
+	)
 	r.Enum("GroceryOrderStatus", "GROCERY_ORDER_STATUSES", reflect.TypeOf(merchant.OrderStatus("")),
 		string(merchant.StatusCart),
 		string(merchant.StatusPlaced),
@@ -129,8 +135,19 @@ func Registry() *contract.Registry {
 	// items and issues resolve to the names registered here rather than to
 	// inline shapes.
 	r.Struct("MerchantOrderItem", merchant.OrderItemResponse{})
-	r.Struct("MerchantOrderIssue", merchant.IssueResponse{})
+	r.Struct("OrderIssue", merchant.IssueResponse{})
 	r.Struct("MerchantOrder", merchant.OrderResponse{})
+
+	// The customer's side of the same domain (documents 68, 71). `OrderIssue` is
+	// shared with the merchant above: one shape, one name — a substitution the
+	// shop proposed and the customer answers is one row, and naming it twice is
+	// how two clients come to disagree about what it says.
+	r.Struct("Store", merchant.OutletResponse{})
+	r.Struct("ProductVariant", merchant.VariantResponse{})
+	r.Struct("Product", merchant.ProductResponse{})
+	r.Struct("GroceryDelivery", merchant.DeliveryResponse{})
+	r.Struct("GroceryOrderLine", merchant.CartLine{})
+	r.Struct("GroceryOrder", merchant.CartResponse{})
 
 	return r
 }

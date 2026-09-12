@@ -52,7 +52,10 @@ func TestGeneratedTypeScriptCoversEveryServedShape(t *testing.T) {
 		"Currency", "EventName",
 		// The merchant dashboard's shapes. A queue that renders an order the
 		// contract cannot name is the hand-written interface B-2 removed.
-		"MerchantOrderItem", "MerchantOrderIssue", "MerchantOrder",
+		"MerchantOrderItem", "OrderIssue", "MerchantOrder",
+		// The customer's side of grocery.
+		"Store", "ProductVariant", "Product", "GroceryDelivery",
+		"GroceryOrderLine", "GroceryOrder",
 	}
 	got := Registry().Names()
 	for _, name := range want {

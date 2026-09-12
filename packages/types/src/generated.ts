@@ -32,6 +32,10 @@ export const ISSUE_ACTIONS = ['SUBSTITUTE', 'REMOVE', 'REQUEST_CUSTOMER_DECISION
 
 export type IssueAction = (typeof ISSUE_ACTIONS)[number];
 
+export const SUBSTITUTION_PREFERENCES = ['ALLOW', 'DO_NOT_ALLOW', 'ASK_ME'] as const;
+
+export type SubstitutionPreference = (typeof SUBSTITUTION_PREFERENCES)[number];
+
 export const GROCERY_ORDER_STATUSES = [
   'CART',
   'PLACED',
@@ -203,7 +207,7 @@ export interface MerchantOrderItem {
   status: string;
 }
 
-export interface MerchantOrderIssue {
+export interface OrderIssue {
   id: string;
   order_item_id: string;
   reason: string;
@@ -227,5 +231,61 @@ export interface MerchantOrder {
   created_at: string;
   items?: MerchantOrderItem[] | undefined;
   job_id?: string | undefined;
-  issues?: MerchantOrderIssue[] | undefined;
+  issues?: OrderIssue[] | undefined;
+}
+
+export interface Store {
+  id: string;
+  merchant_name: string;
+  name: string;
+  address?: string | undefined;
+  latitude: number;
+  longitude: number;
+  distance_m: number;
+  open: boolean;
+}
+
+export interface ProductVariant {
+  id: string;
+  name: string;
+  price_diff: Money;
+  available: boolean;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  price: Money;
+  available: boolean;
+  variants?: ProductVariant[] | undefined;
+}
+
+export interface GroceryDelivery {
+  address: string;
+  latitude: number;
+  longitude: number;
+  notes?: string | undefined;
+}
+
+export interface GroceryOrderLine {
+  id: string;
+  name: string;
+  quantity: number;
+  unit_price: Money;
+  line_total: Money;
+  substitution_preference: string;
+  status: string;
+}
+
+export interface GroceryOrder {
+  id: string;
+  store_id?: string | undefined;
+  status: string;
+  items_total: Money;
+  items: GroceryOrderLine[];
+  delivery?: GroceryDelivery | undefined;
+  accept_deadline?: string | undefined;
+  created_at: string;
+  issues?: OrderIssue[] | undefined;
 }
