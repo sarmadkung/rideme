@@ -50,6 +50,9 @@ func TestGeneratedTypeScriptCoversEveryServedShape(t *testing.T) {
 		"ApiErrorBody", "PageInfo", "Money", "DependencyHealth",
 		"HealthResponse", "AnalyticsEvent", "ErrorCode", "HealthStatus",
 		"Currency", "EventName",
+		// The merchant dashboard's shapes. A queue that renders an order the
+		// contract cannot name is the hand-written interface B-2 removed.
+		"MerchantOrderItem", "MerchantOrderIssue", "MerchantOrder",
 	}
 	got := Registry().Names()
 	for _, name := range want {

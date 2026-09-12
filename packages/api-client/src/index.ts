@@ -16,8 +16,12 @@ import type {
   DriverProfile,
   ErrorCode,
   HealthResponse,
+  IssueAction,
   Job,
   LocationReport,
+  MerchantOrder,
+  MerchantOrderIssue,
+  MerchantQueue,
   Place,
   Quote,
 } from '@platform/types';
@@ -30,6 +34,8 @@ import {
   healthResponseSchema,
   jobSchema,
   locationReportSchema,
+  merchantOrderIssueSchema,
+  merchantOrderSchema,
   placeSchema,
   quoteSchema,
 } from '@platform/validation';
@@ -150,6 +156,48 @@ export interface ApiClient {
 
   /** What the driver has made today and this week, and the trips behind it. */
   driverEarnings(): Promise<DriverEarnings>;
+
+  /**
+   * The merchant's fulfilment surface (document 72).
+   *
+   * Every one of these is scoped server-side to the merchant the caller
+   * operates: the MERCHANT role says a shop is calling, not which shop, and
+   * another shop's order must be as invisible as one that does not exist.
+   */
+  listMerchantOrders(options?: {
+    queue?: MerchantQueue;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{ items: MerchantOrder[]; nextCursor?: string }>;
+  getMerchantOrder(id: string): Promise<MerchantOrder>;
+  acceptMerchantOrder(id: string): Promise<MerchantOrder>;
+  /** A rejection carries a reason. The server refuses one without it. */
+  rejectMerchantOrder(id: string, reason: string): Promise<MerchantOrder>;
+  startPreparingMerchantOrder(id: string): Promise<MerchantOrder>;
+  /** Ready hands the order to dispatch, which is why it can fail for reasons the shop cannot fix. */
+  markMerchantOrderReady(id: string): Promise<MerchantOrder>;
+  /**
+   * An empty shelf, and what the shop proposes about it (document 74).
+   *
+   * What actually happens is decided by the customer's standing preference on
+   * the line, server-side — so the returned issue's `action` may not be the
+   * one that was proposed, and the caller must render what came back rather
+   * than what it sent.
+   */
+  reportMerchantItemIssue(
+    orderId: string,
+    itemId: string,
+    issue: ItemIssueInput,
+  ): Promise<MerchantOrderIssue>;
+}
+
+/** What a picker reports when a line cannot be filled as ordered. */
+export interface ItemIssueInput {
+  reason: string;
+  action: IssueAction;
+  /** Required by the server when the action is a substitution, ignored otherwise. */
+  substituteName?: string;
+  substitutePriceMinor?: number;
 }
 
 /** One position report. Timestamped by the device, not the server. */
@@ -488,6 +536,62 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     },
     async driverEarnings() {
       return driverEarningsSchema.parse(await request('/driver/earnings'));
+    },
+    async listMerchantOrders(listOptions = {}) {
+      const body = (await request('/merchant/orders', {
+        query: {
+          queue: listOptions.queue,
+          limit: listOptions.limit,
+          cursor: listOptions.cursor,
+        },
+      })) as { items: unknown[]; page?: { next_cursor?: string } };
+
+      return {
+        items: body.items.map((item) => merchantOrderSchema.parse(item)),
+        ...(body.page?.next_cursor ? { nextCursor: body.page.next_cursor } : {}),
+      };
+    },
+    async getMerchantOrder(id) {
+      return merchantOrderSchema.parse(await request(`/merchant/orders/${encodeURIComponent(id)}`));
+    },
+    async acceptMerchantOrder(id) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/accept`, { method: 'POST' }),
+      );
+    },
+    async rejectMerchantOrder(id, reason) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/reject`, {
+          method: 'POST',
+          body: { reason },
+        }),
+      );
+    },
+    async startPreparingMerchantOrder(id) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/preparing`, { method: 'POST' }),
+      );
+    },
+    async markMerchantOrderReady(id) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/ready`, { method: 'POST' }),
+      );
+    },
+    async reportMerchantItemIssue(orderId, itemId, issue) {
+      return merchantOrderIssueSchema.parse(
+        await request(
+          `/merchant/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/issue`,
+          {
+            method: 'POST',
+            body: {
+              reason: issue.reason,
+              action: issue.action,
+              substitute_name: issue.substituteName,
+              substitute_price_minor: issue.substitutePriceMinor,
+            },
+          },
+        ),
+      );
     },
     async driverAssignment() {
       try {
