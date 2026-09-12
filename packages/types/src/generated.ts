@@ -24,6 +24,30 @@ export const CURRENCIES = ['PKR'] as const;
 
 export type Currency = (typeof CURRENCIES)[number];
 
+export const MERCHANT_QUEUES = ['new', 'preparing', 'ready', 'completed', 'cancelled'] as const;
+
+export type MerchantQueue = (typeof MERCHANT_QUEUES)[number];
+
+export const ISSUE_ACTIONS = ['SUBSTITUTE', 'REMOVE', 'REQUEST_CUSTOMER_DECISION'] as const;
+
+export type IssueAction = (typeof ISSUE_ACTIONS)[number];
+
+export const GROCERY_ORDER_STATUSES = [
+  'CART',
+  'PLACED',
+  'PAYMENT_PENDING',
+  'CONFIRMED',
+  'PREPARING',
+  'READY_FOR_PICKUP',
+  'PICKED_UP',
+  'DELIVERING',
+  'DELIVERED',
+  'CANCELLED',
+  'FAILED',
+] as const;
+
+export type GroceryOrderStatus = (typeof GROCERY_ORDER_STATUSES)[number];
+
 export type EventName = string;
 
 export interface ApiErrorBody {
@@ -167,4 +191,41 @@ export interface DriverEarnings {
   today: EarningsTotal;
   week: EarningsTotal;
   trips: TripEarning[];
+}
+
+export interface MerchantOrderItem {
+  id: string;
+  name: string;
+  quantity: number;
+  unit_price: Money;
+  line_total: Money;
+  substitution_preference: string;
+  status: string;
+}
+
+export interface MerchantOrderIssue {
+  id: string;
+  order_item_id: string;
+  reason: string;
+  action: string;
+  resolution: string;
+  substitute_name?: string | undefined;
+  substitute_price?: Money | undefined;
+  price_difference?: Money | undefined;
+  created_at: string;
+}
+
+export interface MerchantOrder {
+  id: string;
+  status: string;
+  items_total: Money;
+  accept_deadline?: string | undefined;
+  accepted_at?: string | undefined;
+  preparation_started_at?: string | undefined;
+  expected_ready_at?: string | undefined;
+  rejection_reason?: string | undefined;
+  created_at: string;
+  items?: MerchantOrderItem[] | undefined;
+  job_id?: string | undefined;
+  issues?: MerchantOrderIssue[] | undefined;
 }

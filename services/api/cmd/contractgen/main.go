@@ -19,6 +19,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/finance"
+	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
 	"github.com/sarmadkung/rideme/services/api/pkg/events"
@@ -51,6 +52,35 @@ func Registry() *contract.Registry {
 	)
 	r.Enum("Currency", "CURRENCIES", reflect.TypeOf(money.Currency("")),
 		string(money.PKR),
+	)
+	// The merchant's vocabulary (documents 70, 72, 74). These are values a
+	// dashboard sends — a queue name in a query, an action in an issue body —
+	// and branches on. Hand-writing them beside the generated types is the
+	// duplication B-2 removed, and a typo in one would 400 at runtime.
+	r.Enum("MerchantQueue", "MERCHANT_QUEUES", reflect.TypeOf(merchant.Queue("")),
+		string(merchant.QueueNew),
+		string(merchant.QueuePreparing),
+		string(merchant.QueueReady),
+		string(merchant.QueueCompleted),
+		string(merchant.QueueCancelled),
+	)
+	r.Enum("IssueAction", "ISSUE_ACTIONS", reflect.TypeOf(merchant.IssueAction("")),
+		string(merchant.ActionSubstitute),
+		string(merchant.ActionRemove),
+		string(merchant.ActionAsk),
+	)
+	r.Enum("GroceryOrderStatus", "GROCERY_ORDER_STATUSES", reflect.TypeOf(merchant.OrderStatus("")),
+		string(merchant.StatusCart),
+		string(merchant.StatusPlaced),
+		string(merchant.StatusPaymentPending),
+		string(merchant.StatusConfirmed),
+		string(merchant.StatusPreparing),
+		string(merchant.StatusReadyForPickup),
+		string(merchant.StatusPickedUp),
+		string(merchant.StatusDelivering),
+		string(merchant.StatusDelivered),
+		string(merchant.StatusCancelled),
+		string(merchant.StatusFailed),
 	)
 	// Event names are open-ended and validated by shape, not enumerated
 	// (document 150 gives examples, not a closed list).
@@ -93,6 +123,14 @@ func Registry() *contract.Registry {
 	r.Struct("EarningsTotal", finance.Earnings{})
 	r.Struct("TripEarning", finance.TripEarning{})
 	r.Struct("DriverEarnings", driver.Earnings{})
+
+	// The merchant's order surface (documents 72, 74). The dashboard reads the
+	// same generated models the mobile apps do. Inner-first, so the order's
+	// items and issues resolve to the names registered here rather than to
+	// inline shapes.
+	r.Struct("MerchantOrderItem", merchant.OrderItemResponse{})
+	r.Struct("MerchantOrderIssue", merchant.IssueResponse{})
+	r.Struct("MerchantOrder", merchant.OrderResponse{})
 
 	return r
 }

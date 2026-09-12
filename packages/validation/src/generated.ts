@@ -20,6 +20,24 @@ export const healthStatusSchema = z.enum(['healthy', 'degraded', 'unhealthy']);
 
 export const currencySchema = z.enum(['PKR']);
 
+export const merchantQueueSchema = z.enum(['new', 'preparing', 'ready', 'completed', 'cancelled']);
+
+export const issueActionSchema = z.enum(['SUBSTITUTE', 'REMOVE', 'REQUEST_CUSTOMER_DECISION']);
+
+export const groceryOrderStatusSchema = z.enum([
+  'CART',
+  'PLACED',
+  'PAYMENT_PENDING',
+  'CONFIRMED',
+  'PREPARING',
+  'READY_FOR_PICKUP',
+  'PICKED_UP',
+  'DELIVERING',
+  'DELIVERED',
+  'CANCELLED',
+  'FAILED',
+]);
+
 export const eventNameSchema = z.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/);
 
 export const apiErrorBodySchema = z.object({
@@ -163,4 +181,41 @@ export const driverEarningsSchema = z.object({
   today: earningsTotalSchema,
   week: earningsTotalSchema,
   trips: z.array(tripEarningSchema),
+});
+
+export const merchantOrderItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  quantity: z.number().int(),
+  unit_price: moneySchema,
+  line_total: moneySchema,
+  substitution_preference: z.string(),
+  status: z.string(),
+});
+
+export const merchantOrderIssueSchema = z.object({
+  id: z.string(),
+  order_item_id: z.string(),
+  reason: z.string(),
+  action: z.string(),
+  resolution: z.string(),
+  substitute_name: z.string().optional(),
+  substitute_price: moneySchema.optional(),
+  price_difference: moneySchema.optional(),
+  created_at: z.string().datetime({ offset: true }),
+});
+
+export const merchantOrderSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  items_total: moneySchema,
+  accept_deadline: z.string().datetime({ offset: true }).optional(),
+  accepted_at: z.string().datetime({ offset: true }).optional(),
+  preparation_started_at: z.string().datetime({ offset: true }).optional(),
+  expected_ready_at: z.string().datetime({ offset: true }).optional(),
+  rejection_reason: z.string().optional(),
+  created_at: z.string().datetime({ offset: true }),
+  items: z.array(merchantOrderItemSchema).optional(),
+  job_id: z.string().optional(),
+  issues: z.array(merchantOrderIssueSchema).optional(),
 });
