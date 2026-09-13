@@ -1718,3 +1718,22 @@ happened and total everywhere else — which is the same shape as every other de
 something that works because one particular process is holding it up.
 
 **Verification.** Full, for once. Every command above was run and its output observed.
+
+## A Shop Can Sell the 2L — 2026-09-13
+
+`ProductVariant` reached the contract, the generated types and `@platform/api-client` on
+2026-09-12, and `addCartItem` has taken a `variantId` since the customer surface was built. The
+shop screen never offered one. A shop selling milk in two sizes showed the 1L's price on the
+product and could only ever be sold the default line, which the entry above recorded as not done.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The size a customer picked is the size that is sold | VERIFIED | 1 | YES | `variantId` reaches `addCartItem`, which has accepted it all along |
+| **The price shown is the chosen size's** | VERIFIED | 1 | YES | document 68 stores a *difference* rather than a price, so a screen rendering `product.price` shows the 2L at the 1L's money. Computed for display only — what the customer is charged is the line the server writes from its own catalogue |
+| A row opens on a size that is in stock | VERIFIED | 1 | YES | a shop whose 1L has run out opens on the 2L rather than on a selection that cannot be added |
+| **A size that has run out is shown, not hidden** | VERIFIED | 1 | YES | same rule as the shut shop: hiding it says the shop does not stock the 2L at all, when the truth is that it is out today. Shown, labelled, and not selectable |
+| Every size out means out of stock | VERIFIED | 1 | YES | the product's own flag is about the default line; a product whose every size has gone cannot be sold whatever it says |
+| **A shelf with no sizes is untouched** | VERIFIED | 2 | YES | most of a kiryana's shelf. The call it makes is byte-identical — three arguments, no variant — which the pre-existing test asserts and which caught the first version of this change sending a fourth `undefined` |
+
+**Verification.** Full. `jest-expo` on the workspace VM: 12 suites, **84 tests** (78 before), the
+six new ones in `ShopScreen`. `tsc --noEmit` clean, `eslint` clean, `prettier` clean.

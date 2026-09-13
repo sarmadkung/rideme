@@ -1,7 +1,7 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useState } from 'react';
 import { formatMoney, tokens } from '@platform/ui';
-import type { Product, SubstitutionPreference } from '@platform/types';
+import type { Money, Product, ProductVariant, SubstitutionPreference } from '@platform/types';
 import type { GroceryActions, GroceryState } from '../features/grocery/useGrocery';
 
 /**
@@ -41,7 +41,11 @@ export function ShopScreen({ grocery }: { grocery: GroceryState & GroceryActions
           key={product.id}
           product={product}
           disabled={grocery.pending}
-          onAdd={(quantity, preference) => void grocery.addItem(product, quantity, preference)}
+          onAdd={(quantity, preference, variantId) =>
+            void (variantId
+              ? grocery.addItem(product, quantity, preference, variantId)
+              : grocery.addItem(product, quantity, preference))
+          }
         />
       ))}
 
@@ -90,6 +94,30 @@ export function ShopScreen({ grocery }: { grocery: GroceryState & GroceryActions
   );
 }
 
+/**
+ * A variant's own price: document 68 stores the difference, not the price.
+ *
+ * Computed here for display only. What the customer is charged is the line the
+ * server writes from its own catalogue, and this must never be the number the
+ * order is built from — it exists so a customer can see what the 2L costs
+ * before they choose it.
+ */
+function variantPrice(base: Money, variant: ProductVariant): Money {
+  return { ...base, amount_minor: base.amount_minor + variant.price_diff.amount_minor };
+}
+
+/**
+ * Which variant a row opens on.
+ *
+ * The first one that is actually in stock, so a shop whose 1L has run out
+ * opens on the 2L rather than on a selection that cannot be added. Null when
+ * the product has no variants at all, which is most of a kiryana's shelf.
+ */
+function firstSellable(product: Product): ProductVariant | null {
+  const variants = product.variants ?? [];
+  return variants.find((variant) => variant.available) ?? variants[0] ?? null;
+}
+
 function ProductRow({
   product,
   disabled,
@@ -97,12 +125,23 @@ function ProductRow({
 }: {
   product: Product;
   disabled: boolean;
-  onAdd(quantity: number, preference: SubstitutionPreference): void;
+  onAdd(quantity: number, preference: SubstitutionPreference, variantId?: string): void;
 }) {
   const [quantity, setQuantity] = useState(1);
   const [preference, setPreference] = useState<SubstitutionPreference>('ASK_ME');
+  const variants = product.variants ?? [];
+  const [variantId, setVariantId] = useState<string | null>(
+    () => firstSellable(product)?.id ?? null,
+  );
+  const variant = variants.find((option) => option.id === variantId) ?? null;
 
-  if (!product.available) {
+  // A product whose every size has run out is out of stock, whatever the
+  // product row says: document 69 tracks availability per variant, and the
+  // parent's flag is about the default line.
+  const sellable =
+    variants.length > 0 ? variants.some((option) => option.available) : product.available;
+
+  if (!sellable) {
     return (
       <View style={styles.product} testID={`product-${product.id}`}>
         <Text style={styles.productName}>{product.name}</Text>
@@ -117,13 +156,36 @@ function ProductRow({
         <Text style={styles.productName} numberOfLines={1}>
           {product.name}
         </Text>
-        <Text style={styles.productPrice}>{formatMoney(product.price)}</Text>
+        <Text style={styles.productPrice} testID={`product-${product.id}-price`}>
+          {formatMoney(variant ? variantPrice(product.price, variant) : product.price)}
+        </Text>
       </View>
       {product.description ? (
         <Text style={styles.productDescription} numberOfLines={2}>
           {product.description}
         </Text>
       ) : null}
+
+      {variants.length > 0 && (
+        <View style={styles.chips} testID={`product-${product.id}-variants`}>
+          {variants.map((option) => (
+            <Pressable
+              key={option.id}
+              testID={`product-${product.id}-variant-${option.id}`}
+              style={[styles.chip, option.id === variantId && styles.chipActive]}
+              // An option nobody can be sold is shown and not selectable.
+              // Hiding it tells a customer the shop does not stock the 2L at
+              // all, when the truth is that it is out today.
+              disabled={disabled || !option.available}
+              onPress={() => setVariantId(option.id)}
+            >
+              <Text style={option.id === variantId ? styles.chipTextActive : styles.chipText}>
+                {option.available ? option.name : `${option.name} — out`}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       <View style={styles.chips}>
         {PREFERENCES.map((option) => (
@@ -167,7 +229,12 @@ function ProductRow({
           testID={`product-${product.id}-add`}
           style={styles.add}
           disabled={disabled}
-          onPress={() => onAdd(quantity, preference)}
+          // A product with no variants sends no variant, rather than sending
+          // one that is undefined: the call a kiryana's shelf makes is
+          // unchanged by this screen learning about sizes.
+          onPress={() =>
+            variantId ? onAdd(quantity, preference, variantId) : onAdd(quantity, preference)
+          }
         >
           <Text style={styles.addText}>Add</Text>
         </Pressable>
