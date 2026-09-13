@@ -1626,3 +1626,66 @@ compiled by nothing, and the six shapes appended to the two `generated.ts` files
 is the assertion — if the prediction is wrong it fails and prints the difference. The new app is
 also not installed: `pnpm install` must run before `apps/merchant-dashboard` resolves its
 workspace dependencies, and `@platform/auth` has gained `react` and `@platform/api-client`.
+
+## The Customer's Half of the Shop — 2026-09-12
+
+The merchant console closed one half of the gap; this is the other. Nine customer endpoints —
+shops nearby, a catalogue, a cart, checkout to an address, the order, the substitution question
+and the cancellation — had been reachable only by `curl` since 2026-09-09, and `customer-mobile`
+had three screens, all of them about rides. Grocery was a backend with no customer.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The customer's shapes joined the contract | IMPLEMENTED | 1 | — | `Store`, `ProductVariant`, `Product`, `GroceryDelivery`, `GroceryOrderLine`, `GroceryOrder`, and `SUBSTITUTION_PREFERENCES` — a value the client *sends*, so hand-writing the list is the duplication ADR-007 prevents |
+| **`MerchantOrderIssue` became `OrderIssue`** | VERIFIED | 19 | YES | it is one row: the shop proposes on it and the customer answers on it. Two names for one shape is how two clients come to disagree about what it says — renamed now, while it had one consumer |
+| Nine client methods over the generated schemas | VERIFIED | 3 | YES | including the assertion that a total arriving as a string is refused rather than coerced: `"25000"` is how a total becomes `"2500025000"` the first time something adds to it |
+| `useGrocery` — the flow, not the screens | VERIFIED | 9 | YES | shops → cart → checkout → tracking, in shared TypeScript with no React Native import, so it is testable without rendering and identical on both platforms (document 48) |
+| **The running total is always the server's** | VERIFIED | 2 | YES | adding a line returns the cart, and the screen renders what came back. A client that added the line itself would be computing money |
+| Browse shops from a point the customer names | VERIFIED | 5 | YES | there is no location permission in this app — foreground location is the driver's feature — so "near me" is asked, not sensed, and the first screen opens with shops on it |
+| **A shut shop is listed and not enterable** | VERIFIED | 2 | YES | hiding it tells a customer their usual kiryana has vanished; letting them fill a cart in it ends in a rejection an hour later |
+| The substitution preference, per line, at the moment the line is added | VERIFIED | 2 | YES | document 74. It is the only moment the customer is thinking about *this* item, and `ASK_ME` is offered explicitly rather than inherited from the server's default |
+| Checkout captures the address the order cannot go without | VERIFIED | 4 | YES | `MarkReady` refuses an order with no destination. The geocoder's line is the starting point and the customer edits it — no geocoder knows a flat number, and a rider has to find the door |
+| **The substitution question sits above everything else** | VERIFIED | 4 | YES | a picker is standing at a shelf waiting for it. Both prices are shown, and BD-11's difference in both directions — a cheaper substitute is a refund, and saying so is the difference between a fair swap and a surprise |
+| Cancellation is offered exactly while the service allows it | VERIFIED | 3 | YES | mirrors `CustomerCancellable`. No reason is asked for: a customer who changed their mind owes nobody an explanation, and a required field collects "asdf" |
+| **`PlacePicker` left `BookingScreen`** | VERIFIED | 12 | YES | CAP-6's rule — extract at the second consumer, which is checkout. A ride needs a pickup and an order needs a door; both are "name this place". `BookingScreen`'s twelve tests pass unchanged |
+| Two services in one shell | VERIFIED | 1 | YES | a tab each, and neither is switchable away from once committed: a ride being tracked and an order being delivered are both happening in the world, and hiding one loses the only way back to it |
+
+**A customer can now shop.** Find a shop, fill a basket with a substitution rule per line, say
+where it goes and who to ring, watch it through accepted → picked → on its way → delivered,
+answer the shop when a shelf is empty, and call it off while that is still allowed.
+
+**Not done.** No payment: `PAYMENT_PENDING` is rendered and nothing in this app pays anything —
+Phase 11's provider adapter does not exist. No order history; `listGroceryOrders` is on the
+client and no screen asks for it, so closing the app loses sight of an order in flight. **Product
+variants are in the contract and ignored by the screen** — `addCartItem` takes a `variantId` and
+nothing sends one, so a shop selling rice in two sizes shows two prices and can only be sold the
+default. No map, and no push: the app polls its own order every eight seconds, which is the
+realtime transport's stand-in on this side exactly as the fifteen-second poll is on the
+merchant's.
+
+**Verification. `pnpm test` is not the only way to run these tests, and that changes what can be
+claimed.** Every mobile slice since 2026-08-29 recorded "no toolchain in this session". The
+JavaScript workspace's runner does fail here — the checked-in `rollup` binary is the host
+platform's — but **jest-expo runs on this VM unmodified**, and so does `tsc`, `eslint` and
+`prettier`. Run:
+
+```text
+customer-mobile   jest   12 suites   78 tests  (49 before this slice)
+driver-mobile     jest    8 suites   59 tests  — unchanged by the auth move
+api-client                           19 tests  (3 added, in the session container)
+packages + merchant-dashboard        74 tests  (in the session container)
+tsc               clean on all four apps and every @platform package
+eslint            clean
+```
+
+The screen tests found two of their own defects before review did: a `react-hooks` rule this
+workspace's ESLint config does not load (the disable comment was an error, and the effect was
+rewritten to name the stable action instead of suppressing the rule), and a shop list that
+re-queried on an unstable dependency.
+
+**Unverified, and why.** Still no Go toolchain and no reachable module proxy, so `make contracts`
+did not run: six structs and one enum added to `contractgen` are compiled by nothing, and their
+TypeScript is a **predicted** emitter output, prettier-formatted as the Makefile formats it.
+`make contracts-check` is the assertion. `pnpm install` has still not run in this session — the
+`@platform` links the new dependency edges need were made by hand here, which is enough to build
+and typecheck but is not a substitute for the lockfile being updated.

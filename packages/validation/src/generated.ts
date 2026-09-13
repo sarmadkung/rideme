@@ -24,6 +24,8 @@ export const merchantQueueSchema = z.enum(['new', 'preparing', 'ready', 'complet
 
 export const issueActionSchema = z.enum(['SUBSTITUTE', 'REMOVE', 'REQUEST_CUSTOMER_DECISION']);
 
+export const substitutionPreferenceSchema = z.enum(['ALLOW', 'DO_NOT_ALLOW', 'ASK_ME']);
+
 export const groceryOrderStatusSchema = z.enum([
   'CART',
   'PLACED',
@@ -193,7 +195,7 @@ export const merchantOrderItemSchema = z.object({
   status: z.string(),
 });
 
-export const merchantOrderIssueSchema = z.object({
+export const orderIssueSchema = z.object({
   id: z.string(),
   order_item_id: z.string(),
   reason: z.string(),
@@ -217,5 +219,61 @@ export const merchantOrderSchema = z.object({
   created_at: z.string().datetime({ offset: true }),
   items: z.array(merchantOrderItemSchema).optional(),
   job_id: z.string().optional(),
-  issues: z.array(merchantOrderIssueSchema).optional(),
+  issues: z.array(orderIssueSchema).optional(),
+});
+
+export const storeSchema = z.object({
+  id: z.string(),
+  merchant_name: z.string(),
+  name: z.string(),
+  address: z.string().optional(),
+  latitude: z.number(),
+  longitude: z.number(),
+  distance_m: z.number(),
+  open: z.boolean(),
+});
+
+export const productVariantSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  price_diff: moneySchema,
+  available: z.boolean(),
+});
+
+export const productSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  price: moneySchema,
+  available: z.boolean(),
+  variants: z.array(productVariantSchema).optional(),
+});
+
+export const groceryDeliverySchema = z.object({
+  address: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  notes: z.string().optional(),
+});
+
+export const groceryOrderLineSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  quantity: z.number().int(),
+  unit_price: moneySchema,
+  line_total: moneySchema,
+  substitution_preference: z.string(),
+  status: z.string(),
+});
+
+export const groceryOrderSchema = z.object({
+  id: z.string(),
+  store_id: z.string().optional(),
+  status: z.string(),
+  items_total: moneySchema,
+  items: z.array(groceryOrderLineSchema),
+  delivery: groceryDeliverySchema.optional(),
+  accept_deadline: z.string().datetime({ offset: true }).optional(),
+  created_at: z.string().datetime({ offset: true }),
+  issues: z.array(orderIssueSchema).optional(),
 });

@@ -380,3 +380,81 @@ describe('generated response types', () => {
     await expect(client.driverEarnings()).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+describe('the grocery surface', () => {
+  const cart = {
+    id: 'order-1',
+    store_id: 'store-1',
+    status: 'CART',
+    items_total: { amount_minor: 25000, currency: 'PKR' },
+    items: [],
+    created_at: '2026-09-12T09:00:00Z',
+  };
+
+  it('asks for shops around a position and parses what comes back', async () => {
+    const { fetchImpl, calls } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/stores': {
+        status: 200,
+        body: {
+          stores: [
+            {
+              id: 'store-1',
+              merchant_name: 'Al-Fatah',
+              name: 'Gulberg',
+              latitude: 31.52,
+              longitude: 74.35,
+              distance_m: 812.5,
+              open: false,
+            },
+          ],
+        },
+      },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    const stores = await client.listStores({ latitude: 31.52, longitude: 74.35 });
+    // A shut shop is an answer, not an omission — the server lists it and says
+    // so, and the client must not quietly drop it.
+    expect(stores[0]?.open).toBe(false);
+    expect(calls.at(-1)?.url).toContain('lat=31.52');
+  });
+
+  it('sends an added line in the server’s own field names', async () => {
+    const { fetchImpl, calls } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'POST /api/v1/orders/order-1/items': { status: 200, body: cart },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    await client.addCartItem('order-1', {
+      productId: 'p-1',
+      quantity: 2,
+      substitutionPreference: 'ASK_ME',
+    });
+
+    expect(calls.at(-1)?.body).toEqual({
+      product_id: 'p-1',
+      quantity: 2,
+      substitution_preference: 'ASK_ME',
+    });
+  });
+
+  it('refuses an order whose money does not match the contract', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/orders/order-1': {
+        status: 200,
+        body: { ...cart, items_total: { amount_minor: '25000', currency: 'PKR' } },
+      },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    // A string where an integer count of paisa belongs is how a total becomes
+    // "2500025000" the first time something adds to it.
+    await expect(client.getGroceryOrder('order-1')).rejects.toThrow();
+  });
+});

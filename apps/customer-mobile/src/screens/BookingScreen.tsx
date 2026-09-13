@@ -1,37 +1,13 @@
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useState } from 'react';
 import { fareComponentLabel, formatMoney, tokens } from '@platform/ui';
 import type { ApiClient, StopInput } from '@platform/api-client';
-import type { Place } from '@platform/types';
 import type { BookingActions, BookingState } from '../features/booking/useBooking';
-import { usePlaceSearch } from '../features/places/usePlaceSearch';
+// The picker moved to `components/` when grocery checkout became its second
+// consumer. `PLACES` is re-exported because this screen's tests name it.
+import { PLACES, PlacePicker } from '../components/PlacePicker';
 
-/**
- * Well-known places, kept as a floor under the search box.
- *
- * Search can be unavailable — no geocoder configured, the provider down, the
- * phone offline — and a customer who cannot type an address should still be
- * able to book. These five are also faster than typing for the trips people
- * actually make most.
- *
- * There is still no map: a customer types or taps, rather than dropping a pin.
- * The flow behind this — quote, confirm, track — is the real one.
- */
-export const PLACES: Array<{ name: string; stop: StopInput }> = [
-  { name: 'Liberty Market', stop: { latitude: 31.5169, longitude: 74.3484 } },
-  { name: 'Lahore Airport', stop: { latitude: 31.5216, longitude: 74.4036 } },
-  { name: 'Emporium Mall', stop: { latitude: 31.4697, longitude: 74.2728 } },
-  { name: 'Anarkali Bazaar', stop: { latitude: 31.5709, longitude: 74.3095 } },
-  { name: 'Bahria Town', stop: { latitude: 31.3676, longitude: 74.1836 } },
-];
+export { PLACES };
 
 function describe(stop: StopInput | null): string {
   if (stop === null) return '—';
@@ -153,115 +129,6 @@ export function BookingScreen({
         </View>
       )}
     </ScrollView>
-  );
-}
-
-function PlacePicker({
-  label,
-  testID,
-  selected,
-  selectedName,
-  disabled,
-  client,
-  near,
-  onSelect,
-}: {
-  label: string;
-  testID: string;
-  selected: StopInput | null;
-  selectedName: string | null;
-  disabled: boolean;
-  client: ApiClient;
-  near?: { latitude: number; longitude: number };
-  onSelect(stop: StopInput | null, name: string | null): void;
-}) {
-  const search = usePlaceSearch(client, near);
-
-  const choose = (stop: StopInput, name: string) => {
-    onSelect(stop, name);
-    search.clear();
-  };
-
-  return (
-    <View style={styles.picker} testID={testID}>
-      <Text style={styles.pickerLabel}>{label}</Text>
-
-      {selected !== null ? (
-        <Pressable
-          testID={`${testID}-clear`}
-          disabled={disabled}
-          style={styles.selected}
-          onPress={() => onSelect(null, null)}
-        >
-          <Text style={styles.selectedName}>{selectedName ?? 'Selected'}</Text>
-          <Text style={styles.selectedChange}>Change</Text>
-        </Pressable>
-      ) : (
-        <>
-          <TextInput
-            testID={`${testID}-input`}
-            style={styles.input}
-            value={search.query}
-            editable={!disabled}
-            placeholder="Search for a place or address"
-            placeholderTextColor={tokens.color.textMuted}
-            autoCorrect={false}
-            onChangeText={search.setQuery}
-          />
-
-          {search.stage === 'searching' && (
-            <ActivityIndicator testID={`${testID}-searching`} color={tokens.color.textMuted} />
-          )}
-
-          {/* An outage and an empty result must not read the same, or a
-              customer retypes their address until they give up. */}
-          {search.stage === 'failed' && (
-            <Text style={styles.searchNotice} testID={`${testID}-search-error`}>
-              {search.error}
-            </Text>
-          )}
-          {search.stage === 'done' && search.results.length === 0 && (
-            <Text style={styles.searchNotice} testID={`${testID}-no-results`}>
-              No places matched. Try a different name.
-            </Text>
-          )}
-
-          {search.results.map((place: Place, index: number) => (
-            <Pressable
-              key={`${place.name}-${index}`}
-              testID={`${testID}-result-${index}`}
-              disabled={disabled}
-              style={styles.result}
-              onPress={() =>
-                choose({ latitude: place.point.lat, longitude: place.point.lon }, place.name)
-              }
-            >
-              <Text style={styles.resultName}>{place.name}</Text>
-              <Text style={styles.resultAddress} numberOfLines={1}>
-                {place.address}
-              </Text>
-            </Pressable>
-          ))}
-
-          {/* The floor: always reachable, whatever search is doing. */}
-          {search.results.length === 0 && (
-            <View style={styles.chips}>
-              {PLACES.map((place) => (
-                <Pressable
-                  key={place.name}
-                  testID={`${testID}-${place.name}`}
-                  disabled={disabled}
-                  style={styles.chip}
-                  onPress={() => choose(place.stop, place.name)}
-                >
-                  <Text style={styles.chipText}>{place.name}</Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
-        </>
-      )}
-    </View>
   );
 }
 

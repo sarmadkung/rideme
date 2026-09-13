@@ -15,15 +15,19 @@ import type {
   DriverEarnings,
   DriverProfile,
   ErrorCode,
+  GroceryOrder,
   HealthResponse,
   IssueAction,
   Job,
   LocationReport,
   MerchantOrder,
-  MerchantOrderIssue,
   MerchantQueue,
+  OrderIssue,
   Place,
+  Product,
   Quote,
+  Store,
+  SubstitutionPreference,
 } from '@platform/types';
 import {
   apiErrorBodySchema,
@@ -31,13 +35,16 @@ import {
   driverAssignmentSchema,
   driverEarningsSchema,
   driverProfileSchema,
+  groceryOrderSchema,
   healthResponseSchema,
   jobSchema,
   locationReportSchema,
-  merchantOrderIssueSchema,
   merchantOrderSchema,
+  orderIssueSchema,
   placeSchema,
+  productSchema,
   quoteSchema,
+  storeSchema,
 } from '@platform/validation';
 
 export class ApiError extends Error {
@@ -188,7 +195,58 @@ export interface ApiClient {
     orderId: string,
     itemId: string,
     issue: ItemIssueInput,
-  ): Promise<MerchantOrderIssue>;
+  ): Promise<OrderIssue>;
+
+  /**
+   * The customer's side of grocery (documents 68, 71).
+   *
+   * A shop that is shut is still listed — `store.open` says so. A customer
+   * looking for their usual kiryana at 3am needs to see that it is closed,
+   * not that it has vanished, and the server is deliberate about that.
+   */
+  listStores(
+    near: { latitude: number; longitude: number },
+    options?: { radiusM?: number; limit?: number },
+  ): Promise<Store[]>;
+  storeCatalog(storeId: string, limit?: number): Promise<Product[]>;
+
+  /** Opens a cart at one shop, or returns the one already open there. */
+  openCart(storeId: string): Promise<GroceryOrder>;
+  /** The cart back, not the line: the running total is the server's to compute. */
+  addCartItem(orderId: string, item: CartItemInput): Promise<GroceryOrder>;
+  /** Checkout. The address is asked for here because this is where it is needed. */
+  placeGroceryOrder(orderId: string, delivery: DeliveryInput): Promise<GroceryOrder>;
+
+  listGroceryOrders(limit?: number): Promise<GroceryOrder[]>;
+  getGroceryOrder(id: string): Promise<GroceryOrder>;
+  /**
+   * Answers a substitution the shop asked about (BD-11).
+   *
+   * Accepting charges the substitute's price, up or down; declining loses the
+   * line rather than restoring it, because the shelf is empty — which is why
+   * they were asked. Either way the whole order comes back, because the answer
+   * changed the total.
+   */
+  decideGroceryIssue(orderId: string, issueId: string, accept: boolean): Promise<GroceryOrder>;
+  /** Their own order, and only while its state still allows it. */
+  cancelGroceryOrder(orderId: string, reason?: string): Promise<GroceryOrder>;
+}
+
+/** One line a customer adds to a cart. */
+export interface CartItemInput {
+  productId: string;
+  variantId?: string;
+  quantity: number;
+  /** What to do if the shelf is empty. The server's default applies when absent. */
+  substitutionPreference?: SubstitutionPreference;
+}
+
+/** Where an order is going. */
+export interface DeliveryInput {
+  address: string;
+  latitude: number;
+  longitude: number;
+  notes?: string;
 }
 
 /** What a picker reports when a line cannot be filled as ordered. */
@@ -578,7 +636,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       );
     },
     async reportMerchantItemIssue(orderId, itemId, issue) {
-      return merchantOrderIssueSchema.parse(
+      return orderIssueSchema.parse(
         await request(
           `/merchant/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/issue`,
           {
@@ -591,6 +649,79 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
             },
           },
         ),
+      );
+    },
+    async listStores(near, storeOptions = {}) {
+      const body = (await request('/stores', {
+        query: {
+          lat: near.latitude,
+          lon: near.longitude,
+          radius_m: storeOptions.radiusM,
+          limit: storeOptions.limit,
+        },
+      })) as { stores?: unknown[] };
+      return (body.stores ?? []).map((store) => storeSchema.parse(store));
+    },
+    async storeCatalog(storeId, limit) {
+      const body = (await request(`/stores/${encodeURIComponent(storeId)}/products`, {
+        query: { limit },
+      })) as { products?: unknown[] };
+      return (body.products ?? []).map((product) => productSchema.parse(product));
+    },
+    async openCart(storeId) {
+      return groceryOrderSchema.parse(
+        await request('/orders', { method: 'POST', body: { store_id: storeId } }),
+      );
+    },
+    async addCartItem(orderId, item) {
+      return groceryOrderSchema.parse(
+        await request(`/orders/${encodeURIComponent(orderId)}/items`, {
+          method: 'POST',
+          body: {
+            product_id: item.productId,
+            variant_id: item.variantId,
+            quantity: item.quantity,
+            substitution_preference: item.substitutionPreference,
+          },
+        }),
+      );
+    },
+    async placeGroceryOrder(orderId, delivery) {
+      return groceryOrderSchema.parse(
+        await request(`/orders/${encodeURIComponent(orderId)}/place`, {
+          method: 'POST',
+          body: {
+            delivery: {
+              address: delivery.address,
+              latitude: delivery.latitude,
+              longitude: delivery.longitude,
+              notes: delivery.notes,
+            },
+          },
+        }),
+      );
+    },
+    async listGroceryOrders(limit) {
+      const body = (await request('/orders', { query: { limit } })) as { items: unknown[] };
+      return body.items.map((item) => groceryOrderSchema.parse(item));
+    },
+    async getGroceryOrder(id) {
+      return groceryOrderSchema.parse(await request(`/orders/${encodeURIComponent(id)}`));
+    },
+    async decideGroceryIssue(orderId, issueId, accept) {
+      return groceryOrderSchema.parse(
+        await request(
+          `/orders/${encodeURIComponent(orderId)}/issues/${encodeURIComponent(issueId)}/decision`,
+          { method: 'POST', body: { accept } },
+        ),
+      );
+    },
+    async cancelGroceryOrder(orderId, reason) {
+      return groceryOrderSchema.parse(
+        await request(`/orders/${encodeURIComponent(orderId)}/cancel`, {
+          method: 'POST',
+          body: { reason: reason ?? '' },
+        }),
       );
     },
     async driverAssignment() {
