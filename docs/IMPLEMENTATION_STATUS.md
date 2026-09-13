@@ -1553,3 +1553,76 @@ customer, the merchant, or the clock, with the stock returning in each case.
 
 **Verification.** Partial: no Go toolchain in this session. 4 handler tests and 2 integration
 tests are written and unverified.
+
+## A Shop Can Run Its Counter — 2026-09-11
+
+`merchant-dashboard` had been a reserved directory holding one `.gitkeep` since Phase 1, while
+seven merchant endpoints were built behind it across three slices. Every grocery order in the
+system therefore depended on a merchant who had no way to answer it: accept, reject, pick, report
+an empty shelf and hand the bag to a driver were all reachable only by `curl`. Document 72's
+definition of done — "process an order from acceptance to ready-for-pickup without admin
+intervention" — was the one part of grocery that no amount of backend could satisfy.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The merchant's shapes joined the contract | IMPLEMENTED | 3 | — | `MerchantOrder`, `MerchantOrderItem`, `MerchantOrderIssue`, plus `MERCHANT_QUEUES`, `ISSUE_ACTIONS` and `GROCERY_ORDER_STATUSES`. A queue name is a value the client *sends*; hand-writing the list beside the generated types is the duplication ADR-007 exists to prevent |
+| Seven client methods over the same generated schemas | VERIFIED | n/a | YES | no hand-written response interface, no hand-written mapper — the drift closed on 2026-09-09 stayed closed |
+| **The login flow moved out of `@platform/mobile`** | VERIFIED | 3 | YES | it is not mobile-specific, and a web build cannot import a package that reaches for the device keystore. Now `@platform/auth`, re-exported from `@platform/mobile`, so neither mobile app changed a line. CAP-6: extract at the second consumer, which is this one |
+| Login, five queues, one order (`072`, `077`) | VERIFIED | 3 | YES | opens on New — the only queue where doing nothing is a decision, because BD-12 cancels an unanswered order |
+| **Accept is never offered on an order awaiting payment** | VERIFIED | 1 | YES | the server refuses it with "waiting on payment", which is a question for the payment flow and not something a shop can act on. Reject stays: a shop that cannot fill the order should not have to wait for a payment to succeed first |
+| The action list mirrors the service's guards | VERIFIED | 3 | YES | Accept from `PLACED`, Reject before preparation, Start Preparing from `CONFIRMED`, Mark Ready from `PREPARING`, Report Issue only while picking. `077` asks the UI to hide unavailable actions **and** the backend to enforce them; this is the display copy, never the authority |
+| **The screen renders the answer, never the expectation** | VERIFIED | 1 | YES | Accept on an order the customer cancelled a second earlier shows cancelled. Every action returns the order as the server now holds it and that replaces local state wholesale |
+| **A refusal survives the reload that follows it** | VERIFIED | 1 | YES | found by its own test: `reload` clears the error before fetching, so setting the message first left the shop with a silently corrected order and no idea why the tap did nothing. The order of two lines |
+| The countdown to the accept deadline | VERIFIED | 3 | YES | whole minutes, floored at zero — the sweeper is about to cancel it, and "0m" is urgent where "—" reads as no hurry. A local minute hand, so it is not only as fresh as the last poll |
+| Report Issue, with the customer's preference shown first | VERIFIED | n/a | YES | a picker sees "no substitutes" on the line *before* they hit the gap. The form proposes; what happens is `ResolveIssue`'s decision, and the reported list says which |
+| A substitute needs a name and a price before the button works | VERIFIED | n/a | YES | the server refuses it; the button refuses it first, without the round trip |
+| Rejection asks for the reason the server requires | VERIFIED | n/a | YES | |
+| Queues poll every fifteen seconds | VERIFIED | 1 | YES | quietly: no spinner on a background tick, and a poll stands down while the operator is paging |
+
+**A merchant can now work.** Sign in, watch New with its clock, accept or reject with a reason,
+start picking, report an empty shelf as a removal or a priced substitute, and mark ready — which
+creates the delivery job and hands the bag to a driver. Four of document 77's thirteen screens
+exist; the other nine are products, inventory, settlements and team, and none of them has a
+backend yet.
+
+**Not done.** Everything in `077` that is not orders: Products, Categories, Inventory, Stores,
+Operating Hours, Settlements, Reports, Settings, Team — no endpoint serves any of them. No
+WebSocket: `077` asks for one and the realtime hub still has no transport, so a fifteen-second
+poll stands in and is the first thing the socket should replace. No router, no TanStack Query, no
+Tailwind, no Playwright — ADR-011 records why, and what each of them is waiting for. An account
+that operates more than one shop is refused by the server with a message saying so, and this
+surface does not offer a picker.
+
+**Verification.** Real, and for the first time since 2026-09-09. `pnpm test` cannot run on this
+session's workspace VM — the repository's `rollup` binary is the host platform's — so the suite
+was run against the same sources in the session's own Linux container, with the `@platform/*`
+packages aliased to their source exactly as the workspace resolves them:
+
+```text
+✓ actions.test.ts   (12 tests)
+✓ useOrder.test.ts   (4 tests)
+✓ useQueue.test.ts   (5 tests)
+✓ env.test.ts        (3 tests)
+Test Files  4 passed (4)     Tests  24 passed (24)
+```
+
+The run also cost `useQueue.test.ts` a rewrite, and this is the honest part: the version merged
+in #26 **hangs** — it handed the hook a fresh client object on every render, and the workspace
+runs Vitest without globals, so Testing Library never registered the cleanup that would have
+stopped the polling interval. Two test files that had never been executed looked fine in review.
+
+It found two defects that review had not: the lost refusal message above, and a hook that spins
+forever when handed a fresh client object on every render — the second is a property of
+`useJobs` too, is not reachable from either app (the client is a module singleton), and is left
+alone rather than fixed inconsistently in one of the two.
+
+`tsc` is clean over the new app and all six `@platform` packages it touches, under the workspace's
+own `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`. Prettier is clean.
+
+**Unverified, and why.** No Go toolchain and no reachable module proxy in this session, so
+`make contracts` did not run: the three structs and three enums added to `contractgen` are
+compiled by nothing, and the six shapes appended to the two `generated.ts` files are a
+**predicted** emitter output, prettier-formatted as the Makefile formats it. `make contracts-check`
+is the assertion — if the prediction is wrong it fails and prints the difference. The new app is
+also not installed: `pnpm install` must run before `apps/merchant-dashboard` resolves its
+workspace dependencies, and `@platform/auth` has gained `react` and `@platform/api-client`.
