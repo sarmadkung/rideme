@@ -1689,3 +1689,32 @@ TypeScript is a **predicted** emitter output, prettier-formatted as the Makefile
 `make contracts-check` is the assertion. `pnpm install` has still not run in this session — the
 `@platform` links the new dependency edges need were made by hand here, which is enough to build
 and typecheck but is not a substitute for the lockfile being updated.
+
+## The Lockfile Described a Workspace That No Longer Existed — 2026-09-13
+
+Three application manifests changed between 2026-09-08 and 2026-09-12 — `merchant-dashboard`
+gained nineteen dependencies as it stopped being a reserved directory, `@platform/auth` took a
+dependency on `@platform/api-client`, and `@platform/mobile` gained one — and `pnpm-lock.yaml`
+was last written on 2026-09-08. The workspace built anyway, because the links those new edges
+need were made by hand on the machine doing the work.
+
+`.github/workflows/ci.yml` runs `pnpm install --frozen-lockfile`. That command exists to refuse
+exactly this state, so CI would have failed on its first green run — and so would any clone of
+this repository, for anybody.
+
+| Task | Status | Verified | Notes |
+|------|--------|----------|-------|
+| `pnpm-lock.yaml` regenerated | VERIFIED | YES | `pnpm install --lockfile-only`, pnpm 10.33.0, the version `packageManager` pins |
+| **Additive only** | VERIFIED | YES | 73 insertions, **zero deletions**: the three missing importers and their edges, and not one resolved version changed. Nothing anybody is running moves |
+| `--frozen-lockfile` passes | VERIFIED | YES | 265 ms, which is what CI's install step does before it installs anything |
+| `node_modules` untouched | VERIFIED | YES | `--lockfile-only` resolves and writes the lockfile and links nothing. This matters more than it sounds: the checked-out tree is shared with a macOS host, and a full install from Linux would replace every native binary in it with the wrong platform's |
+| Leftover drafts removed | VERIFIED | YES | `_to_delete/` held three `.tmp.md` drafts of an ADR and two status entries, all three of which had landed in `docs/` |
+
+**How this happened, and the general version of it.** A session that cannot run `pnpm install`
+can still make a workspace build by creating the `@platform` symlinks by hand, and the
+2026-09-12 entry says so plainly. What it could not do is update the lockfile, because the
+lockfile needs the registry and a resolver. The gap is invisible on the machine where the work
+happened and total everywhere else — which is the same shape as every other defect this week:
+something that works because one particular process is holding it up.
+
+**Verification.** Full, for once. Every command above was run and its output observed.
