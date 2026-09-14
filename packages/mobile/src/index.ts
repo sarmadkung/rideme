@@ -9,5 +9,13 @@
  *
  * Screens stay in the apps. Only what is genuinely identical lives here.
  */
-export { useAuth, messageFor, type AuthActions, type AuthStage, type AuthState } from './useAuth.js';
+export {
+  useAuth,
+  messageFor,
+  DEV_OTP_BYPASS_CODE,
+  type AuthActions,
+  type AuthStage,
+  type AuthState,
+  type UseAuthOptions,
+} from './useAuth.js';
 export { secureTokenStorage } from './tokenStorage.js';

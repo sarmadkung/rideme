@@ -64,7 +64,7 @@ export function LoginScreen({ auth }: { auth: AuthState & AuthActions }) {
         }}
       >
         {auth.pending ? (
-          <ActivityIndicator color={tokens.color.text} />
+          <ActivityIndicator color={tokens.color.onAccent} />
         ) : (
           <Text style={styles.buttonText}>{onPhoneStage ? 'Send code' : 'Verify'}</Text>
         )}
@@ -111,7 +111,7 @@ const styles = StyleSheet.create({
     marginTop: tokens.space.lg,
   },
   buttonPressed: { opacity: 0.8 },
-  buttonText: { color: tokens.color.text, fontSize: tokens.fontSize.md, fontWeight: '600' },
+  buttonText: { color: tokens.color.onAccent, fontSize: tokens.fontSize.md, fontWeight: '600' },
   link: {
     color: tokens.color.accent,
     fontSize: tokens.fontSize.sm,

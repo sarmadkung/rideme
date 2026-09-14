@@ -13,15 +13,17 @@ import (
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
 )
 
-// Handler serves the customer and driver surfaces from documents 14 and 35.
+// Handler serves the customer and driver surfaces from documents 14 and 35,
+// plus the admin pricing surface (documents 34, 142).
 type Handler struct {
 	service   *Service
 	jobs      *jobs.Store
 	providers *providers.Store
+	quotes    *Store
 }
 
-func NewHandler(service *Service, jobStore *jobs.Store, providerStore *providers.Store) *Handler {
-	return &Handler{service: service, jobs: jobStore, providers: providerStore}
+func NewHandler(service *Service, jobStore *jobs.Store, providerStore *providers.Store, quoteStore *Store) *Handler {
+	return &Handler{service: service, jobs: jobStore, providers: providerStore, quotes: quoteStore}
 }
 
 // Routes registers the documented endpoints.
@@ -45,6 +47,15 @@ func (h *Handler) Routes(mux *http.ServeMux, authenticate func(http.Handler) htt
 	mux.Handle("POST "+p+"/driver/jobs/{id}/arrive", driverOnly(h.driverCommand(CommandArrive)))
 	mux.Handle("POST "+p+"/driver/jobs/{id}/start", driverOnly(h.driverCommand(CommandStart)))
 	mux.Handle("POST "+p+"/driver/jobs/{id}/complete", driverOnly(h.driverCommand(CommandComplete)))
+
+	// Admin pricing configuration (documents 34, 142). Never overwritten in
+	// place — each create is a new version, per document 142's "never
+	// overwrite active config, create+activate a new version."
+	adminOnly := func(fn http.HandlerFunc) http.Handler {
+		return authenticate(identity.RequireRole(identity.RoleAdmin, identity.RoleSuperAdmin)(fn))
+	}
+	mux.Handle("POST "+p+"/admin/pricing/tariffs", adminOnly(h.createTariff))
+	mux.Handle("GET "+p+"/admin/pricing/tariffs", adminOnly(h.listTariffs))
 }
 
 // --- bodies ------------------------------------------------------------------
@@ -387,4 +398,103 @@ type CancelResponse struct {
 	Job              JobResponse  `json:"job"`
 	CancellationTier string       `json:"cancellation_tier"`
 	Fee              money.Amount `json:"fee"`
+}
+
+// --- admin pricing -----------------------------------------------------------
+
+type createTariffBody struct {
+	JobType               string `json:"job_type"`
+	VehicleType           string `json:"vehicle_type,omitempty"`
+	City                  string `json:"city,omitempty"`
+	ZoneID                string `json:"zone_id,omitempty"`
+	Version               int    `json:"version"`
+	MinimumFareMinor      int64  `json:"minimum_fare_minor"`
+	BaseMinor             int64  `json:"base_minor"`
+	PerKMMinor            int64  `json:"per_km_minor"`
+	PerMinuteMinor        int64  `json:"per_minute_minor"`
+	WaitingPerMinuteMinor int64  `json:"waiting_per_minute_minor"`
+	LoadingPerMinuteMinor int64  `json:"loading_per_minute_minor"`
+	PerKGMinor            int64  `json:"per_kg_minor"`
+	ServiceFeeMinor       int64  `json:"service_fee_minor"`
+	ServiceFeeBPS         int    `json:"service_fee_bps"`
+	TaxBPS                int    `json:"tax_bps"`
+}
+
+// TariffResponse is the pricing configuration shape clients receive.
+// Exported because it is part of the wire contract and is generated into
+// TypeScript (ADR-007).
+type TariffResponse struct {
+	ID                    string `json:"id"`
+	JobType               string `json:"job_type"`
+	VehicleType           string `json:"vehicle_type,omitempty"`
+	City                  string `json:"city,omitempty"`
+	ZoneID                string `json:"zone_id,omitempty"`
+	Version               int    `json:"version"`
+	Currency              string `json:"currency"`
+	MinimumFareMinor      int64  `json:"minimum_fare_minor"`
+	BaseMinor             int64  `json:"base_minor"`
+	PerKMMinor            int64  `json:"per_km_minor"`
+	PerMinuteMinor        int64  `json:"per_minute_minor"`
+	WaitingPerMinuteMinor int64  `json:"waiting_per_minute_minor"`
+	LoadingPerMinuteMinor int64  `json:"loading_per_minute_minor"`
+	PerKGMinor            int64  `json:"per_kg_minor"`
+	ServiceFeeMinor       int64  `json:"service_fee_minor"`
+	ServiceFeeBPS         int    `json:"service_fee_bps"`
+	TaxBPS                int    `json:"tax_bps"`
+}
+
+func ToTariffResponse(t pricing.Tariff) TariffResponse {
+	return TariffResponse{
+		ID: t.ID, JobType: t.JobType, VehicleType: t.VehicleType, City: t.City, ZoneID: t.ZoneID,
+		Version: t.Version, Currency: string(t.Currency),
+		MinimumFareMinor: t.MinimumFareMinor, BaseMinor: t.BaseMinor, PerKMMinor: t.PerKMMinor,
+		PerMinuteMinor: t.PerMinuteMinor, WaitingPerMinuteMinor: t.WaitingPerMinuteMinor,
+		LoadingPerMinuteMinor: t.LoadingPerMinuteMinor, PerKGMinor: t.PerKGMinor,
+		ServiceFeeMinor: t.ServiceFeeMinor, ServiceFeeBPS: t.ServiceFeeBPS, TaxBPS: t.TaxBPS,
+	}
+}
+
+func (h *Handler) createTariff(w http.ResponseWriter, r *http.Request) {
+	var body createTariffBody
+	if !decode(w, r, &body) {
+		return
+	}
+	if !jobs.Type(body.JobType).Valid() {
+		httpx.WriteError(w, r, httpx.Validation("unknown service type",
+			map[string]string{"job_type": body.JobType}))
+		return
+	}
+	if body.Version <= 0 {
+		httpx.WriteError(w, r, httpx.Validation("a tariff needs a version",
+			map[string]string{"version": "must be positive"}))
+		return
+	}
+	t := pricing.Tariff{
+		JobType: body.JobType, VehicleType: body.VehicleType, City: body.City, ZoneID: body.ZoneID,
+		Version: body.Version, Currency: money.PKR,
+		MinimumFareMinor: body.MinimumFareMinor, BaseMinor: body.BaseMinor, PerKMMinor: body.PerKMMinor,
+		PerMinuteMinor: body.PerMinuteMinor, WaitingPerMinuteMinor: body.WaitingPerMinuteMinor,
+		LoadingPerMinuteMinor: body.LoadingPerMinuteMinor, PerKGMinor: body.PerKGMinor,
+		ServiceFeeMinor: body.ServiceFeeMinor, ServiceFeeBPS: body.ServiceFeeBPS, TaxBPS: body.TaxBPS,
+	}
+	id, err := h.quotes.SaveTariff(r.Context(), t)
+	if err != nil {
+		httpx.WriteError(w, r, httpx.Internal("could not save the tariff").WithCause(err))
+		return
+	}
+	t.ID = id
+	httpx.WriteJSON(w, r, http.StatusCreated, ToTariffResponse(t))
+}
+
+func (h *Handler) listTariffs(w http.ResponseWriter, r *http.Request) {
+	list, err := h.quotes.ListTariffs(r.Context())
+	if err != nil {
+		httpx.WriteError(w, r, httpx.Internal("could not load tariffs").WithCause(err))
+		return
+	}
+	out := make([]TariffResponse, 0, len(list))
+	for _, t := range list {
+		out = append(out, ToTariffResponse(t))
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, out)
 }

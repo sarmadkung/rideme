@@ -53,6 +53,18 @@ type Config struct {
 	OTPProvider string
 	MapProvider string
 
+	// OTPBypass skips the code-correctness check in VerifyOTP so local
+	// testing never has to read a code out of the server log. Everything
+	// else about the flow — rate limits, challenge expiry, single-use
+	// consumption, user creation — still runs. Load refuses to start with
+	// this set outside development (see the check below).
+	OTPBypass bool
+
+	// CORSAllowedOrigins lets a browser-based client — the admin dashboard —
+	// call this API from a different origin. Mobile apps never need an
+	// entry here; React Native's fetch does not enforce CORS.
+	CORSAllowedOrigins []string
+
 	ShutdownTimeout time.Duration
 	StartupTimeout  time.Duration
 }
@@ -71,21 +83,26 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 	l := loader{lookup: lookup}
 
 	cfg := &Config{
-		Env:             Env(l.optional("APP_ENV", string(EnvDevelopment))),
-		Port:            l.optionalInt("API_PORT", 8080),
-		DatabaseURL:     l.required("DATABASE_URL"),
-		RedisURL:        l.required("REDIS_URL"),
-		NATSURL:         l.required("NATS_URL"),
-		S3Endpoint:      l.optional("S3_ENDPOINT", ""),
-		S3Bucket:        l.optional("S3_BUCKET", ""),
-		S3AccessKey:     l.optional("S3_ACCESS_KEY", ""),
-		S3SecretKey:     l.optional("S3_SECRET_KEY", ""),
-		S3Region:        l.optional("S3_REGION", "us-east-1"),
-		JWTSecret:       l.required("JWT_SECRET"),
-		OTPProvider:     l.optional("OTP_PROVIDER", "noop"),
-		MapProvider:     l.optional("MAP_PROVIDER", "noop"),
-		ShutdownTimeout: 15 * time.Second,
-		StartupTimeout:  10 * time.Second,
+		Env:         Env(l.optional("APP_ENV", string(EnvDevelopment))),
+		Port:        l.optionalInt("API_PORT", 8080),
+		DatabaseURL: l.required("DATABASE_URL"),
+		RedisURL:    l.required("REDIS_URL"),
+		NATSURL:     l.required("NATS_URL"),
+		S3Endpoint:  l.optional("S3_ENDPOINT", ""),
+		S3Bucket:    l.optional("S3_BUCKET", ""),
+		S3AccessKey: l.optional("S3_ACCESS_KEY", ""),
+		S3SecretKey: l.optional("S3_SECRET_KEY", ""),
+		S3Region:    l.optional("S3_REGION", "us-east-1"),
+		JWTSecret:   l.required("JWT_SECRET"),
+		OTPProvider: l.optional("OTP_PROVIDER", "noop"),
+		MapProvider: l.optional("MAP_PROVIDER", "noop"),
+		OTPBypass:   l.optionalBool("AUTH_OTP_BYPASS", false),
+		// The admin dashboard's default local port (document 24's port table).
+		// Harmless to keep as a default in every environment: it only ever
+		// matches a request actually claiming to come from localhost:5173.
+		CORSAllowedOrigins: l.optionalList("CORS_ALLOWED_ORIGINS", []string{"http://localhost:5173"}),
+		ShutdownTimeout:    15 * time.Second,
+		StartupTimeout:     10 * time.Second,
 	}
 	cfg.LogLevel = parseLevel(l.optional("LOG_LEVEL", "info"), &l)
 
@@ -97,6 +114,9 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 	}
 	if cfg.Env.IsProduction() && strings.HasPrefix(cfg.JWTSecret, "dev-only") {
 		l.problem("JWT_SECRET still holds the development placeholder")
+	}
+	if cfg.OTPBypass && cfg.Env != EnvDevelopment {
+		l.problem("AUTH_OTP_BYPASS must not be set outside development (got APP_ENV=%q)", cfg.Env)
 	}
 
 	if len(l.problems) > 0 {
@@ -148,6 +168,33 @@ func (l *loader) optional(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func (l *loader) optionalBool(key string, fallback bool) bool {
+	raw, ok := l.lookup(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		l.problem("%s must be a boolean (got %q)", key, raw)
+		return fallback
+	}
+	return value
+}
+
+func (l *loader) optionalList(key string, fallback []string) []string {
+	raw, ok := l.lookup(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func (l *loader) optionalInt(key string, fallback int) int {

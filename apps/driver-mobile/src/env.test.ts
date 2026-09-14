@@ -8,7 +8,17 @@ describe('loadEnv', () => {
         EXPO_PUBLIC_APP_ENV: 'development',
         EXPO_PUBLIC_API_BASE_URL: 'http://localhost:8080',
       }),
-    ).toEqual({ appEnv: 'development', apiBaseUrl: 'http://localhost:8080' });
+    ).toEqual({ appEnv: 'development', apiBaseUrl: 'http://localhost:8080', otpBypass: false });
+  });
+
+  it('reads the local-testing OTP bypass flag', () => {
+    expect(
+      loadEnv({
+        EXPO_PUBLIC_APP_ENV: 'development',
+        EXPO_PUBLIC_API_BASE_URL: 'http://localhost:8080',
+        EXPO_PUBLIC_AUTH_OTP_BYPASS: 'true',
+      }).otpBypass,
+    ).toBe(true);
   });
 
   it('fails when a variable is missing', () => {

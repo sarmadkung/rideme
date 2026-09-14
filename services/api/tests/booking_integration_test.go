@@ -45,7 +45,7 @@ func newBookingHarness(t *testing.T) *bookingHarness {
 	}
 	now := func() time.Time { return h.clock }
 	h.settings = settings.NewStore(pool)
-	h.service = booking.NewService(h.jobs, h.store, pricing.NewEngine(now), routing.NewService(), h.settings, now)
+	h.service = booking.NewService(h.jobs, h.store, pricing.NewEngine(now), routing.NewService(), h.settings, nil, now)
 	return h
 }
 

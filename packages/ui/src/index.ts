@@ -13,7 +13,11 @@ export const tokens = {
     border: '#232a32',
     text: '#e8edf2',
     textMuted: '#8b98a5',
-    accent: '#3b82f6',
+    accent: '#22c55e',
+    // Text and spinners drawn on top of accent. Green is a light hue: the
+    // near-white `text` reads at ~2:1 against it, so a filled accent button
+    // takes the dark ink instead, which reads at ~8:1.
+    onAccent: '#0b0d10',
     success: '#22c55e',
     warning: '#f59e0b',
     danger: '#ef4444',

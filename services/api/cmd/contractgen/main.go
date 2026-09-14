@@ -19,6 +19,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
+	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
 	"github.com/sarmadkung/rideme/services/api/pkg/events"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
@@ -79,6 +80,11 @@ func Registry() *contract.Registry {
 	r.Struct("RejectedFix", driver.RejectedFix{})
 	r.Struct("LocationReport", driver.LocationResponse{})
 	r.Struct("DriverAssignment", driver.AssignmentResponse{})
+
+	// Admin surface: service zones and pricing configuration (documents 97,
+	// 34, 142, 143).
+	r.Struct("Zone", zones.ZoneResponse{})
+	r.Struct("Tariff", booking.TariffResponse{})
 
 	return r
 }

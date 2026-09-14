@@ -28,7 +28,10 @@ export function getApiClient(options: ClientOptions): ApiClient {
       // unnecessary fingerprinting. This is the installation id, the platform
       // and the app version — enough to spot a new device, not enough to
       // track anyone.
-      id: Application.getAndroidId?.() ?? undefined,
+      // getAndroidId exists on iOS but throws when called, so the optional
+      // call is no guard at all — the platform check is. iOS has no equivalent
+      // synchronous id (identifierForVendor is async), so it sends none.
+      id: Platform.OS === 'android' ? (Application.getAndroidId() ?? undefined) : undefined,
       platform: Platform.OS,
       os: String(Platform.Version),
       appVersion: Application.nativeApplicationVersion ?? undefined,

@@ -7,6 +7,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
+	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
@@ -23,9 +24,11 @@ func newRouter(
 	identityHandler *identity.Handler,
 	bookingHandler *booking.Handler,
 	driverHandler *driver.Handler,
+	zonesHandler *zones.Handler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
+	corsAllowedOrigins []string,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -41,11 +44,15 @@ func newRouter(
 	if driverHandler != nil {
 		driverHandler.Routes(mux, authenticate)
 	}
+	if zonesHandler != nil {
+		zonesHandler.Routes(mux, authenticate)
+	}
 
 	// Anything unrouted answers in the platform's error envelope.
 	mux.Handle("/", httpx.NotFoundHandler())
 
 	return observability.Chain(mux,
+		observability.CORS(corsAllowedOrigins),
 		observability.RequestContext(logger),
 		observability.Recover(httpx.PanicHandler),
 		observability.AccessLog(),

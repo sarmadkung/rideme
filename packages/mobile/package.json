@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./useAuth": {
+      "types": "./dist/useAuth.d.ts",
+      "import": "./dist/useAuth.js"
     }
   },
   "files": [

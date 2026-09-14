@@ -35,7 +35,7 @@ func TestTheQuoteEndpointSendsExactlyItsDeclaredShape(t *testing.T) {
 	h.aTariff(t, city)
 	userID := h.aUser(t)
 
-	handler := booking.NewHandler(h.service, h.jobs, providers.NewStore(h.pool))
+	handler := booking.NewHandler(h.service, h.jobs, providers.NewStore(h.pool), h.store)
 	mux := http.NewServeMux()
 	// The authenticator stands in for real middleware: this test is about the
 	// response body, not about who may ask for it.

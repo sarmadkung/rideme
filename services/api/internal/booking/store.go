@@ -26,11 +26,11 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 // national default, and a vehicle-specific rate over a service-wide one.
 // Without the ordering a new city tariff would be ignored until someone
 // noticed the fares had not changed.
-func (s *Store) Tariff(ctx context.Context, jobType, vehicleType, city string) (pricing.Tariff, error) {
+func (s *Store) Tariff(ctx context.Context, jobType, vehicleType, city, zoneID string) (pricing.Tariff, error) {
 	var t pricing.Tariff
-	var vType, tCity *string
+	var vType, tCity, tZone *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id::text, job_type, vehicle_type, city, version, currency,
+		`SELECT id::text, job_type, vehicle_type, city, zone_id::text, version, currency,
 		        minimum_fare_minor, base_minor, per_km_minor, per_minute_minor,
 		        waiting_per_minute_minor, loading_per_minute_minor, per_kg_minor,
 		        service_fee_minor, service_fee_bps, tax_bps, demand_min_bps, demand_max_bps
@@ -38,12 +38,14 @@ func (s *Store) Tariff(ctx context.Context, jobType, vehicleType, city string) (
 		  WHERE job_type = $1
 		    AND (vehicle_type = $2 OR vehicle_type IS NULL)
 		    AND (city = $3 OR city IS NULL)
+		    AND (zone_id = NULLIF($4, '')::uuid OR zone_id IS NULL)
 		    AND active_from <= now()
 		    AND (active_to IS NULL OR active_to > now())
-		  ORDER BY (vehicle_type IS NOT NULL) DESC, (city IS NOT NULL) DESC, version DESC
+		  ORDER BY (zone_id IS NOT NULL) DESC, (vehicle_type IS NOT NULL) DESC,
+		           (city IS NOT NULL) DESC, version DESC
 		  LIMIT 1`,
-		jobType, vehicleType, city).
-		Scan(&t.ID, &t.JobType, &vType, &tCity, &t.Version, &t.Currency,
+		jobType, vehicleType, city, zoneID).
+		Scan(&t.ID, &t.JobType, &vType, &tCity, &tZone, &t.Version, &t.Currency,
 			&t.MinimumFareMinor, &t.BaseMinor, &t.PerKMMinor, &t.PerMinuteMinor,
 			&t.WaitingPerMinuteMinor, &t.LoadingPerMinuteMinor, &t.PerKGMinor,
 			&t.ServiceFeeMinor, &t.ServiceFeeBPS, &t.TaxBPS, &t.DemandMinBPS, &t.DemandMaxBPS)
@@ -59,17 +61,25 @@ func (s *Store) Tariff(ctx context.Context, jobType, vehicleType, city string) (
 	if tCity != nil {
 		t.City = *tCity
 	}
+	if tZone != nil {
+		t.ZoneID = *tZone
+	}
 	return t, nil
 }
 
-// SaveTariff stores pricing configuration.
+// SaveTariff stores pricing configuration. A tariff is never edited in
+// place — document 142 requires versioned configuration, so each call
+// inserts a new row/version rather than mutating an existing one.
 func (s *Store) SaveTariff(ctx context.Context, t pricing.Tariff) (string, error) {
-	var vehicleType, city any
+	var vehicleType, city, zoneID any
 	if t.VehicleType != "" {
 		vehicleType = t.VehicleType
 	}
 	if t.City != "" {
 		city = t.City
+	}
+	if t.ZoneID != "" {
+		zoneID = t.ZoneID
 	}
 	currency := t.Currency
 	if currency == "" {
@@ -78,13 +88,13 @@ func (s *Store) SaveTariff(ctx context.Context, t pricing.Tariff) (string, error
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO pricing_tariffs
-		   (job_type, vehicle_type, city, version, currency, minimum_fare_minor, base_minor,
+		   (job_type, vehicle_type, city, zone_id, version, currency, minimum_fare_minor, base_minor,
 		    per_km_minor, per_minute_minor, waiting_per_minute_minor, loading_per_minute_minor,
 		    per_kg_minor, service_fee_minor, service_fee_bps, tax_bps, demand_min_bps, demand_max_bps)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-		         COALESCE(NULLIF($16, 0), 10000), COALESCE(NULLIF($17, 0), 10000))
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+		         COALESCE(NULLIF($17, 0), 10000), COALESCE(NULLIF($18, 0), 10000))
 		 RETURNING id::text`,
-		t.JobType, vehicleType, city, t.Version, currency, t.MinimumFareMinor, t.BaseMinor,
+		t.JobType, vehicleType, city, zoneID, t.Version, currency, t.MinimumFareMinor, t.BaseMinor,
 		t.PerKMMinor, t.PerMinuteMinor, t.WaitingPerMinuteMinor, t.LoadingPerMinuteMinor,
 		t.PerKGMinor, t.ServiceFeeMinor, t.ServiceFeeBPS, t.TaxBPS, t.DemandMinBPS, t.DemandMaxBPS).
 		Scan(&id)
@@ -92,6 +102,45 @@ func (s *Store) SaveTariff(ctx context.Context, t pricing.Tariff) (string, error
 		return "", fmt.Errorf("save tariff: %w", err)
 	}
 	return id, nil
+}
+
+// ListTariffs returns every tariff, most recently created first, for the
+// admin pricing screen.
+func (s *Store) ListTariffs(ctx context.Context) ([]pricing.Tariff, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text, job_type, vehicle_type, city, zone_id::text, version, currency,
+		        minimum_fare_minor, base_minor, per_km_minor, per_minute_minor,
+		        waiting_per_minute_minor, loading_per_minute_minor, per_kg_minor,
+		        service_fee_minor, service_fee_bps, tax_bps, demand_min_bps, demand_max_bps
+		   FROM pricing_tariffs
+		  ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list tariffs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []pricing.Tariff
+	for rows.Next() {
+		var t pricing.Tariff
+		var vType, tCity, tZone *string
+		if err := rows.Scan(&t.ID, &t.JobType, &vType, &tCity, &tZone, &t.Version, &t.Currency,
+			&t.MinimumFareMinor, &t.BaseMinor, &t.PerKMMinor, &t.PerMinuteMinor,
+			&t.WaitingPerMinuteMinor, &t.LoadingPerMinuteMinor, &t.PerKGMinor,
+			&t.ServiceFeeMinor, &t.ServiceFeeBPS, &t.TaxBPS, &t.DemandMinBPS, &t.DemandMaxBPS); err != nil {
+			return nil, fmt.Errorf("scan tariff: %w", err)
+		}
+		if vType != nil {
+			t.VehicleType = *vType
+		}
+		if tCity != nil {
+			t.City = *tCity
+		}
+		if tZone != nil {
+			t.ZoneID = *tZone
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // StoredQuote is a quote as persisted.
