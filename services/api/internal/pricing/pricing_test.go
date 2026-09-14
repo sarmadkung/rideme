@@ -273,10 +273,9 @@ func TestQuotesCarryTheirTariffVersionAndExpiry(t *testing.T) {
 }
 
 func TestAnUnpricedServiceIsRefusedNotGuessed(t *testing.T) {
-	// Parcel, cargo and grocery arrive with their slices. Pricing one now
-	// would mean inventing its rule set.
-	// GROCERY arrives with Phase 10; TAXI is not a service at all.
-	for _, jobType := range []string{"GROCERY", "TAXI"} {
+	// Pricing a service with no rule set would mean inventing one. TAXI is
+	// not a service at all.
+	for _, jobType := range []string{"TAXI"} {
 		if _, err := engine().Quote(pricing.Request{JobType: jobType, DistanceMeters: 1000},
 			rideTariff()); !errors.Is(err, pricing.ErrUnknownService) {
 			t.Errorf("%s was priced by the ride rule set: %v", jobType, err)

@@ -342,12 +342,12 @@ func (s *Service) PriceDelivery(ctx context.Context, job jobs.Job) error {
 		return fmt.Errorf("booking: estimate the delivery route for job %s: %w", job.ID, err)
 	}
 
-	// No vehicle type and no city: a delivery is created before dispatch has
+	// No vehicle type, city or zone: a delivery is created before dispatch has
 	// chosen who carries it, so the tariff lookup falls back to the generic
 	// row for the service. Pricing it per vehicle would mean pricing it after
 	// assignment, and a fare that changes depending on which driver accepted
 	// is not a fare.
-	tariff, err := s.quotes.Tariff(ctx, string(job.Type), "", "")
+	tariff, err := s.quotes.Tariff(ctx, string(job.Type), "", "", "")
 	if err != nil {
 		return fmt.Errorf("booking: load the %s tariff: %w", job.Type, err)
 	}
