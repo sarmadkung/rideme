@@ -97,6 +97,22 @@ describe('useAuth', () => {
     expect(result.current.error).toBeNull();
     expect(result.current.stage).toBe('code');
   });
+
+  it('skips the code screen when a dev auto-code is configured', async () => {
+    const verifyOtp = jest.fn(async () => ({
+      accessToken: 'a',
+      expiresAt: new Date('2026-08-28T12:05:00Z'),
+    }));
+    const client = stubClient({ verifyOtp });
+    const { result } = renderHook(() => useAuth(client, { devAutoCode: '000000' }));
+
+    await act(async () => {
+      await result.current.requestCode('03001234567');
+    });
+
+    expect(verifyOtp).toHaveBeenCalledWith('03001234567', '000000');
+    await waitFor(() => expect(result.current.stage).toBe('authenticated'));
+  });
 });
 
 describe('messageFor', () => {

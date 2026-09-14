@@ -84,6 +84,54 @@ func TestProductionRejectsThePlaceholderSecret(t *testing.T) {
 	}
 }
 
+func TestCORSAllowedOriginsDefaultsAndParses(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatalf("expected valid configuration, got %v", err)
+	}
+	if len(cfg.CORSAllowedOrigins) != 1 || cfg.CORSAllowedOrigins[0] != "http://localhost:5173" {
+		t.Errorf("CORSAllowedOrigins = %v, want the admin dashboard's default port", cfg.CORSAllowedOrigins)
+	}
+
+	cfg, err = Load(env(map[string]string{
+		"CORS_ALLOWED_ORIGINS": "https://admin.example.com, https://ops.example.com",
+	}))
+	if err != nil {
+		t.Fatalf("expected valid configuration, got %v", err)
+	}
+	want := []string{"https://admin.example.com", "https://ops.example.com"}
+	if len(cfg.CORSAllowedOrigins) != len(want) {
+		t.Fatalf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, want)
+	}
+	for i, origin := range want {
+		if cfg.CORSAllowedOrigins[i] != origin {
+			t.Errorf("CORSAllowedOrigins[%d] = %q, want %q", i, cfg.CORSAllowedOrigins[i], origin)
+		}
+	}
+}
+
+func TestOTPBypassOnlyStartsInDevelopment(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"AUTH_OTP_BYPASS": "true"}))
+	if err != nil {
+		t.Fatalf("expected AUTH_OTP_BYPASS to be accepted in development, got %v", err)
+	}
+	if !cfg.OTPBypass {
+		t.Error("OTPBypass = false, want true")
+	}
+
+	for _, otherEnv := range []string{"test", "staging", "production"} {
+		t.Run(otherEnv, func(t *testing.T) {
+			overrides := map[string]string{"APP_ENV": otherEnv, "AUTH_OTP_BYPASS": "true"}
+			if otherEnv == "production" {
+				overrides["JWT_SECRET"] = "a-real-production-secret"
+			}
+			if _, err := Load(env(overrides)); err == nil {
+				t.Fatalf("AUTH_OTP_BYPASS must not start with APP_ENV=%s", otherEnv)
+			}
+		})
+	}
+}
+
 func TestSelectingAMapProviderRequiresItsCredential(t *testing.T) {
 	// Starting with MAP_PROVIDER=google and no key would send every route to
 	// the straight-line fallback — the precise outcome setting the variable

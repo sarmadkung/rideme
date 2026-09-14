@@ -75,7 +75,7 @@ export function BookingScreen({
           onPress={() => void booking.requestQuote()}
         >
           {booking.pending ? (
-            <ActivityIndicator color={tokens.color.text} />
+            <ActivityIndicator color={tokens.color.onAccent} />
           ) : (
             <Text style={styles.buttonText}>See price</Text>
           )}
@@ -121,7 +121,7 @@ export function BookingScreen({
             onPress={() => void booking.confirm()}
           >
             {booking.pending ? (
-              <ActivityIndicator color={tokens.color.text} />
+              <ActivityIndicator color={tokens.color.onAccent} />
             ) : (
               <Text style={styles.buttonText}>Confirm ride</Text>
             )}
@@ -190,7 +190,7 @@ const styles = StyleSheet.create({
     marginBottom: tokens.space.sm,
   },
   chipText: { color: tokens.color.textMuted, fontSize: tokens.fontSize.sm },
-  chipTextActive: { color: tokens.color.text, fontWeight: '600' },
+  chipTextActive: { color: tokens.color.onAccent, fontWeight: '600' },
   panel: {
     backgroundColor: tokens.color.surface,
     borderColor: tokens.color.border,
@@ -234,5 +234,5 @@ const styles = StyleSheet.create({
     marginTop: tokens.space.md,
   },
   buttonPressed: { opacity: 0.8 },
-  buttonText: { color: tokens.color.text, fontSize: tokens.fontSize.md, fontWeight: '600' },
+  buttonText: { color: tokens.color.onAccent, fontSize: tokens.fontSize.md, fontWeight: '600' },
 });

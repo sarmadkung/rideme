@@ -11,6 +11,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
+	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
@@ -27,6 +28,7 @@ func newRouter(
 	identityHandler *identity.Handler,
 	bookingHandler *booking.Handler,
 	driverHandler *driver.Handler,
+	zonesHandler *zones.Handler,
 	placesHandler *places.Handler,
 	merchantHandler *merchant.Handler,
 	groceryHandler *merchant.CustomerHandler,
@@ -35,6 +37,7 @@ func newRouter(
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
+	corsAllowedOrigins []string,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -49,6 +52,9 @@ func newRouter(
 	}
 	if driverHandler != nil {
 		driverHandler.Routes(mux, authenticate)
+	}
+	if zonesHandler != nil {
+		zonesHandler.Routes(mux, authenticate)
 	}
 	// Absent when no geocoder is configured, so the routes 404 rather than
 	// existing and always failing.
@@ -73,6 +79,7 @@ func newRouter(
 	mux.Handle("/", httpx.NotFoundHandler())
 
 	return observability.Chain(mux,
+		observability.CORS(corsAllowedOrigins),
 		observability.RequestContext(logger),
 		observability.Recover(httpx.PanicHandler),
 		observability.AccessLog(),

@@ -3,9 +3,12 @@ import { render, screen } from '@testing-library/react';
 import { App } from './App';
 
 describe('App shell', () => {
-  it('renders the placeholder and the validated environment', () => {
+  it('shows the phone-OTP login screen when signed out', () => {
+    // Nobody is signed in on mount, so the shell must show the login screen
+    // rather than any operational screen a signed-out visitor should not see.
     render(<App />);
     expect(screen.getByRole('heading', { name: 'RideMe Admin' })).toBeDefined();
-    expect(screen.getByTestId('app-env').textContent).toBe('test');
+    expect(screen.getByPlaceholderText('03001234567')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Send code' })).toBeDefined();
   });
 });

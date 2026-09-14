@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
     padding: tokens.space.md,
     alignItems: 'center',
   },
-  buttonText: { color: tokens.color.text, fontSize: tokens.fontSize.md, fontWeight: '600' },
+  buttonText: { color: tokens.color.onAccent, fontSize: tokens.fontSize.md, fontWeight: '600' },
   cancelButton: {
     borderColor: tokens.color.danger,
     borderWidth: 1,

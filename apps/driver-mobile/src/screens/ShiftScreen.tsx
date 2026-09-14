@@ -82,9 +82,11 @@ export function ShiftScreen({
         }}
       >
         {shift.pending ? (
-          <ActivityIndicator color={tokens.color.text} />
+          <ActivityIndicator color={online ? tokens.color.text : tokens.color.onAccent} />
         ) : (
-          <Text style={styles.buttonText}>{online ? 'Go offline' : 'Go online'}</Text>
+          <Text style={[styles.buttonText, !online && styles.onFilled]}>
+            {online ? 'Go offline' : 'Go online'}
+          </Text>
         )}
       </Pressable>
     </View>
@@ -148,5 +150,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonText: { color: tokens.color.text, fontSize: tokens.fontSize.md, fontWeight: '600' },
+  // The offline button is an outline on the dark screen, the online one a
+  // green fill. One label serves both, so only the filled state takes the
+  // dark ink — applying it unconditionally would hide 'Go offline'.
+  onFilled: { color: tokens.color.onAccent },
   pressed: { opacity: 0.8 },
 });

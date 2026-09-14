@@ -166,6 +166,37 @@ export interface DriverAssignment {
   job: Job;
 }
 
+export interface Zone {
+  id: string;
+  name: string;
+  city?: string | undefined;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  status: string;
+  created_at: string;
+}
+
+export interface Tariff {
+  id: string;
+  job_type: string;
+  vehicle_type?: string | undefined;
+  city?: string | undefined;
+  zone_id?: string | undefined;
+  version: number;
+  currency: string;
+  minimum_fare_minor: number;
+  base_minor: number;
+  per_km_minor: number;
+  per_minute_minor: number;
+  waiting_per_minute_minor: number;
+  loading_per_minute_minor: number;
+  per_kg_minor: number;
+  service_fee_minor: number;
+  service_fee_bps: number;
+  tax_bps: number;
+}
+
 export interface Point {
   lat: number;
   lon: number;

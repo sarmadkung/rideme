@@ -110,6 +110,40 @@ func AccessLog() Middleware {
 	}
 }
 
+// CORS allows a browser-based client — currently the admin dashboard, a
+// React+Vite app served from a different origin than the API — to call it.
+// Mobile apps never need this: React Native's fetch does not enforce CORS,
+// so without a browser client this middleware would have nothing to do.
+//
+// An empty allowlist is a valid, safe default: it answers every preflight
+// with no Access-Control-Allow-Origin header, which every browser treats as
+// "not permitted" — the same as CORS not being configured at all.
+func CORS(allowedOrigins []string) Middleware {
+	allowed := make(map[string]bool, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		allowed[origin] = true
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && allowed[origin] {
+				// Origin is echoed rather than "*" so the browser will still
+				// send the Authorization header a Bearer-token client needs —
+				// the wildcard forbids that pairing outright.
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
+			}
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // Recover turns a panic into a 500 rather than a dropped connection. onPanic
 // lets the caller render the platform's standard error envelope without this
 // package importing httpx.

@@ -21,10 +21,17 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/settings"
+	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
 	"github.com/sarmadkung/rideme/services/api/pkg/routing"
 )
+
+// zoneFinder is the one zones.Store method Quote needs. An interface rather
+// than *zones.Store directly so a test can fake it without a database.
+type zoneFinder interface {
+	FindContaining(ctx context.Context, lat, lon float64) (zones.Zone, error)
+}
 
 // CancellationTier is document 005's structure: what a cancellation costs
 // depends on how far the job had progressed.
@@ -92,6 +99,7 @@ type Service struct {
 	// settings supplies the values BD-01 decided. It is a dependency rather
 	// than a package-level lookup so a test can drive the policy directly.
 	settings *settings.Store
+	zones    zoneFinder
 	// trips closes the tracking session when a job stops moving. Optional:
 	// without it a finished trip stays watchable, which is a privacy leak
 	// rather than a broken trip, so it degrades loudly in the log instead of
@@ -143,12 +151,12 @@ type TripTracking interface {
 	EndSession(ctx context.Context, jobID string) error
 }
 
-func NewService(jobStore *jobs.Store, quoteStore *Store, engine *pricing.Engine, routes *routing.Service, platformSettings *settings.Store, now func() time.Time) *Service {
+func NewService(jobStore *jobs.Store, quoteStore *Store, engine *pricing.Engine, routes *routing.Service, platformSettings *settings.Store, zoneStore zoneFinder, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
 	return &Service{jobs: jobStore, quotes: quoteStore, pricing: engine, routes: routes,
-		settings: platformSettings, logger: slog.Default(), now: now}
+		settings: platformSettings, zones: zoneStore, logger: slog.Default(), now: now}
 }
 
 // WithTracking attaches the tracking session, so a job that stops moving stops
@@ -250,7 +258,21 @@ func (s *Service) Quote(ctx context.Context, req QuoteRequest) (Quote, error) {
 		return Quote{}, httpx.Unavailable("could not estimate the route").WithCause(err)
 	}
 
-	tariff, err := s.quotes.Tariff(ctx, string(req.JobType), req.VehicleType, req.City)
+	// Zone resolution (document 97): the finer-grained geographic dimension a
+	// tariff can be scoped to, alongside the plain city string. A miss or a
+	// lookup failure is not a quote failure — it just means no zone-specific
+	// rate applies, and the lookup below falls back to city/universal
+	// tariffs, matching the demand-measurement fallback below.
+	var zoneID string
+	if s.zones != nil {
+		zone, err := s.zones.FindContaining(ctx,
+			req.Stops[0].Location.Latitude, req.Stops[0].Location.Longitude)
+		if err == nil {
+			zoneID = zone.ID
+		}
+	}
+
+	tariff, err := s.quotes.Tariff(ctx, string(req.JobType), req.VehicleType, req.City, zoneID)
 	if err != nil {
 		if errors.Is(err, pricing.ErrNoTariff) {
 			// Refusing is right: a quote with no configured rate would be a

@@ -28,6 +28,8 @@ import type {
   Quote,
   Store,
   SubstitutionPreference,
+  Tariff,
+  Zone,
 } from '@platform/types';
 import {
   apiErrorBodySchema,
@@ -45,6 +47,8 @@ import {
   productSchema,
   quoteSchema,
   storeSchema,
+  tariffSchema,
+  zoneSchema,
 } from '@platform/validation';
 
 export class ApiError extends Error {
@@ -104,6 +108,14 @@ export function memoryTokenStorage(initial: string | null = null): TokenStorage 
 export interface Session {
   accessToken: string;
   expiresAt: Date;
+  /**
+   * The roles this session's user holds. The server already sends these on
+   * verify (internal/identity/handler.go's tokenResponse.user.roles) — a
+   * screen that must gate on ADMIN/SUPER_ADMIN reads this rather than
+   * decoding the access token itself, which is an opaque platform token, not
+   * a JWT a client can parse (pkg/authn/token.go).
+   */
+  roles: string[];
 }
 
 export interface ApiClientOptions {
@@ -150,6 +162,14 @@ export interface ApiClient {
   reportLocation(fixes: PositionInput[]): Promise<LocationReport>;
   /** The offer or trip the driver is holding, or null when they hold nothing. */
   driverAssignment(): Promise<DriverAssignment | null>;
+
+  /** Admin-only: service zones (document 97). The server enforces the role;
+   * calling these as a non-admin fails with a 403 ApiError. */
+  listZones(): Promise<Zone[]>;
+  createZone(input: CreateZoneInput): Promise<Zone>;
+  /** Admin-only: pricing configuration (documents 34, 142). */
+  listTariffs(): Promise<Tariff[]>;
+  createTariff(input: CreateTariffInput): Promise<Tariff>;
 
   /**
    * Places matching free text, biased toward `near` when it is known.
@@ -294,6 +314,32 @@ export interface CreateJobInput {
   scheduledAt?: Date;
 }
 
+export interface CreateZoneInput {
+  name: string;
+  city?: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+}
+
+export interface CreateTariffInput {
+  jobType: string;
+  vehicleType?: string;
+  city?: string;
+  zoneId?: string;
+  version: number;
+  minimumFareMinor: number;
+  baseMinor: number;
+  perKmMinor: number;
+  perMinuteMinor: number;
+  waitingPerMinuteMinor?: number;
+  loadingPerMinuteMinor?: number;
+  perKgMinor?: number;
+  serviceFeeMinor?: number;
+  serviceFeeBps?: number;
+  taxBps?: number;
+}
+
 interface RequestOptions {
   method?: string;
   body?: unknown;
@@ -413,7 +459,14 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
           body: { refresh_token: token },
         })) as { access_token: string; refresh_token: string; expires_at: string };
 
-        session = { accessToken: body.access_token, expiresAt: new Date(body.expires_at) };
+        // Refresh rotates tokens; it does not change roles, and the refresh
+        // response carries no user info to re-derive them from. Carry the
+        // prior session's roles forward rather than losing them here.
+        session = {
+          accessToken: body.access_token,
+          expiresAt: new Date(body.expires_at),
+          roles: session?.roles ?? [],
+        };
         // The server rotates the refresh token on every use, so the new one
         // must be stored before anything else can fail.
         await storage.set(body.refresh_token);
@@ -451,9 +504,18 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         method: 'POST',
         anonymous: true,
         body: { phone, code },
-      })) as { access_token: string; refresh_token: string; expires_at: string };
+      })) as {
+        access_token: string;
+        refresh_token: string;
+        expires_at: string;
+        user: { roles: string[] };
+      };
 
-      session = { accessToken: body.access_token, expiresAt: new Date(body.expires_at) };
+      session = {
+        accessToken: body.access_token,
+        expiresAt: new Date(body.expires_at),
+        roles: body.user.roles,
+      };
       await storage.set(body.refresh_token);
       return session;
     },
@@ -733,6 +795,56 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         if (error instanceof ApiError && error.status === 404) return null;
         throw error;
       }
+    },
+
+    async listZones() {
+      const items = (await request('/admin/zones')) as unknown[];
+      return items.map((item) => zoneSchema.parse(item));
+    },
+
+    async createZone(input) {
+      return zoneSchema.parse(
+        await request('/admin/zones', {
+          method: 'POST',
+          body: {
+            name: input.name,
+            city: input.city,
+            latitude: input.latitude,
+            longitude: input.longitude,
+            radius_meters: input.radiusMeters,
+          },
+        }),
+      );
+    },
+
+    async listTariffs() {
+      const items = (await request('/admin/pricing/tariffs')) as unknown[];
+      return items.map((item) => tariffSchema.parse(item));
+    },
+
+    async createTariff(input) {
+      return tariffSchema.parse(
+        await request('/admin/pricing/tariffs', {
+          method: 'POST',
+          body: {
+            job_type: input.jobType,
+            vehicle_type: input.vehicleType,
+            city: input.city,
+            zone_id: input.zoneId,
+            version: input.version,
+            minimum_fare_minor: input.minimumFareMinor,
+            base_minor: input.baseMinor,
+            per_km_minor: input.perKmMinor,
+            per_minute_minor: input.perMinuteMinor,
+            waiting_per_minute_minor: input.waitingPerMinuteMinor ?? 0,
+            loading_per_minute_minor: input.loadingPerMinuteMinor ?? 0,
+            per_kg_minor: input.perKgMinor ?? 0,
+            service_fee_minor: input.serviceFeeMinor ?? 0,
+            service_fee_bps: input.serviceFeeBps ?? 0,
+            tax_bps: input.taxBps ?? 0,
+          },
+        }),
+      );
     },
   };
 }

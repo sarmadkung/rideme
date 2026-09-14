@@ -8,6 +8,11 @@ import { ApiError, type ApiClient } from '@platform/api-client';
  * for both platforms: document 48 is explicit that business logic must not be
  * duplicated per platform, and an auth flow that differs between iOS and
  * Android differs in exactly the ways nobody tests.
+ *
+ * This file has no React Native dependency — it moved here from
+ * `@platform/mobile` (which wraps expo-secure-store) precisely so a web
+ * client can import it directly without pulling in the device keystore.
+ * `@platform/mobile` re-exports it so mobile app imports did not have to move.
  */
 export type AuthStage = 'phone' | 'code' | 'authenticated';
 
@@ -18,6 +23,13 @@ export interface AuthState {
   error: string | null;
   /** When the current code expires, so the UI can offer a resend. */
   codeExpiresAt: Date | null;
+  /**
+   * The signed-in user's roles, from the server's verify response. Empty
+   * until authenticated. Most screens never look at this — it exists for the
+   * one surface that gates on a role (the admin dashboard), rather than
+   * having that surface re-derive session state on its own.
+   */
+  roles: string[];
 }
 
 export interface AuthActions {
@@ -26,50 +38,82 @@ export interface AuthActions {
   restart(): void;
 }
 
+export interface UseAuthOptions {
+  /**
+   * Local-testing only. When set, requestCode submits this code itself
+   * instead of moving to the 'code' stage — the server is the real guard
+   * (AUTH_OTP_BYPASS, refused outside development), this only skips a screen
+   * that would otherwise pass anyway.
+   */
+  devAutoCode?: string;
+}
+
+/**
+ * The code a bypass-enabled server accepts unconditionally. Any value works
+ * server-side once AUTH_OTP_BYPASS is on; this exists so both apps send the
+ * same one rather than each inventing a placeholder.
+ */
+export const DEV_OTP_BYPASS_CODE = '000000';
+
 const INITIAL: AuthState = {
   stage: 'phone',
   phone: '',
   pending: false,
   error: null,
   codeExpiresAt: null,
+  roles: [],
 };
 
-export function useAuth(client: ApiClient): AuthState & AuthActions {
+export function useAuth(client: ApiClient, options: UseAuthOptions = {}): AuthState & AuthActions {
   const [state, setState] = useState<AuthState>(INITIAL);
+  const { devAutoCode } = options;
 
-  const requestCode = useCallback(
-    async (phone: string) => {
-      setState((s) => ({ ...s, pending: true, error: null }));
+  const verify = useCallback(
+    async (phone: string, code: string) => {
+      setState((s) => ({ ...s, phone, pending: true, error: null }));
       try {
-        const { expiresAt } = await client.requestOtp(phone);
-        setState({
-          stage: 'code',
-          phone,
+        const session = await client.verifyOtp(phone, code);
+        setState((s) => ({
+          ...s,
+          stage: 'authenticated',
           pending: false,
           error: null,
-          codeExpiresAt: expiresAt,
-        });
-      } catch (error) {
-        setState((s) => ({ ...s, pending: false, error: messageFor(error) }));
-      }
-    },
-    [client],
-  );
-
-  const submitCode = useCallback(
-    async (code: string) => {
-      setState((s) => ({ ...s, pending: true, error: null }));
-      try {
-        await client.verifyOtp(state.phone, code);
-        setState((s) => ({ ...s, stage: 'authenticated', pending: false, error: null }));
+          roles: session.roles,
+        }));
         return true;
       } catch (error) {
         setState((s) => ({ ...s, pending: false, error: messageFor(error) }));
         return false;
       }
     },
-    [client, state.phone],
+    [client],
   );
+
+  const requestCode = useCallback(
+    async (phone: string) => {
+      setState((s) => ({ ...s, pending: true, error: null }));
+      try {
+        const { expiresAt } = await client.requestOtp(phone);
+        if (devAutoCode !== undefined) {
+          await verify(phone, devAutoCode);
+          return;
+        }
+        setState({
+          stage: 'code',
+          phone,
+          pending: false,
+          error: null,
+          codeExpiresAt: expiresAt,
+          roles: [],
+        });
+      } catch (error) {
+        setState((s) => ({ ...s, pending: false, error: messageFor(error) }));
+      }
+    },
+    [client, devAutoCode, verify],
+  );
+
+  const submitCode = useCallback((code: string) => verify(state.phone, code), [verify, state.phone]);
 
   const restart = useCallback(() => setState(INITIAL), []);
 

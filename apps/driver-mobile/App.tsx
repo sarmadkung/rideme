@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { tokens } from '@platform/ui';
-import { useAuth } from '@platform/mobile';
+import { useAuth, DEV_OTP_BYPASS_CODE } from '@platform/mobile';
 import { loadEnvOrNull } from './src/env';
 import { getApiClient } from './src/api/client';
 import { useShift, isOffer, isOnline } from './src/features/shift/useShift';
@@ -33,7 +33,10 @@ function Shell() {
   const onSessionExpired = useCallback(() => setSessionLost(true), []);
   const client = useMemo(() => getApiClient({ onSessionExpired }), [onSessionExpired]);
 
-  const auth = useAuth(client);
+  const auth = useAuth(
+    client,
+    env?.otpBypass ? { devAutoCode: DEV_OTP_BYPASS_CODE } : undefined,
+  );
   const shift = useShift(client);
   const signedIn = auth.stage === 'authenticated' && !sessionLost;
   const location = useLocation();

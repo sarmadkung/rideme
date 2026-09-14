@@ -70,7 +70,7 @@ export function TripScreen({ shift }: { shift: ShiftState & ShiftActions }) {
           onPress={() => void shift.advance()}
         >
           {shift.pending ? (
-            <ActivityIndicator color={tokens.color.text} />
+            <ActivityIndicator color={tokens.color.onAccent} />
           ) : (
             <Text style={styles.buttonText}>{command.label}</Text>
           )}
@@ -119,6 +119,6 @@ const styles = StyleSheet.create({
     padding: tokens.space.md,
     alignItems: 'center',
   },
-  buttonText: { color: tokens.color.text, fontSize: tokens.fontSize.md, fontWeight: '600' },
+  buttonText: { color: tokens.color.onAccent, fontSize: tokens.fontSize.md, fontWeight: '600' },
   pressed: { opacity: 0.8 },
 });

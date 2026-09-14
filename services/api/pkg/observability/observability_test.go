@@ -131,3 +131,42 @@ func TestRecoverTurnsPanicIntoAHandledResponse(t *testing.T) {
 		t.Error("panic was not logged")
 	}
 }
+
+func TestCORSAllowsAnAllowedOriginAndAnswersPreflight(t *testing.T) {
+	handler := CORS([]string{"http://localhost:5173"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+	)
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/api/v1/admin/zones", nil)
+	preflight.Header.Set("Origin", "http://localhost:5173")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, preflight)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("preflight status = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want the allowed origin", got)
+	}
+}
+
+func TestCORSRejectsAnUnlistedOrigin(t *testing.T) {
+	handler := CORS([]string{"http://localhost:5173"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/zones", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// The request still reaches the handler — CORS is a browser-enforced
+	// restriction on reading the response, not a server-side block — but no
+	// Allow-Origin header means the browser discards what comes back.
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (CORS is enforced by the browser, not the server)", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want empty for an unlisted origin", got)
+	}
+}

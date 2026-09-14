@@ -53,8 +53,12 @@ type Tariff struct {
 	JobType     string
 	VehicleType string
 	City        string
-	Version     int
-	Currency    money.Currency
+	// ZoneID is the finer-grained geographic dimension (document 34: "by
+	// city, zone") — a zone-scoped tariff outranks a city-scoped one, which
+	// outranks a universal one. Empty means "any zone".
+	ZoneID   string
+	Version  int
+	Currency money.Currency
 
 	MinimumFareMinor      int64
 	BaseMinor             int64

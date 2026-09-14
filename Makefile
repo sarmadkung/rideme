@@ -52,6 +52,11 @@ migrate-down: ## Roll back every migration (destructive)
 migrate-version: ## Print the applied schema version
 	cd $(API) && go run ./cmd/migrate version
 
+promote-super-admin: ## Grant SUPER_ADMIN to a phone number (dev only: make promote-super-admin PHONE=+92...)
+	@test -n "$(PHONE)" || (echo "usage: make promote-super-admin PHONE=+92xxxxxxxxxx" && exit 1)
+	docker exec -i rideme-postgres psql -U $${POSTGRES_USER:-logistics} -d $${POSTGRES_DB:-logistics_dev} -c \
+		"INSERT INTO user_roles (user_id, role) SELECT id, 'SUPER_ADMIN' FROM users WHERE phone = '$(PHONE)' ON CONFLICT DO NOTHING RETURNING user_id, role;"
+
 # --- backend -----------------------------------------------------------------
 
 api-run: ## Run the Go API on the host

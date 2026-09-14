@@ -154,6 +154,37 @@ export const driverAssignmentSchema = z.object({
   job: jobSchema,
 });
 
+export const zoneSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  city: z.string().optional(),
+  latitude: z.number(),
+  longitude: z.number(),
+  radius_meters: z.number().int(),
+  status: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+});
+
+export const tariffSchema = z.object({
+  id: z.string(),
+  job_type: z.string(),
+  vehicle_type: z.string().optional(),
+  city: z.string().optional(),
+  zone_id: z.string().optional(),
+  version: z.number().int(),
+  currency: z.string(),
+  minimum_fare_minor: z.number().int(),
+  base_minor: z.number().int(),
+  per_km_minor: z.number().int(),
+  per_minute_minor: z.number().int(),
+  waiting_per_minute_minor: z.number().int(),
+  loading_per_minute_minor: z.number().int(),
+  per_kg_minor: z.number().int(),
+  service_fee_minor: z.number().int(),
+  service_fee_bps: z.number().int(),
+  tax_bps: z.number().int(),
+});
+
 export const pointSchema = z.object({
   lat: z.number(),
   lon: z.number(),

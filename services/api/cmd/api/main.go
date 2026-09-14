@@ -31,6 +31,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/settlement"
 	"github.com/sarmadkung/rideme/services/api/internal/sweeper"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
+	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
 	"github.com/sarmadkung/rideme/services/api/pkg/cache"
 	"github.com/sarmadkung/rideme/services/api/pkg/config"
@@ -70,6 +71,9 @@ func run() error {
 	slog.SetDefault(logger)
 
 	logger.Info("starting", slog.String("env", string(cfg.Env)), slog.Int("port", cfg.Port))
+	if cfg.OTPBypass {
+		logger.Warn("AUTH_OTP_BYPASS is enabled: any code verifies a login, real code never checked")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -146,7 +150,7 @@ func run() error {
 		ratelimit.NewRedisLimiter(redis.Client),
 		logger,
 		cfg.JWTSecret,
-		identity.Options{},
+		identity.Options{OTPBypass: cfg.OTPBypass},
 	)
 
 	// Booking, pricing and routing. The straight-line estimator is always the
@@ -161,6 +165,10 @@ func run() error {
 	// The values the owner decided (BD-01, BD-02, BD-04, BD-11, BD-12) are
 	// rows, not constants, so every consumer reads them through one store.
 	platformSettings := settings.NewStore(pool.Pool)
+	// Zones (document 97): the geographic boundary pricing keys off, alongside
+	// the plain city string a quote still carries.
+	zoneStore := zones.NewStore(pool.Pool)
+	zonesHandler := zones.NewHandler(zones.NewService(zoneStore))
 	// One routing service and one tracking store for the whole process:
 	// dispatch scores candidates with the same routes a quote was priced from,
 	// and reads the same position pool a driver reports into.
@@ -172,6 +180,7 @@ func run() error {
 		pricing.NewEngine(nil),
 		routes,
 		platformSettings,
+		zoneStore,
 		nil,
 	).WithTracking(trackingStore, logger)
 	// An order follows the delivery it produced (document 070). Wired after
@@ -194,7 +203,7 @@ func run() error {
 	bookingService.WithSettlement(
 		settlement.NewService(ledger, bookingStore, logger).WithGoods(merchantStore))
 	providerStore := providers.NewStore(pool.Pool)
-	bookingHandler := booking.NewHandler(bookingService, jobStore, providerStore)
+	bookingHandler := booking.NewHandler(bookingService, jobStore, providerStore, bookingStore)
 
 	// The driver surface. Availability, position reporting and "what am I
 	// holding" — the three things a driver's phone needs that no endpoint
@@ -235,8 +244,8 @@ func run() error {
 	server := &http.Server{
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
-			driverHandler, placesHandler, merchantHandler, groceryHandler,
-			offerHandler, trackHandler, issuer, serviceName, version, logger),
+			driverHandler, zonesHandler, placesHandler, merchantHandler, groceryHandler,
+			offerHandler, trackHandler, issuer, serviceName, version, logger, cfg.CORSAllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

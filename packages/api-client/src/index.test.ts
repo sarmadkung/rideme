@@ -304,6 +304,109 @@ describe('requests', () => {
   });
 });
 
+const zone = {
+  id: 'zone-1',
+  name: 'Liberty Market',
+  city: 'Lahore',
+  latitude: 31.5204,
+  longitude: 74.3587,
+  radius_meters: 2000,
+  status: 'ACTIVE',
+  created_at: '2026-08-28T12:00:00Z',
+};
+
+const tariff = {
+  id: 'tariff-1',
+  job_type: 'RIDE',
+  vehicle_type: 'CAR',
+  city: 'Lahore',
+  zone_id: 'zone-1',
+  version: 1,
+  currency: 'PKR',
+  minimum_fare_minor: 15000,
+  base_minor: 10000,
+  per_km_minor: 3000,
+  per_minute_minor: 300,
+  waiting_per_minute_minor: 0,
+  loading_per_minute_minor: 0,
+  per_kg_minor: 0,
+  service_fee_minor: 0,
+  service_fee_bps: 0,
+  tax_bps: 0,
+};
+
+describe('admin: zones and pricing', () => {
+  it('lists and creates zones', async () => {
+    const { fetchImpl, calls } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/admin/zones': { status: 200, body: [zone] },
+      'POST /api/v1/admin/zones': { status: 201, body: zone },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    const zones = await client.listZones();
+    expect(zones).toHaveLength(1);
+    expect(zones[0]?.name).toBe('Liberty Market');
+
+    const created = await client.createZone({
+      name: 'Liberty Market',
+      city: 'Lahore',
+      latitude: 31.5204,
+      longitude: 74.3587,
+      radiusMeters: 2000,
+    });
+    expect(created.id).toBe('zone-1');
+    const createCall = calls.find((c) => c.method === 'POST' && c.url.includes('/admin/zones'));
+    expect(createCall?.body).toMatchObject({ name: 'Liberty Market', radius_meters: 2000 });
+  });
+
+  it('rejects a non-admin 403 as an ApiError', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/admin/zones': {
+        status: 403,
+        body: { code: 'forbidden', message: 'not permitted', request_id: 'r' },
+      },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    await expect(client.listZones()).rejects.toThrow(ApiError);
+  });
+
+  it('lists and creates tariffs', async () => {
+    const { fetchImpl, calls } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/admin/pricing/tariffs': { status: 200, body: [tariff] },
+      'POST /api/v1/admin/pricing/tariffs': { status: 201, body: tariff },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    const tariffs = await client.listTariffs();
+    expect(tariffs).toHaveLength(1);
+    expect(tariffs[0]?.zone_id).toBe('zone-1');
+
+    const created = await client.createTariff({
+      jobType: 'RIDE',
+      vehicleType: 'CAR',
+      city: 'Lahore',
+      zoneId: 'zone-1',
+      version: 1,
+      minimumFareMinor: 15000,
+      baseMinor: 10000,
+      perKmMinor: 3000,
+      perMinuteMinor: 300,
+    });
+    expect(created.id).toBe('tariff-1');
+    const createCall = calls.find(
+      (c) => c.method === 'POST' && c.url.includes('/admin/pricing/tariffs'),
+    );
+    expect(createCall?.body).toMatchObject({ job_type: 'RIDE', zone_id: 'zone-1' });
+  });
+});
+
 describe('generated response types', () => {
   // These two endpoints previously returned hand-written interfaces built by
   // hand-written mappers, beside the generated types for everything else.

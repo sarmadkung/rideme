@@ -24,7 +24,10 @@ export function getApiClient(options: ClientOptions): ApiClient {
     baseUrl: loadEnv(process.env as Record<string, string | undefined>).apiBaseUrl,
     storage: secureTokenStorage(),
     device: {
-      id: Application.getAndroidId?.() ?? undefined,
+      // getAndroidId exists on iOS but throws when called, so the optional
+      // call is no guard at all — the platform check is. iOS has no equivalent
+      // synchronous id (identifierForVendor is async), so it sends none.
+      id: Platform.OS === 'android' ? (Application.getAndroidId() ?? undefined) : undefined,
       platform: Platform.OS,
       os: String(Platform.Version),
       appVersion: Application.nativeApplicationVersion ?? undefined,

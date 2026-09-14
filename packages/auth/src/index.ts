@@ -10,8 +10,8 @@
  * had it did not have to change.
  */
 
-export { useAuth, messageFor } from './useAuth.js';
-export type { AuthActions, AuthStage, AuthState } from './useAuth.js';
+export { useAuth, messageFor, DEV_OTP_BYPASS_CODE } from './useAuth.js';
+export type { AuthActions, AuthStage, AuthState, UseAuthOptions } from './useAuth.js';
 
 export interface AuthTokens {
   readonly accessToken: string;

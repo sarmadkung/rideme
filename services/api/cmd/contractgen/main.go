@@ -21,6 +21,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/finance"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
+	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
 	"github.com/sarmadkung/rideme/services/api/pkg/events"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
@@ -117,6 +118,11 @@ func Registry() *contract.Registry {
 	r.Struct("RejectedFix", driver.RejectedFix{})
 	r.Struct("LocationReport", driver.LocationResponse{})
 	r.Struct("DriverAssignment", driver.AssignmentResponse{})
+
+	// Admin surface: service zones and pricing configuration (documents 97,
+	// 34, 142, 143).
+	r.Struct("Zone", zones.ZoneResponse{})
+	r.Struct("Tariff", booking.TariffResponse{})
 
 	// Place search (documents 93, 94). Registered late — the slice that built
 	// it hand-wrote a matching TypeScript interface instead, which is the

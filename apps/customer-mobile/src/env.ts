@@ -17,6 +17,13 @@ export interface MobileEnv {
    * server's own "not available here yet", which is the truth.
    */
   city?: string;
+  /**
+   * Local-testing only: the login screen auto-submits instead of waiting for
+   * a code. The server independently refuses this outside development
+   * (AUTH_OTP_BYPASS), so a stray "true" here does nothing against a real
+   * deployment — it only ever skips a screen against a server that agrees.
+   */
+  otpBypass: boolean;
 }
 
 /**
@@ -30,6 +37,7 @@ export function loadEnv(source: Record<string, string | undefined>): MobileEnv {
     appEnv: requireAppEnv(source, 'EXPO_PUBLIC_APP_ENV'),
     apiBaseUrl: requireEnv(source, 'EXPO_PUBLIC_API_BASE_URL'),
     city: source.EXPO_PUBLIC_CITY,
+    otpBypass: source.EXPO_PUBLIC_AUTH_OTP_BYPASS === 'true',
   };
 }
 

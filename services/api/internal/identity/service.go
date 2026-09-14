@@ -29,6 +29,11 @@ type Service struct {
 	now      func() time.Time
 	otpTTL   time.Duration
 	attempts int
+
+	// otpBypass skips the code-correctness check below, so local testing
+	// never has to read the code out of the server log. The config layer
+	// refuses to set this outside development.
+	otpBypass bool
 }
 
 // Options configures the service. Every duration and count here is an
@@ -40,6 +45,9 @@ type Options struct {
 	MaxAttempts int
 	Region      phone.Region
 	Now         func() time.Time
+	// OTPBypass is validated at the config layer, not here: by the time it
+	// reaches Service, "may this run" has already been decided.
+	OTPBypass bool
 }
 
 const (
@@ -85,7 +93,7 @@ func NewService(
 	return &Service{
 		store: store, issuer: issuer, sender: sender, limiter: limiter,
 		logger: logger, secret: secret, region: opts.Region, now: opts.Now,
-		otpTTL: opts.OTPTTL, attempts: opts.MaxAttempts,
+		otpTTL: opts.OTPTTL, attempts: opts.MaxAttempts, otpBypass: opts.OTPBypass,
 	}
 }
 
@@ -200,7 +208,7 @@ func (s *Service) VerifyOTP(ctx context.Context, rawPhone, code string, purpose 
 		return Tokens{}, invalid
 	}
 
-	if !authn.EqualOTP(challenge.CodeHash, authn.HashOTP(s.secret, normalized, code)) {
+	if !s.otpBypass && !authn.EqualOTP(challenge.CodeHash, authn.HashOTP(s.secret, normalized, code)) {
 		attempts, aerr := s.store.RecordFailedAttempt(ctx, challenge.ID)
 		if aerr != nil {
 			s.logger.Error("could not record a failed OTP attempt", slog.String("error", aerr.Error()))
