@@ -170,6 +170,13 @@ func (s *Store) SaveQuote(ctx context.Context, requestedBy string, q pricing.Quo
 	if q.TariffID != "" {
 		tariffID = q.TariffID
 	}
+	// A delivery is quoted before dispatch chooses a vehicle, and
+	// vehicle_type references vehicle_types(code): an empty string is not a
+	// code, so it must be stored as NULL or the insert is refused.
+	var vehicleType any
+	if q.VehicleType != "" {
+		vehicleType = q.VehicleType
+	}
 	var id string
 	err = s.pool.QueryRow(ctx,
 		`INSERT INTO pricing_quotes
@@ -180,7 +187,7 @@ func (s *Store) SaveQuote(ctx context.Context, requestedBy string, q pricing.Quo
 		    route_confidence, breakdown, expires_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		 RETURNING id::text`,
-		q.JobType, q.VehicleType, tariffID, q.PricingVersion, requestedBy,
+		q.JobType, vehicleType, tariffID, q.PricingVersion, requestedBy,
 		q.Total.Minor, q.Currency,
 		component(pricing.ComponentBase), component(pricing.ComponentDistance),
 		component(pricing.ComponentTime), component(pricing.ComponentServiceFee),
