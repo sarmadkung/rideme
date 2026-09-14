@@ -40,7 +40,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/pkg/database"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/messaging"
-	"github.com/sarmadkung/rideme/services/api/pkg/notify"
+	otp "github.com/sarmadkung/rideme/services/api/pkg/notify"
 	"github.com/sarmadkung/rideme/services/api/pkg/observability"
 	"github.com/sarmadkung/rideme/services/api/pkg/ratelimit"
 	"github.com/sarmadkung/rideme/services/api/pkg/routing"
@@ -131,15 +131,15 @@ func run() error {
 	// Identity (documents 20, 28). The messaging boundary is wired first
 	// because authentication cannot ship without it: phone OTP is the initial
 	// authentication method and the provider must sit behind an interface.
-	messenger := notify.NewService(logger)
+	messenger := otp.NewService(logger)
 	if cfg.Env.IsProduction() {
 		// The development sender logs message bodies, which for an OTP is the
 		// credential itself. Refusing to start is better than starting with a
 		// provider that prints every login code to the log.
 		return fmt.Errorf("no SMS provider is configured for %s: set one before deploying", cfg.Env)
 	}
-	messenger.Register(notify.ChannelSMS, notify.NewLogSender(logger))
-	messenger.Register(notify.ChannelEmail, notify.NewLogSender(logger))
+	messenger.Register(otp.ChannelSMS, otp.NewLogSender(logger))
+	messenger.Register(otp.ChannelEmail, otp.NewLogSender(logger))
 
 	issuer, err := authn.NewIssuer(cfg.JWTSecret)
 	if err != nil {
@@ -212,17 +212,7 @@ func run() error {
 	// offered before.
 	// The ledger is the only record of what a driver earned, so the earnings
 	// surface reads it directly rather than a total kept beside it.
-	//
-	// The realtime gateway. `internal/realtime` was a complete WebSocket hub —
-	// channel grammar, authorization, bounded buffers, location coalescing —
-	// with no transport and no publishers: nothing outside the package
-	// referenced it at all. So every event document 018 lists was a declared
-	// constant that was never constructed, and the only way a customer learned
-	// their driver had moved was to ask again.
-	//
-	// Membership is what scopes a job channel to the people on that job;
-	// without it the authorizer denies job and merchant channels outright,
-	// which fails closed rather than open.
+
 	// The communication layer (documents 121, 122, 124). The realtime gateway
 	// reaches a phone whose app is open and connected; this reaches one in a
 	// pocket, which is where a customer's phone is while they wait.
@@ -238,6 +228,16 @@ func run() error {
 	notifyHandler := notify.NewHandler(notifyStore)
 	bookingService.WithNotifier(notify.NewJobNotifier(notifyService))
 
+	// The realtime gateway. `internal/realtime` was a complete WebSocket hub —
+	// channel grammar, authorization, bounded buffers, location coalescing —
+	// with no transport and no publishers: nothing outside the package
+	// referenced it at all. So every event document 018 lists was a declared
+	// constant that was never constructed, and the only way a customer learned
+	// their driver had moved was to ask again.
+	//
+	// Membership is what scopes a job channel to the people on that job;
+	// without it the authorizer denies job and merchant channels outright,
+	// which fails closed rather than open.
 	hub := realtime.NewHub(realtime.RoleAuthorizer{Membership: jobMembership{jobStore}.can})
 	events := realtime.NewPublisher(hub, nil)
 	realtimeHandler := realtime.NewHandler(hub, driverIDLookup{providerStore})
