@@ -13,6 +13,7 @@ API     := services/api
 .DEFAULT_GOAL := help
 .PHONY: help setup infra-up infra-down infra-logs infra-reset \
         migrate-up migrate-down migrate-version api-run api-test api-lint \
+        api-test-integration verify-full \
         install dev lint typecheck test build verify
 
 help: ## List available targets
@@ -65,6 +66,9 @@ api-run: ## Run the Go API on the host
 api-test: ## Run Go unit tests
 	cd $(API) && go test ./...
 
+api-test-integration: ## Run Go integration tests (needs `make infra-up` and `make migrate-up`)
+	cd $(API) && go test -tags=integration ./tests/...
+
 api-lint: ## gofmt and go vet
 	@cd $(API) && test -z "$$(gofmt -l .)" || (gofmt -l . && echo "run gofmt -w ." && exit 1)
 	cd $(API) && go vet ./...
@@ -106,3 +110,9 @@ build: ## Build the workspace
 # --- everything --------------------------------------------------------------
 
 verify: api-lint api-test contracts-check lint typecheck test build ## Run every quality gate, both toolchains
+
+# What CI runs, and what `verify` deliberately does not: the integration suite
+# needs Postgres, Redis and NATS up and migrated. `verify` stays runnable on a
+# laptop with nothing started; this is the target to run before opening a pull
+# request that touches money, migrations or a store.
+verify-full: verify api-test-integration ## verify, plus the integration suite against live infrastructure

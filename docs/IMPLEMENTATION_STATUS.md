@@ -2084,3 +2084,72 @@ gofmt clean. Not compiled — no Go toolchain is reachable from this session and
 proxy.golang.org is blocked. The unit tests are pure domain rules and need no
 database, so `make verify` reaches them; the store, the worker and the
 migration are untested until the integration suite runs.
+
+## The Money Path Is Tested Where It Runs — 2026-09-14
+
+### A correction to this document
+
+Every entry since 2026-09-09 has recorded "verification debt: roughly 40 Go
+integration tests that `make verify` does not reach". That is true of `make
+verify` and it was misleading as a statement about the project: **CI has been
+running the whole integration suite on every pull request that touches
+`services/api`**, against real Postgres, Redis and NATS, including a `migrate
+up / down / up` reversibility pass. `.github/workflows/ci.yml`, job
+`api-integration`.
+
+The real gap was narrower and worse than the one being reported. The suite runs
+— but the four slices since 2026-09-13 added nothing to it. Settlement, grocery
+pricing, the realtime transport and notifications all shipped with unit tests
+only, and settlement is the one the repository's own policy makes **mandatory
+Level 5**, because a bug in it moves real money and is discovered by the person
+who did not receive theirs.
+
+So: the debt was never "the tests do not run". It was "the money code has no
+integration test at all".
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `settlement_integration_test.go` — 7 tests against Postgres | Done | 7 integration | Not run in this session |
+| `make api-test-integration` and `make verify-full` | Done | — | Not run |
+| Correct the verification-debt claim in this document | Done | — | n/a |
+
+### What the integration tests cover that the unit tests cannot
+
+The unit tests assert the arithmetic against fakes, which is right. Everything
+that makes the arithmetic *hold* lives in the database and was untested:
+
+- **The commission rate comes from migration `000014`.** A test asserting 10%
+  against a real query proves the migration applied and that version 2 wins
+  over the version 1 row it closed. Nothing in Go holds that number.
+- **Idempotency is a unique index**, not a check in Go. Settling twice is
+  tested against the real constraint.
+- **Concurrency**: eight goroutines settling one job. Document 059 names this
+  race and document 185 forbids its effect; a fake store cannot exercise it.
+- **The ledger's own balance query** (`LedgerBalances`) run after every case,
+  which is the one query that proves nothing wrote entries outside `Post`.
+- **The end of the chain**: `EarningsBetween` is called last, so the test fails
+  if `GET /driver/earnings` would still report zero — the original defect,
+  asserted at the surface a driver's phone actually reads.
+- **The intent's state**: `CASH` and `CAPTURED`. An intent stuck at
+  `REQUIRES_PAYMENT` after a completed trip describes a trip nobody paid for,
+  and that is what a support agent reads during a fare dispute.
+
+### Decisions worth naming
+
+**`verify` stays laptop-runnable.** The integration suite needs infrastructure
+up and migrated, so it is a separate target rather than an addition to
+`verify` — a quality gate that cannot run without Docker is a quality gate
+people stop running. `make verify-full` is the one to run before a pull request
+that touches money, migrations or a store, and CI runs it regardless.
+
+**A concurrent settlement may lose, but money may not move twice.** The race
+test asserts the balances, not that every goroutine succeeded. Losing a race is
+the correct outcome for a duplicate; paying the driver twice is not.
+
+### Still untested at the integration level
+
+`internal/notify` (its store, worker and queue semantics), the realtime
+transport against a real hub under load, and `booking.PriceDelivery` end to
+end. Named here rather than left to be rediscovered.
