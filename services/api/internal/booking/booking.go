@@ -314,6 +314,73 @@ func (s *Service) Quote(ctx context.Context, req QuoteRequest) (Quote, error) {
 	return Quote{ID: stored, Job: priced, Total: priced.Total}, nil
 }
 
+// PriceDelivery quotes an already-created job and locks the price against it.
+//
+// The inverse of the customer flow, and it exists because a grocery delivery
+// arrives the other way round. A customer quotes first and confirms a job from
+// the quote; a shop marks an order ready and a job is created on the spot,
+// with nobody to show a price to. Until this existed those jobs carried no
+// price lock at all, so settlement found no fare and the driver who carried
+// the shopping earned nothing.
+//
+// The price is locked rather than merely quoted, because document 034's lock
+// is what settlement reads and what makes "the customer pays what they were
+// quoted" true for a delivery as well as for a ride.
+func (s *Service) PriceDelivery(ctx context.Context, job jobs.Job) error {
+	if len(job.Stops) < 2 {
+		return fmt.Errorf("booking: job %s has no route to price", job.ID)
+	}
+
+	first, last := job.Stops[0], job.Stops[len(job.Stops)-1]
+	route, err := s.routes.Route(ctx,
+		routing.Point{Lat: first.Location.Latitude, Lon: first.Location.Longitude},
+		routing.Point{Lat: last.Location.Latitude, Lon: last.Location.Longitude},
+		// A delivery is created before dispatch has chosen a vehicle, so the
+		// route is estimated for the default mode rather than for a guess.
+		routing.Options{Mode: routing.ModeForVehicleType("")})
+	if err != nil {
+		return fmt.Errorf("booking: estimate the delivery route for job %s: %w", job.ID, err)
+	}
+
+	// No vehicle type and no city: a delivery is created before dispatch has
+	// chosen who carries it, so the tariff lookup falls back to the generic
+	// row for the service. Pricing it per vehicle would mean pricing it after
+	// assignment, and a fare that changes depending on which driver accepted
+	// is not a fare.
+	tariff, err := s.quotes.Tariff(ctx, string(job.Type), "", "")
+	if err != nil {
+		return fmt.Errorf("booking: load the %s tariff: %w", job.Type, err)
+	}
+
+	priced, err := s.pricing.Quote(pricing.Request{
+		JobType:         string(job.Type),
+		DistanceMeters:  route.DistanceMeters,
+		DurationSeconds: route.DurationSeconds,
+		DemandBPS:       s.demandBPS(ctx, first.Location.Latitude, first.Location.Longitude),
+		RouteConfidence: route.Confidence,
+		RequestedBy:     job.RequesterUserID,
+	}, tariff)
+	if err != nil {
+		return fmt.Errorf("booking: price job %s: %w", job.ID, err)
+	}
+
+	quoteID, err := s.quotes.SaveQuote(ctx, job.RequesterUserID, priced)
+	if err != nil {
+		return fmt.Errorf("booking: store the quote for job %s: %w", job.ID, err)
+	}
+	snapshot, err := json.Marshal(priced)
+	if err != nil {
+		return fmt.Errorf("booking: encode the quote for job %s: %w", job.ID, err)
+	}
+	if err := s.quotes.LockPrice(ctx, job.ID, StoredQuote{
+		ID: quoteID, RequestedBy: job.RequesterUserID, Total: priced.Total,
+		Version: priced.PricingVersion, Snapshot: snapshot,
+	}); err != nil {
+		return fmt.Errorf("booking: lock the price for job %s: %w", job.ID, err)
+	}
+	return nil
+}
+
 // CreateRequest confirms a quote into a job.
 type CreateRequest struct {
 	QuoteID        string

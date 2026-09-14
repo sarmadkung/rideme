@@ -225,7 +225,12 @@ func run() error {
 	// WithJobs is what turns a ready order into a delivery: document 070's two
 	// lifecycles, linked at READY_FOR_PICKUP and nowhere else.
 	merchantHandler := merchant.NewHandler(
-		merchant.NewService(merchantStore).WithJobs(jobStore))
+		merchant.NewService(merchantStore).WithJobs(jobStore).
+			// A delivery with no price lock settles at a fare of zero: the
+			// driver who carries the shopping earns nothing and the platform
+			// earns no commission. Nothing priced a delivery until now —
+			// the engine had no GROCERY rule set at all.
+			WithPricing(bookingService, logger))
 
 	// The customer's side of the same lifecycle (documents 068, 071): the
 	// shops near them, one shop's catalogue, a cart, and a checkout that

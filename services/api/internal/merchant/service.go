@@ -3,6 +3,7 @@ package merchant
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -52,6 +53,12 @@ type JobCreator interface {
 type Service struct {
 	store OrderStore
 	jobs  JobCreator
+	// pricing puts a fare on the delivery a ready order produces. Optional:
+	// an unpriced delivery still reaches a driver, and refusing to mark an
+	// order ready because pricing was unavailable would leave a bag of
+	// groceries on a counter with the shop unable to hand it over.
+	pricing DeliveryPricing
+	logger  *slog.Logger
 }
 
 func NewService(store OrderStore) *Service { return &Service{store: store} }
@@ -66,6 +73,48 @@ func NewService(store OrderStore) *Service { return &Service{store: store} }
 func (s *Service) WithJobs(creator JobCreator) *Service {
 	s.jobs = creator
 	return s
+}
+
+// DeliveryPricing puts a fare on a delivery job.
+//
+// Declared here rather than imported so the merchant module stays ignorant of
+// tariffs, routes and demand: it knows a delivery should cost something and
+// nothing about what.
+type DeliveryPricing interface {
+	PriceDelivery(ctx context.Context, job jobs.Job) error
+}
+
+// WithPricing attaches whatever puts a fare on a delivery.
+func (s *Service) WithPricing(pricing DeliveryPricing, logger *slog.Logger) *Service {
+	s.pricing = pricing
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
+}
+
+// priceDelivery fares a new delivery job, and never fails the shop's command.
+//
+// Logged at error level because the consequence is money: a delivery with no
+// price lock settles at a fare of zero, so the driver who carries it earns
+// nothing and the platform earns no commission. That is recoverable — the lock
+// can be written later — and is a far better outcome than a shop unable to
+// hand over an order that is already bagged.
+func (s *Service) priceDelivery(ctx context.Context, job jobs.Job) {
+	if s.pricing == nil {
+		return
+	}
+	if err := s.pricing.PriceDelivery(ctx, job); err != nil {
+		s.log().Error("a delivery was created with no price",
+			slog.String("job_id", job.ID), slog.String("error", err.Error()))
+	}
+}
+
+func (s *Service) log() *slog.Logger {
+	if s.logger == nil {
+		return slog.Default()
+	}
+	return s.logger
 }
 
 // Queue is one of document 072's five dashboard queues.
@@ -291,6 +340,10 @@ func (s *Service) MarkReady(ctx context.Context, userID, orderID string) (Order,
 	if err != nil {
 		return ready, "", err
 	}
+
+	// Priced before the link is written, so a delivery that reaches a driver
+	// has a fare by the time anyone can accept it.
+	s.priceDelivery(ctx, delivery)
 
 	if err := s.store.AttachJob(ctx, ready.ID, delivery.ID); err != nil {
 		// The order is ready and a job exists; they are simply not linked.

@@ -1855,3 +1855,60 @@ run against fakes rather than Postgres — deliberate for this package, since th
 assertions worth making are about amounts and should not need a database to be
 checked. The migration and the real `finance.Store` paths are not exercised
 here at all.
+
+## A Grocery Delivery Has A Price — 2026-09-14
+
+The gap the cash-settlement slice made visible, and its root cause was one
+missing map entry.
+
+`pricing.ruleSets` held rule sets for RIDE, PARCEL, CARGO and FREIGHT. GROCERY
+was absent, with a comment saying it was "absent until Phase 10 builds it".
+Phase 10 built the entire grocery service — catalogue, cart, checkout, merchant
+dashboard, stock reservation, substitutions — and never added the entry. So
+`Engine.Quote` returned `ErrUnknownService` for every delivery, nothing ever
+quoted one, and `merchant.MarkReady` created delivery jobs with no quote and no
+price lock.
+
+That was invisible until settlement started reading price locks. Then it had a
+number attached to it: **a driver earned nothing for carrying somebody's
+shopping across a city, and the platform earned no commission on it.**
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| GROCERY rule set in the pricing engine | Done | 2 unit | Partial: no Go toolchain in this session |
+| `booking.PriceDelivery` — quote and lock an existing job | Done | — | Partial |
+| `merchant.WithPricing`, called from `MarkReady` | Done | — | Partial |
+| `main.go` wires booking as the merchant's pricer | Done | — | Partial |
+
+### Decisions worth naming
+
+**Grocery carries the ride's components** — base, distance, time, service fee.
+Document 05 lists components for ride, parcel and cargo and says nothing about
+grocery, so this is a reading rather than a transcription: a delivery is a trip
+from a shop to a door, and what that trip costs is distance and time. The
+groceries themselves are not priced here; settlement credits the merchant for
+them separately. **The rates remain the owner's** — the engine holds none, and
+a missing GROCERY tariff still refuses.
+
+**The delivery is priced without a vehicle type or a city.** A delivery job is
+created when a shop bags the order, before dispatch has chosen who carries it,
+so the tariff lookup falls back to the generic row for the service. Pricing per
+vehicle would mean pricing after assignment, and a fare that changes depending
+on which driver accepted is not a fare.
+
+**Pricing never fails the shop's command.** A delivery with no price lock still
+reaches a driver; refusing to mark an order ready because pricing was
+unavailable would leave a bagged order on a counter with the shop unable to
+hand it over. It degrades to an error log, and the consequence — a fare of zero
+— is recoverable by writing the lock later.
+
+**The refusal is unchanged for anything else.** A service with no rule set is
+still refused rather than quietly charged another service's rules, and there is
+a test asserting it.
+
+### Verification
+
+gofmt clean. Not compiled — no Go toolchain is reachable from this session and
+proxy.golang.org is blocked from both the workspace VM and the container.
