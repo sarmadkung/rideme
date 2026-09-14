@@ -83,6 +83,20 @@ refusal was kept: a combination with no row still returns `ErrNoCommission`, so 
 tomorrow cannot silently inherit a rate. Payout schedule and minimum payout threshold remain
 undecided and are not implemented.
 
+**REVISED — 2026-09-14, by the owner.** The driver commission falls to a **flat 10% (1000
+bps)**, and the platform takes **no commission from merchants**. Migration `000014` closes
+version 1 and opens version 2 rather than editing the rate in place: `commission_rates` carries
+a version and an active window so that a job settled before this date stays explicable at the
+rate it was actually settled at. Rewriting the row would have made a driver's past earning
+impossible to account for to the driver who received it.
+
+No `MERCHANT` row was added, so `CommissionRateFor` still answers `ErrNoCommission` for every
+shop — the refusal is what records "we decided not to, yet" as distinct from "nobody has
+thought about it". `settlement.payMerchant` does not consult it at all, so configuring a shop
+rate one day will not silently start applying itself; adding it will be a deliberate change.
+
+Payout schedule and minimum payout threshold remain undecided. They now bind: see BD-09.
+
 ### BD-06 — Refund policy: window, partial rules, fee absorption
 **Domain:** payments
 **Why it matters:** Determines who absorbs the payment-provider fee on a refund and whether partial refunds are allowed.
@@ -98,6 +112,19 @@ undecided and are not implemented.
 **Depends on it:** COD records, driver balance, merchant settlement, reconciliation.
 **Proceed without?** No for COD settlement. Yes for card/digital payment paths.
 **Recommendation:** None — this is a legal allocation.
+
+**PARTIALLY UNBLOCKED — 2026-09-14.** Cash settlement now *records* the position without
+allocating the liability, which is the honest half. A completed job debits `CASH_IN_TRANSIT`
+against the driver for everything they collected and credits them only their net fare, so the
+books show each driver owing the platform its commission — and, on a grocery delivery, owing
+the shop its goods as well.
+
+**Nothing collects it.** There is no remittance mechanism, no driver balance cap, and no
+consequence for a driver who never hands the money over. `CASH_IN_TRANSIT` will grow without
+bound until someone decides how the platform gets its money back (deduct from future earnings?
+daily cash drop? a prepaid wallet a driver tops up?) and who bears the loss when it does not
+arrive. That decision is still the owner's and it is now the single largest financial exposure
+in the system.
 
 ### BD-10 — Failed delivery: financial consequence and return-leg pricing
 **Domain:** delivery

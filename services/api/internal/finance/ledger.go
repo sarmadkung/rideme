@@ -209,6 +209,48 @@ func DriverEarning(gross, commission money.Amount, driverID, jobID string) (Tran
 	return t, t.Balance()
 }
 
+// MerchantSale records what a shop is owed for the goods in a delivery.
+//
+//	DR Platform Clearing
+//	CR Merchant Payable  (net)
+//	CR Platform Revenue  (commission)
+//
+// The mirror of DriverEarning for the other party a delivery pays. Commission
+// is supplied rather than computed for the same reason: BD-05 is the owner's,
+// and on 2026-09-14 the owner set it to nothing for merchants — which this
+// function expresses as a zero and not as a missing concept, so the day a
+// shop commission is decided the entry is already here.
+func MerchantSale(goods, commission money.Amount, merchantID, orderID, jobID string) (Transaction, error) {
+	net, err := goods.Sub(commission)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if net.IsNegative() {
+		return Transaction{}, errors.New("finance: commission exceeds the goods total")
+	}
+	payable, err := Credit(AccountMerchantPayable, net, SubjectMerchant, merchantID)
+	if err != nil {
+		return Transaction{}, err
+	}
+	entries := []Entry{
+		Debit(AccountPlatformClearing, goods, SubjectPlatform, ""),
+		payable,
+	}
+	if !commission.IsZero() {
+		revenue, err := Credit(AccountPlatformRevenue, commission, SubjectPlatform, "")
+		if err != nil {
+			return Transaction{}, err
+		}
+		entries = append(entries, revenue)
+	}
+	t := Transaction{
+		Kind: KindEarning, JobID: jobID, OrderID: orderID,
+		Description: "merchant sale net of commission",
+		Entries:     entries,
+	}
+	return t, t.Balance()
+}
+
 // Refund records money returned to a customer.
 //
 //	DR Refund Liability

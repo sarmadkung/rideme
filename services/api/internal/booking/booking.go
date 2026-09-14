@@ -102,8 +102,15 @@ type Service struct {
 	// what happened to it, and nothing in the job's own flow depends on the
 	// answer (document 070).
 	deliveries DeliveryFollower
-	logger     *slog.Logger
-	now        func() time.Time
+	// money settles a finished job into the books. Optional and deliberately
+	// after the fact: by the time it runs the trip is over and, with cash, the
+	// driver already has the notes in their hand. Refusing a driver's
+	// "complete" because the ledger would not write is the wrong failure — the
+	// trip ended either way, and a settlement is recoverable because every
+	// movement it posts is keyed by the job.
+	money  Settlement
+	logger *slog.Logger
+	now    func() time.Time
 }
 
 // DeliveryFollower is the order side of document 070's link.
@@ -113,6 +120,18 @@ type Service struct {
 // what happened, without knowing that groceries exist.
 type DeliveryFollower interface {
 	FollowDelivery(ctx context.Context, jobID string, status jobs.Status) error
+}
+
+// Settlement is the money half of a finished job.
+//
+// Declared here for the same reason DeliveryFollower is: booking drives the
+// lifecycle and knows when a job ends, but it must not know what a commission
+// is. It says "this finished" and something else decides what that costs.
+// It returns only an error for the same reason the other two do: booking must
+// not grow a dependency on the shape of a settlement to be able to record that
+// one happened. What was moved is logged where it is known.
+type Settlement interface {
+	Settle(ctx context.Context, job jobs.Job) error
 }
 
 // TripTracking is the half of tracking a job's lifecycle drives.
@@ -146,6 +165,12 @@ func (s *Service) WithTracking(trips TripTracking, logger *slog.Logger) *Service
 // produced it.
 func (s *Service) WithDeliveries(follower DeliveryFollower) *Service {
 	s.deliveries = follower
+	return s
+}
+
+// WithSettlement attaches the books a finished job is written into.
+func (s *Service) WithSettlement(money Settlement) *Service {
+	s.money = money
 	return s
 }
 
@@ -538,11 +563,32 @@ func (s *Service) Execute(ctx context.Context, jobID, driverID string, cmd Comma
 		}
 		job = moved
 	}
+	if job.Status == jobs.StatusCompleted {
+		s.settle(ctx, job)
+	}
 	s.followDelivery(ctx, jobID, job.Status)
 	if job.Finished() {
 		s.endTracking(ctx, jobID, "job finished")
 	}
 	return job, nil
+}
+
+// settle writes a completed job into the books, and never fails the driver's
+// command.
+//
+// Logged at error level because an unrecorded payment is exactly that: the
+// customer has paid, the driver is holding the cash, and nothing in the
+// platform knows. The keys make a retry safe, so the recovery is a repeat of
+// this call rather than a correcting entry.
+func (s *Service) settle(ctx context.Context, job jobs.Job) {
+	if s.money == nil {
+		return
+	}
+	if err := s.money.Settle(ctx, job); err != nil {
+		s.logger.Error("a completed job was not settled",
+			slog.String("job_id", job.ID), slog.String("job_type", string(job.Type)),
+			slog.String("error", err.Error()))
+	}
 }
 
 // EligibilityFor builds the requirements a candidate must satisfy for a job.
