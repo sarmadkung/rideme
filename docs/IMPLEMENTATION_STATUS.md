@@ -1933,7 +1933,7 @@ driver had moved was to ask again.
 
 | Task | Status | Tests | Verified |
 |---|---|---|---|
-| `GET /v1/realtime` — SSE transport for the hub | Done | 4 unit | Partial: no Go toolchain in this session |
+| `GET /api/v1/realtime` — SSE transport for the hub | Done | 4 unit | Partial: no Go toolchain in this session |
 | `realtime.Publisher` — the hub's first writers | Done | 1 unit | Partial |
 | `booking.Execute` announces every status change | Done | — | Partial |
 | `driver.ReportLocation` announces the newest fix | Done | — | Partial |

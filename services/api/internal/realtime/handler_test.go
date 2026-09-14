@@ -11,6 +11,7 @@ import (
 
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/realtime"
+	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 )
 
 // authenticateAs stands in for the identity middleware.
@@ -48,7 +49,7 @@ func TestASubscriberReceivesAPublishedEvent(t *testing.T) {
 	hub := customerHub(func(realtime.Subscriber, realtime.Channel) (bool, error) { return true, nil })
 	server := serverFor(t, hub, identity.Principal{UserID: "user-1", SessionID: "s1"}, "")
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/realtime?channel=job:job-1", nil)
+	req, err := http.NewRequest(http.MethodGet, server.URL+httpx.APIVersionPrefix+"/realtime?channel=job:job-1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func TestAChannelTheSubscriberCannotHaveIsRefused(t *testing.T) {
 	hub := customerHub(func(realtime.Subscriber, realtime.Channel) (bool, error) { return false, nil })
 	server := serverFor(t, hub, identity.Principal{UserID: "user-2", SessionID: "s2"}, "")
 
-	resp, err := http.Get(server.URL + "/v1/realtime?channel=job:somebody-elses-job")
+	resp, err := http.Get(server.URL + httpx.APIVersionPrefix + "/realtime?channel=job:somebody-elses-job")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,7 @@ func TestAMalformedChannelIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 	server := serverFor(t, hub, identity.Principal{UserID: "user-3", SessionID: "s3"}, "")
 
 	for _, channel := range []string{"", "job", "wildcard:*x:y", "secrets:everything"} {
-		resp, err := http.Get(server.URL + "/v1/realtime?channel=" + channel)
+		resp, err := http.Get(server.URL + httpx.APIVersionPrefix + "/realtime?channel=" + channel)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -140,7 +141,7 @@ func TestAStreamWithNoChannelIsRefused(t *testing.T) {
 	hub := customerHub(func(realtime.Subscriber, realtime.Channel) (bool, error) { return true, nil })
 	server := serverFor(t, hub, identity.Principal{UserID: "user-4", SessionID: "s4"}, "")
 
-	resp, err := http.Get(server.URL + "/v1/realtime")
+	resp, err := http.Get(server.URL + httpx.APIVersionPrefix + "/realtime")
 	if err != nil {
 		t.Fatal(err)
 	}
