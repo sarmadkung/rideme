@@ -1912,3 +1912,85 @@ a test asserting it.
 
 gofmt clean. Not compiled — no Go toolchain is reachable from this session and
 proxy.golang.org is blocked from both the workspace VM and the container.
+
+## The Realtime Gateway Has A Way In — 2026-09-14
+
+`internal/realtime` was a complete WebSocket hub that nothing outside its own
+package referenced. A grep for non-test callers returned nothing at all:
+
+```
+NewHub 0   Connect 0   Subscribe 0   Publish 0   NewPublisher (did not exist)
+```
+
+The channel grammar, the role authorizer, the per-account connection limit, the
+bounded per-client buffers and the location coalescing were all built and
+tested. There was no transport, so no client could reach any of it, and there
+were no publishers, so every event type document 018 lists was a declared
+constant that was never constructed. The only way a customer learned their
+driver had moved was to ask again.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `GET /api/v1/realtime` — SSE transport for the hub | Done | 4 unit | Partial: no Go toolchain in this session |
+| `realtime.Publisher` — the hub's first writers | Done | 1 unit | Partial |
+| `booking.Execute` announces every status change | Done | — | Partial |
+| `driver.ReportLocation` announces the newest fix | Done | — | Partial |
+| `tracking.LiveSessionForDriver` — driver to job | Done | — | Not run |
+| `jobMembership` scopes job channels in `main.go` | Done | — | Partial |
+
+### Decisions worth naming
+
+**Server-Sent Events, not WebSocket.** Document 047 names a WebSocket gateway
+and that remains the destination. Everything this platform pushes today is
+one-directional — the hub has no inbound message path at all, only `Events()` —
+and SSE carries that over plain HTTP with no new dependency, no upgrade
+handshake, and reconnection the browser does by itself. The hub is
+transport-agnostic by construction, so WebSocket later is a second handler
+beside this one rather than a change to anything underneath. This is an
+engineering choice against a documented one, and it is recorded here as such.
+
+**Every channel or none.** A subscription request that includes one channel the
+client may not have is refused entirely. Granting the rest would leave a client
+believing it is watching something it is not, and on this transport silence is
+indistinguishable from nothing happening.
+
+**Membership fails closed.** `jobMembership` denies on any error, including a
+database failure. A membership check that resolves to "probably fine" when it
+cannot reach the database is a live position leaking to whoever asked at the
+wrong moment. Merchant channels are denied outright rather than given a check
+that looks present and is not.
+
+**A position is published to the job, not only the driver.** A customer may not
+subscribe to a driver's own channel — document 102 scopes location to the active
+service — so `ReportLocation` resolves the driver's live session and publishes
+on the job channel too. One lookup per batch of fixes, not per fix.
+
+**Only the newest fix of a batch is announced.** A driver's app reports several
+points at once after a signal gap. A customer watching a map wants where the
+driver is, not a replay of where they were, which is the same reason the
+connection buffers coalesce this event rather than queueing it.
+
+### What this does not do
+
+**No push notifications.** A phone with the app closed still learns nothing.
+That is the other half of "the customer finds out" and it needs a device-token
+store and a provider (FCM/APNs) that nothing in the repo has yet.
+
+**No `job.assigned` or `job.accepted` events.** Dispatch assigns and drivers
+accept in `internal/dispatch`, which has no announcer wired. The two constants
+remain unconstructed. `job.status_changed` covers the customer-visible flow
+because every assignment also moves the job's status.
+
+**No replay.** Deliberate, per document 047: this gateway is not the system of
+record. The SSE `id:` field is written so a reconnecting client sends
+`Last-Event-ID` and a log can show what it last saw, but nothing acts on it — a
+client recovers by fetching state.
+
+### Verification
+
+gofmt clean. Not compiled — no Go toolchain is reachable from this session and
+proxy.golang.org is blocked from both the workspace VM and the container. The
+handler tests use `httptest` and the real hub, so they run under `make verify`
+without a database.

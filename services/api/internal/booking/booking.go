@@ -116,9 +116,14 @@ type Service struct {
 	// "complete" because the ledger would not write is the wrong failure — the
 	// trip ended either way, and a settlement is recoverable because every
 	// movement it posts is keyed by the job.
-	money  Settlement
-	logger *slog.Logger
-	now    func() time.Time
+	money Settlement
+	// announce pushes a status change to whoever is watching. Optional, and
+	// never load-bearing: the job moved whether or not a socket heard about
+	// it, and document 047 requires that a client recover by asking for state
+	// rather than by trusting this path.
+	announce Announcer
+	logger   *slog.Logger
+	now      func() time.Time
 }
 
 // DeliveryFollower is the order side of document 070's link.
@@ -140,6 +145,14 @@ type DeliveryFollower interface {
 // one happened. What was moved is logged where it is known.
 type Settlement interface {
 	Settle(ctx context.Context, job jobs.Job) error
+}
+
+// Announcer publishes a job's new status to subscribers.
+//
+// Declared here alongside the others so booking stays ignorant of channels,
+// envelopes and sockets: it knows a job changed and says so.
+type Announcer interface {
+	JobChanged(ctx context.Context, jobID, requesterUserID, driverID, jobType, status string)
 }
 
 // TripTracking is the half of tracking a job's lifecycle drives.
@@ -179,6 +192,12 @@ func (s *Service) WithDeliveries(follower DeliveryFollower) *Service {
 // WithSettlement attaches the books a finished job is written into.
 func (s *Service) WithSettlement(money Settlement) *Service {
 	s.money = money
+	return s
+}
+
+// WithAnnouncer attaches the realtime gateway a status change is pushed to.
+func (s *Service) WithAnnouncer(announce Announcer) *Service {
+	s.announce = announce
 	return s
 }
 
@@ -651,6 +670,10 @@ func (s *Service) Execute(ctx context.Context, jobID, driverID string, cmd Comma
 			return jobs.Job{}, httpx.Internal("could not run the command").WithCause(err)
 		}
 		job = moved
+	}
+	if s.announce != nil {
+		s.announce.JobChanged(ctx, job.ID, job.RequesterUserID, job.AssignedDriverID,
+			string(job.Type), string(job.Status))
 	}
 	if job.Status == jobs.StatusCompleted {
 		s.settle(ctx, job)
