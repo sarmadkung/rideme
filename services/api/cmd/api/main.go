@@ -27,6 +27,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
+	"github.com/sarmadkung/rideme/services/api/internal/realtime"
 	"github.com/sarmadkung/rideme/services/api/internal/settings"
 	"github.com/sarmadkung/rideme/services/api/internal/settlement"
 	"github.com/sarmadkung/rideme/services/api/internal/sweeper"
@@ -210,9 +211,27 @@ func run() error {
 	// offered before.
 	// The ledger is the only record of what a driver earned, so the earnings
 	// surface reads it directly rather than a total kept beside it.
+	//
+	// The realtime gateway. `internal/realtime` was a complete WebSocket hub —
+	// channel grammar, authorization, bounded buffers, location coalescing —
+	// with no transport and no publishers: nothing outside the package
+	// referenced it at all. So every event document 018 lists was a declared
+	// constant that was never constructed, and the only way a customer learned
+	// their driver had moved was to ask again.
+	//
+	// Membership is what scopes a job channel to the people on that job;
+	// without it the authorizer denies job and merchant channels outright,
+	// which fails closed rather than open.
+	hub := realtime.NewHub(realtime.RoleAuthorizer{Membership: jobMembership{jobStore}.can})
+	events := realtime.NewPublisher(hub, nil)
+	realtimeHandler := realtime.NewHandler(hub, driverIDLookup{providerStore})
+	bookingService.WithAnnouncer(events)
+
 	driverHandler := driver.NewHandler(driver.NewService(
 		providerStore, trackingStore, jobStore,
-		tracking.DefaultLimits(), nil).WithLedger(ledger))
+		tracking.DefaultLimits(), nil).
+		WithLedger(ledger).
+		WithRealtime(events, trackingStore))
 
 	// Place search. Built only when a geocoder is configured; the routes are
 	// absent otherwise (see places.NewHandler).
@@ -250,7 +269,8 @@ func run() error {
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
 			driverHandler, zonesHandler, placesHandler, merchantHandler, groceryHandler,
-			offerHandler, trackHandler, issuer, serviceName, version, logger, cfg.CORSAllowedOrigins),
+			offerHandler, trackHandler, realtimeHandler, issuer, serviceName, version, logger,
+			cfg.CORSAllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -357,6 +377,36 @@ func buildGeocoder(cfg *config.Config, logger *slog.Logger) routing.Geocoder {
 	}
 	logger.Info("geocoder configured", "provider", geocoder.Name())
 	return geocoder
+}
+
+// jobMembership answers whether a subscriber belongs on a job's channel.
+//
+// The realtime hub takes this as a function because job membership needs a
+// database and the gateway must not import a store. The rule is document 102's
+// scoping, read as a subscription question: the customer who booked it and the
+// driver carrying it, and nobody else. Operations reach a job through the
+// admin channel, not by subscribing to somebody's trip.
+//
+// Any error denies. A membership check that cannot reach the database must not
+// resolve to "probably fine" — that is a live position leaking to whoever asked
+// at the wrong moment.
+type jobMembership struct{ jobs *jobs.Store }
+
+func (m jobMembership) can(sub realtime.Subscriber, ch realtime.Channel) (bool, error) {
+	if ch.Kind != realtime.ChannelJob {
+		// Merchant channels need a merchant store and their own rule; denying
+		// is the honest answer until that exists, rather than a check that
+		// looks present and is not.
+		return false, nil
+	}
+	job, err := m.jobs.ByID(context.Background(), ch.ID)
+	if err != nil {
+		return false, nil
+	}
+	if sub.UserID != "" && job.RequesterUserID == sub.UserID {
+		return true, nil
+	}
+	return sub.DriverID != "" && job.AssignedDriverID == sub.DriverID, nil
 }
 
 // driverIDLookup narrows the provider store to the one question the tracking

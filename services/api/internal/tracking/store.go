@@ -265,6 +265,32 @@ func (s *Store) LiveSession(ctx context.Context, jobID string) (Session, bool, e
 	return session, true, nil
 }
 
+// LiveSessionForDriver returns the open tracking session a driver is on.
+//
+// The inverse of LiveSession, and it exists so a position report can be
+// announced on the job's channel. A customer may not subscribe to a driver's
+// own channel (document 102 scopes location to the active service), so without
+// knowing which job a driver is currently on there is nowhere to publish a
+// position that the customer waiting for it is allowed to see.
+//
+// One query per batch of fixes, not per fix: a driver's app reports several
+// points at a time.
+func (s *Store) LiveSessionForDriver(ctx context.Context, driverID string) (Session, bool, error) {
+	var session Session
+	err := s.pool.QueryRow(ctx,
+		`SELECT id::text, job_id::text, driver_id::text, started_at, ended_at
+		   FROM tracking_sessions WHERE driver_id = $1 AND ended_at IS NULL
+		   ORDER BY started_at DESC LIMIT 1`, driverID).
+		Scan(&session.ID, &session.JobID, &session.DriverID, &session.StartedAt, &session.EndedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, false, nil
+	}
+	if err != nil {
+		return Session{}, false, fmt.Errorf("load the driver's tracking session: %w", err)
+	}
+	return session, true, nil
+}
+
 // --- access control ----------------------------------------------------------
 
 // AuthorizeView decides whether an actor may see a driver's live location, and

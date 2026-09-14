@@ -20,6 +20,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/finance"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
+	"github.com/sarmadkung/rideme/services/api/internal/realtime"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 )
@@ -31,8 +32,15 @@ type Service struct {
 	jobs      *jobs.Store
 	// ledger is optional; see WithLedger.
 	ledger *finance.Store
-	limits tracking.Limits
-	now    func() time.Time
+	// announce pushes a new position to whoever is watching the trip.
+	// Optional: the fix reached the database either way, and a customer whose
+	// stream missed it recovers by fetching the track.
+	announce Announcer
+	// sessions resolves which job a driver is currently on, so a position can
+	// be published on the channel a customer is allowed to watch.
+	sessions SessionLookup
+	limits   tracking.Limits
+	now      func() time.Time
 }
 
 func NewService(providerStore *providers.Store, trackingStore *tracking.Store,
@@ -55,6 +63,31 @@ func NewService(providerStore *providers.Store, trackingStore *tracking.Store,
 // is a worse outage than either.
 func (s *Service) WithLedger(ledger *finance.Store) *Service {
 	s.ledger = ledger
+	return s
+}
+
+// Announcer publishes a driver's position to subscribers.
+//
+// Declared here so the driver surface knows nothing about channels: it knows
+// where the driver is and says so.
+type Announcer interface {
+	DriverMoved(ctx context.Context, position realtime.DriverPosition)
+}
+
+// SessionLookup answers which job a driver is on.
+type SessionLookup interface {
+	LiveSessionForDriver(ctx context.Context, driverID string) (tracking.Session, bool, error)
+}
+
+// WithRealtime attaches the gateway a position is announced through.
+//
+// Both halves are needed or neither is used: publishing a position with no job
+// reaches only the driver's own channel, which nobody but the driver may
+// subscribe to — so the customer waiting for them would see nothing, which is
+// the situation this slice exists to fix.
+func (s *Service) WithRealtime(announce Announcer, sessions SessionLookup) *Service {
+	s.announce = announce
+	s.sessions = sessions
 	return s
 }
 
@@ -245,7 +278,38 @@ func (s *Service) ReportLocation(ctx context.Context, userID string, fixes []tra
 	if err := s.tracking.PutCurrent(ctx, currentFrom(latest), d.Status == providers.StatusAvailable); err != nil {
 		return 0, nil, err
 	}
+	s.announcePosition(ctx, d.ID, latest)
 	return len(valid), rejected, nil
+}
+
+// announcePosition pushes the newest fix to whoever is watching, and never
+// fails the report.
+//
+// Only the newest of the batch. A driver's app reports several points at once
+// after a gap, and a customer watching a map wants the driver's position, not
+// a replay of the last thirty seconds of it — which is the same reason the
+// connection buffers coalesce this event rather than queueing it.
+func (s *Service) announcePosition(ctx context.Context, driverID string, fix tracking.Fix) {
+	if s.announce == nil {
+		return
+	}
+	position := realtime.DriverPosition{
+		DriverID:   driverID,
+		Latitude:   fix.Lat,
+		Longitude:  fix.Lon,
+		HeadingDeg: fix.HeadingDeg,
+		SpeedMPS:   fix.SpeedMPS,
+		RecordedAt: fix.RecordedAt,
+	}
+	// One lookup per batch, not per fix. A driver who is not on a trip has no
+	// session, and the position then reaches only their own channel — which is
+	// correct: nobody else is entitled to it.
+	if s.sessions != nil {
+		if session, live, err := s.sessions.LiveSessionForDriver(ctx, driverID); err == nil && live {
+			position.JobID = session.JobID
+		}
+	}
+	s.announce.DriverMoved(ctx, position)
 }
 
 // RejectedFix reports one fix the pipeline discarded and why, so a driver app

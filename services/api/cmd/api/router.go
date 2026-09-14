@@ -10,6 +10,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/places"
+	"github.com/sarmadkung/rideme/services/api/internal/realtime"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
 	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
@@ -34,6 +35,7 @@ func newRouter(
 	groceryHandler *merchant.CustomerHandler,
 	offerHandler *dispatch.Handler,
 	trackHandler *tracking.Handler,
+	realtimeHandler *realtime.Handler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
@@ -70,6 +72,9 @@ func newRouter(
 	// The offer responses, and the trip the accepted offer becomes.
 	if offerHandler != nil {
 		offerHandler.Routes(mux, authenticate)
+	}
+	if realtimeHandler != nil {
+		realtimeHandler.Routes(mux, authenticate)
 	}
 	if trackHandler != nil {
 		trackHandler.Routes(mux, authenticate)
