@@ -312,11 +312,22 @@ type rule func(Request, Tariff, money.Currency) (Line, error)
 //	parcel  base + distance + size/weight + urgency
 //	cargo   base + distance + vehicle + capacity + loading + waiting + schedule
 //
-// GROCERY is absent until Phase 10 builds it — an unpriced service is refused
-// rather than quietly charged with another service's rules.
+// GROCERY carries the ride's components. Document 05 lists components for
+// ride, parcel and cargo and says nothing about grocery, so this is a reading
+// rather than a transcription: a grocery delivery is a trip from a shop to a
+// door, and what it costs to make that trip is distance, time and a service
+// fee exactly as it is for a passenger. The groceries themselves are not
+// priced here — they are the shop's, and settlement credits the merchant for
+// them separately.
+//
+// Before this entry existed, Phase 10 shipped a whole grocery service that the
+// engine refused to price. Nothing quoted a delivery, so no delivery job
+// carried a price lock, so settlement found a fare of zero and a driver earned
+// nothing for carrying somebody's shopping across a city.
 var ruleSets = map[string][]rule{
-	"RIDE":   {baseRule, distanceRule, timeRule, serviceFeeRule},
-	"PARCEL": {baseRule, distanceRule, WeightRule, serviceFeeRule},
+	"RIDE":    {baseRule, distanceRule, timeRule, serviceFeeRule},
+	"PARCEL":  {baseRule, distanceRule, WeightRule, serviceFeeRule},
+	"GROCERY": {baseRule, distanceRule, timeRule, serviceFeeRule},
 	// Cargo prices loading and waiting time. BD-13 leaves the rates open, so a
 	// tariff with zero rates records the time and charges nothing for it.
 	"CARGO":   {baseRule, distanceRule, WeightRule, LoadingRule, WaitingRule, serviceFeeRule},

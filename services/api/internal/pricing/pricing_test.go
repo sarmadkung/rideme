@@ -407,3 +407,41 @@ func TestRouteConfidenceIsCarriedIntoTheQuote(t *testing.T) {
 		t.Fatalf("confidence = %q", quote.RouteConfidence)
 	}
 }
+
+// A grocery delivery is priced like the trip it is.
+//
+// Phase 10 shipped the whole grocery service while the engine had no GROCERY
+// rule set, so every delivery was refused a price. Nothing quoted one, no
+// delivery job carried a price lock, and settlement therefore found a fare of
+// zero — a driver earned nothing for carrying somebody's shopping across a
+// city, and the platform earned no commission on it either.
+func TestAGroceryDeliveryCanBePriced(t *testing.T) {
+	tariff := rideTariff()
+	tariff.JobType = "GROCERY"
+
+	quote, err := engine().Quote(pricing.Request{
+		JobType:         "GROCERY",
+		DistanceMeters:  4000,
+		DurationSeconds: 900,
+	}, tariff)
+	if err != nil {
+		t.Fatalf("price a grocery delivery: %v", err)
+	}
+
+	// base 5000 + 4km at 3000 = 12000 + 15min at 200 = 3000 + fee 1000.
+	if got := total(t, quote); got != 21000 {
+		t.Errorf("fare %d, want 21000", got)
+	}
+}
+
+// The refusal the engine was built around is still the behaviour for a service
+// nobody has priced: an unpriced service must not quietly inherit another
+// one's rules.
+func TestAnUnregisteredServiceIsStillRefused(t *testing.T) {
+	tariff := rideTariff()
+	tariff.JobType = "SUBMARINE"
+
+	if _, err := engine().Quote(pricing.Request{JobType: "SUBMARINE"}, tariff); !errors.Is(err, pricing.ErrUnknownService) {
+		t.Fatalf("error %v, want ErrUnknownService", err)
+	}
+}
