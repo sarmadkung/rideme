@@ -28,6 +28,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/internal/settings"
+	"github.com/sarmadkung/rideme/services/api/internal/settlement"
 	"github.com/sarmadkung/rideme/services/api/internal/sweeper"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
 	"github.com/sarmadkung/rideme/services/api/pkg/authn"
@@ -177,6 +178,21 @@ func run() error {
 	// construction because booking is generic over job type and knows nothing
 	// about shops — only that some jobs were made on something's behalf.
 	bookingService.WithDeliveries(merchant.NewService(merchantStore))
+	// The books a finished job is written into.
+	//
+	// Every piece of `internal/finance` was built, tested and never called:
+	// nothing created a payment intent, nothing captured one, and the ledger
+	// the earnings surface reads had no writer at all — so a completed trip
+	// charged nobody and every driver's earnings were zero because the book
+	// was empty. This is the writer.
+	//
+	// Cash is the only method (the owner's decision, 2026-09-14), so there is
+	// no provider to call: the driver is handed the notes and the movement is
+	// recorded. WithGoods adds the shop's side, because on a grocery delivery
+	// the cash in the driver's hand is mostly somebody else's.
+	ledger := finance.NewStore(pool.Pool)
+	bookingService.WithSettlement(
+		settlement.NewService(ledger, bookingStore, logger).WithGoods(merchantStore))
 	providerStore := providers.NewStore(pool.Pool)
 	bookingHandler := booking.NewHandler(bookingService, jobStore, providerStore)
 
@@ -187,7 +203,7 @@ func run() error {
 	// surface reads it directly rather than a total kept beside it.
 	driverHandler := driver.NewHandler(driver.NewService(
 		providerStore, trackingStore, jobStore,
-		tracking.DefaultLimits(), nil).WithLedger(finance.NewStore(pool.Pool)))
+		tracking.DefaultLimits(), nil).WithLedger(ledger))
 
 	// Place search. Built only when a geocoder is configured; the routes are
 	// absent otherwise (see places.NewHandler).

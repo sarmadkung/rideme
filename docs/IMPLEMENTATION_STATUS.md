@@ -1737,3 +1737,121 @@ product and could only ever be sold the default line, which the entry above reco
 
 **Verification.** Full. `jest-expo` on the workspace VM: 12 suites, **84 tests** (78 before), the
 six new ones in `ShopScreen`. `tsc --noEmit` clean, `eslint` clean, `prettier` clean.
+
+## A Completed Job Is Paid For — 2026-09-14
+
+`internal/finance` was the last subsystem that was entirely built and entirely
+unreachable. Every piece of it existed and was tested — payment intents,
+double-entry posting, capture, refund, commission, payouts, reconciliation —
+and a grep for non-test callers of any of it returned nothing:
+
+```
+CreateIntent  0    RecordWebhook      0    CreatePayout            0
+Capture       0    CommissionRateFor  0    OpenReconciliationCase  0
+Refund        0    LedgerBalances     0
+```
+
+The consequences were exactly as severe as that table looks. No completed trip
+ever charged anybody. BD-05's commission was a row nothing read. And because
+`GET /driver/earnings` reads the ledger directly rather than a cached total —
+which is the right design — it answered **zero for every driver on the
+platform**, correctly, because the book it reads had no writer.
+
+This slice is the writer.
+
+### The owner's decisions, 2026-09-14
+
+Four questions were put to the owner before any code was written, because each
+one changes what the money does and none could be inferred from the documents:
+
+| Question | Decision |
+|---|---|
+| What does a completed ride charge? | The price the customer was quoted (`job_price_locks`), not a recomputed fare |
+| Commission | **10%** from drivers (down from BD-05's 20%); **none** from merchants |
+| Payment method choice | None — cash only, so the method is implicit |
+| Scope | Rides **and** grocery orders together |
+
+### What cash means in the books
+
+Cash inverts the direction money flows. With a card the platform collects and
+pays the driver; with cash the driver collects and owes the platform. The
+ledger does not care who holds the notes, only that every movement has two
+sides, so both are the same four transactions:
+
+```
+1. capture          DR Customer Receivable   CR Platform Clearing
+2. cash collection  DR Cash In Transit       CR Customer Receivable
+3. merchant sale    DR Platform Clearing     CR Merchant Payable
+4. driver earning   DR Driver Expense        CR Driver Payable + Platform Revenue
+```
+
+One and two together are the whole of it: the customer's debt is created and
+immediately discharged by handing over notes, so `CUSTOMER_RECEIVABLE` nets to
+zero and `CASH_IN_TRANSIT` is left holding the platform's money in somebody's
+pocket. A PKR 3,200 grocery delivery on a PKR 200 fee leaves the driver holding
+3,200, credited 180, and therefore owing 3,020 — 3,000 to the shop and 20 to
+the platform.
+
+The driver is commissioned on the **fare only**. Taking 10% of a basket of
+groceries would be taking it from the merchant.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `internal/settlement`, the ledger's first production writer | Done | 7 unit | Partial: no Go toolchain in this session |
+| `finance.MerchantSale` — the shop's side of a delivery | Done | covered | Partial |
+| Migration `000014` — commission 20% → 10%, as version 2 | Done | — | Not run |
+| `booking.Execute` settles on COMPLETED | Done | covered | Partial |
+| `main.go` constructs and wires the settlement service | Done | — | Partial |
+| BD-05 revision and BD-09 exposure recorded | Done | — | n/a |
+
+### Decisions worth naming
+
+**The rate change is a new version, not an edit.** `commission_rates` carries a
+`version` and an active window. Migration `000014` closes version 1 and opens
+version 2 at 1000 bps. A job settled last week was settled at 20%, and
+rewriting the row that says so would make that driver's earning impossible to
+explain to the driver who received it.
+
+**Settlement never fails a driver's command.** By the time it runs the trip is
+over and the driver already has the cash in their hand. Refusing "complete"
+because the ledger would not write is the wrong failure — so it is logged at
+error level, which is what an unrecorded payment is. Every movement is keyed by
+the job (`fare:`, `cod:`, `goods:`, `earning:`) and `Post` returns the existing
+transaction when a key repeats, so recovery is a repeat of the call rather than
+a correcting entry. Document 054 requires earnings that "cannot be duplicated
+by repeated completion events"; a driver tapping "complete" twice on a bad
+connection is the ordinary case, not the exotic one.
+
+**An unconfigured rate still refuses.** BD-05's original refusal is kept: a job
+type with no `commission_rates` row returns `ErrNoCommission` and the earning
+is not posted. The cash collection still happens, because the customer did pay
+and the driver is holding it — an unsettled earning is recoverable, a lost
+collection is not.
+
+### Two things this slice does not do
+
+**Nothing prices a grocery delivery.** The delivery job is created by
+`merchant.Service.MarkReady` with no quote and no price lock, so `LockedPrice`
+finds nothing and the fare is zero. Settlement handles that honestly — the
+goods are recorded, the shop is credited in full, and a warning is logged —
+but it means **a driver currently earns nothing for a grocery delivery**. That
+is not a settlement bug; it is a pricing gap that settlement made visible. It
+is the obvious next slice: *a grocery delivery has a price*.
+
+**Nothing collects the cash back.** See BD-09. `CASH_IN_TRANSIT` grows without
+bound. The books will correctly show every driver owing the platform its
+commission and the shop its goods, and there is no remittance mechanism, no
+balance cap, and no consequence for a driver who never hands it over. The
+position is recorded and the liability is unallocated, which is the honest
+state until the owner decides.
+
+### Verification debt
+
+Unchanged and growing: roughly 40 Go integration tests written since 2026-09-09
+are not reached by `make verify`. The settlement unit tests are, because they
+run against fakes rather than Postgres — deliberate for this package, since the
+assertions worth making are about amounts and should not need a database to be
+checked. The migration and the real `finance.Store` paths are not exercised
+here at all.
