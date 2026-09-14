@@ -1994,3 +1994,93 @@ gofmt clean. Not compiled — no Go toolchain is reachable from this session and
 proxy.golang.org is blocked from both the workspace VM and the container. The
 handler tests use `httptest` and the real hub, so they run under `make verify`
 without a database.
+
+## A Phone In A Pocket Finds Out — 2026-09-14
+
+The realtime gateway reaches a phone whose app is open and connected. That is
+not where a customer's phone is while they wait for a driver. Documents 121,
+122 and 124 describe a whole communication layer and none of it existed — no
+package, no tables, no device tokens, no preferences.
+
+### A migration collision, found on the way in
+
+`000014` was used twice on `main`: `000014_commission_ten_percent` (PR #31) and
+`000014_service_zones` (PR #32), merged from branches that never saw each
+other. golang-migrate refuses a directory with duplicate versions, so
+**migrations did not run at all on current main**. Renamed the later-merged one
+to `000015_service_zones`; commission keeps `000014` because it merged first.
+
+If `000014` was already applied locally as the zones migration, the
+`schema_migrations` row needs correcting by hand before `migrate up` will
+proceed — a renumber changes what "version 14" means.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| Migration `000016` — devices, preferences, queue | Done | — | Not run |
+| Fix the duplicate `000014` migration version | Done | — | Not run |
+| `internal/notify` — domain, store, service, worker | Done | 5 unit | Partial: no Go toolchain in this session |
+| `POST/GET/DELETE /me/devices` | Done | — | Partial |
+| `GET/PUT /me/notification-preferences` | Done | — | Partial |
+| `GET /me/notifications` — the in-app inbox | Done | — | Partial |
+| `booking.Execute` emits a job event to notify | Done | — | Partial |
+| Worker started in `main.go` beside the sweeper | Done | — | Partial |
+
+### Decisions worth naming
+
+**No provider ships, and the code says so.** There are no push credentials and
+no FCM dependency (the module proxy is blocked from every environment this
+session can reach). Document 121's principle — "business services should not
+directly call Twilio, Firebase, email providers" — makes the adapter a `Sender`
+interface, and the only implementation is `LogSender`, which writes what would
+have been sent and reports success. The queue drains, every reliability state
+is exercised, and no phone buzzes. An adapter that pretended otherwise would be
+the worst outcome available: a booking that believes the customer was told, and
+a customer who was not. **Replacing it is a new type and one line in main.go.**
+
+**A suppressed notification is a row, not a silence.** A preference that stops
+a push still writes a `SUPPRESSED` notification. "Why was I not told?" is a
+support question and an absent row cannot answer it.
+
+**Required categories are a function, not a column.** Document 124 names
+security, payment, active service, safety and legal. RIDE, DELIVERY and ORDER
+are the active service, so they join SAFETY and PAYMENT as non-mutable. Putting
+the rule in code rather than in data means it cannot be edited into nothing by
+a row update, and `SetPreference` refuses rather than storing a setting nothing
+honours — a switch that appears to work and does nothing is worse than one that
+says it cannot be turned off.
+
+**Not every transition is worth a buzz.** Eight statuses have copy; DRAFT,
+QUOTED, REQUESTED, SEARCHING, ASSIGNED and AT_DROPOFF are deliberately silent.
+ASSIGNED is the one that matters — the driver has not accepted and the
+assignment can still move to somebody else. Being buzzed for every internal
+transition is how people learn to mute an app, which then costs them the
+arrival they did want.
+
+**A phone that changes hands revokes the old row.** Providers reissue tokens
+lazily, so the same push token arriving under a different account revokes the
+previous registration rather than leaving somebody's ride updates delivering to
+the new owner of the handset.
+
+**RETIRED and REVOKED are kept apart.** A provider rejecting a token is an
+uninstalled app; a user signing out is a choice. Collapsing them would make
+"this person turned it off" indistinguishable from "this phone is gone".
+
+**Claiming uses `FOR UPDATE SKIP LOCKED`.** Document 185 requires that
+duplicated messages produce no duplicate effects, and two workers racing on one
+queue is the ordinary way a person gets told twice.
+
+### What this does not do
+
+No SMS or email adapters (documents 125, 278), no templates or localization
+(document 125), no quiet hours (document 124 says "where appropriate" and names
+no window), and no delivery receipts — `DELIVERED` exists in the schema as
+document 122's state and nothing sets it, because only a real provider can.
+
+### Verification
+
+gofmt clean. Not compiled — no Go toolchain is reachable from this session and
+proxy.golang.org is blocked. The unit tests are pure domain rules and need no
+database, so `make verify` reaches them; the store, the worker and the
+migration are untested until the integration suite runs.
