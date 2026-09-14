@@ -122,8 +122,12 @@ type Service struct {
 	// it, and document 047 requires that a client recover by asking for state
 	// rather than by trusting this path.
 	announce Announcer
-	logger   *slog.Logger
-	now      func() time.Time
+	// notify reaches a phone with the app closed. The realtime gateway only
+	// reaches one that is open and connected, which is not where a customer
+	// is while they wait for a driver.
+	notify Notifier
+	logger *slog.Logger
+	now    func() time.Time
 }
 
 // DeliveryFollower is the order side of document 070's link.
@@ -153,6 +157,16 @@ type Settlement interface {
 // envelopes and sockets: it knows a job changed and says so.
 type Announcer interface {
 	JobChanged(ctx context.Context, jobID, requesterUserID, driverID, jobType, status string)
+}
+
+// Notifier sends a person a message about their job.
+//
+// Document 121: "Business services emit events. They should not directly call
+// Twilio, Firebase, email providers or other channel vendors." This interface
+// is that boundary — booking says what happened and to whom, and knows nothing
+// about tokens, devices or preferences.
+type Notifier interface {
+	JobStatusChanged(ctx context.Context, jobID, userID, jobType, status string) error
 }
 
 // TripTracking is the half of tracking a job's lifecycle drives.
@@ -198,6 +212,13 @@ func (s *Service) WithSettlement(money Settlement) *Service {
 // WithAnnouncer attaches the realtime gateway a status change is pushed to.
 func (s *Service) WithAnnouncer(announce Announcer) *Service {
 	s.announce = announce
+	return s
+}
+
+// WithNotifier attaches the communication layer a status change is sent
+// through.
+func (s *Service) WithNotifier(notify Notifier) *Service {
+	s.notify = notify
 	return s
 }
 
@@ -674,6 +695,16 @@ func (s *Service) Execute(ctx context.Context, jobID, driverID string, cmd Comma
 	if s.announce != nil {
 		s.announce.JobChanged(ctx, job.ID, job.RequesterUserID, job.AssignedDriverID,
 			string(job.Type), string(job.Status))
+	}
+	if s.notify != nil {
+		// Never fails the driver's command. A notification that did not queue
+		// is a customer who has to look at the app; a command that failed
+		// because of one is a driver who cannot finish a trip.
+		if err := s.notify.JobStatusChanged(ctx, job.ID, job.RequesterUserID,
+			string(job.Type), string(job.Status)); err != nil {
+			s.logger.Error("a job status change was not notified",
+				slog.String("job_id", job.ID), slog.String("error", err.Error()))
+		}
 	}
 	if job.Status == jobs.StatusCompleted {
 		s.settle(ctx, job)

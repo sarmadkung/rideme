@@ -24,6 +24,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
+	"github.com/sarmadkung/rideme/services/api/internal/notify"
 	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
@@ -39,7 +40,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/pkg/database"
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/messaging"
-	"github.com/sarmadkung/rideme/services/api/pkg/notify"
+	otp "github.com/sarmadkung/rideme/services/api/pkg/notify"
 	"github.com/sarmadkung/rideme/services/api/pkg/observability"
 	"github.com/sarmadkung/rideme/services/api/pkg/ratelimit"
 	"github.com/sarmadkung/rideme/services/api/pkg/routing"
@@ -130,15 +131,15 @@ func run() error {
 	// Identity (documents 20, 28). The messaging boundary is wired first
 	// because authentication cannot ship without it: phone OTP is the initial
 	// authentication method and the provider must sit behind an interface.
-	messenger := notify.NewService(logger)
+	messenger := otp.NewService(logger)
 	if cfg.Env.IsProduction() {
 		// The development sender logs message bodies, which for an OTP is the
 		// credential itself. Refusing to start is better than starting with a
 		// provider that prints every login code to the log.
 		return fmt.Errorf("no SMS provider is configured for %s: set one before deploying", cfg.Env)
 	}
-	messenger.Register(notify.ChannelSMS, notify.NewLogSender(logger))
-	messenger.Register(notify.ChannelEmail, notify.NewLogSender(logger))
+	messenger.Register(otp.ChannelSMS, otp.NewLogSender(logger))
+	messenger.Register(otp.ChannelEmail, otp.NewLogSender(logger))
 
 	issuer, err := authn.NewIssuer(cfg.JWTSecret)
 	if err != nil {
@@ -211,7 +212,22 @@ func run() error {
 	// offered before.
 	// The ledger is the only record of what a driver earned, so the earnings
 	// surface reads it directly rather than a total kept beside it.
+
+	// The communication layer (documents 121, 122, 124). The realtime gateway
+	// reaches a phone whose app is open and connected; this reaches one in a
+	// pocket, which is where a customer's phone is while they wait.
 	//
+	// Document 121: "Business services emit events. They should not directly
+	// call Twilio, Firebase, email providers or other channel vendors." So the
+	// provider is an adapter behind a queue, and the only adapter that ships
+	// writes to the log — this platform has no push credentials, and an
+	// adapter that pretended otherwise would leave a booking believing a
+	// customer was told and a customer who was not.
+	notifyStore := notify.NewStore(pool.Pool)
+	notifyService := notify.NewService(notifyStore, logger)
+	notifyHandler := notify.NewHandler(notifyStore)
+	bookingService.WithNotifier(notify.NewJobNotifier(notifyService))
+
 	// The realtime gateway. `internal/realtime` was a complete WebSocket hub —
 	// channel grammar, authorization, bounded buffers, location coalescing —
 	// with no transport and no publishers: nothing outside the package
@@ -269,7 +285,7 @@ func run() error {
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
 			driverHandler, zonesHandler, placesHandler, merchantHandler, groceryHandler,
-			offerHandler, trackHandler, realtimeHandler, issuer, serviceName, version, logger,
+			offerHandler, trackHandler, realtimeHandler, notifyHandler, issuer, serviceName, version, logger,
 			cfg.CORSAllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -290,10 +306,16 @@ func run() error {
 		trackingStore, routes, logger, nil)
 	dispatchRunner := dispatch.NewRunner(dispatchEngine, jobStore, platformSettings, logger, nil).
 		WithOffers(dispatchStore)
+	// The send pass. Without it a notification is a row nobody reads: queueing
+	// and sending are separate so a provider outage delays delivery rather
+	// than failing the booking that caused it.
+	notifyWorker := notify.NewWorker(notifyStore, notify.NewLogSender(logger), logger, 0)
+
 	deadlines := sweeper.New(merchantStore, dispatchRunner, logger, 0, nil)
 	sweepCtx, stopSweeping := context.WithCancel(context.Background())
 	defer stopSweeping()
 	go deadlines.Run(sweepCtx)
+	go notifyWorker.Run(sweepCtx)
 
 	serverErr := make(chan error, 1)
 	go func() {
