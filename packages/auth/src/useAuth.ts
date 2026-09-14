@@ -9,11 +9,10 @@ import { ApiError, type ApiClient } from '@platform/api-client';
  * duplicated per platform, and an auth flow that differs between iOS and
  * Android differs in exactly the ways nobody tests.
  *
- * This file has no React Native dependency, unlike tokenStorage.ts (which
- * wraps expo-secure-store) — the package's other export. A web app that needs
- * only this flow imports the `@platform/mobile/useAuth` subpath rather than
- * the package root, so its bundler never has to resolve a native-only module
- * it will never call.
+ * This file has no React Native dependency — it moved here from
+ * `@platform/mobile` (which wraps expo-secure-store) precisely so a web
+ * client can import it directly without pulling in the device keystore.
+ * `@platform/mobile` re-exports it so mobile app imports did not have to move.
  */
 export type AuthStage = 'phone' | 'code' | 'authenticated';
 

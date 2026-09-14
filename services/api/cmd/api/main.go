@@ -20,9 +20,11 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
+	"github.com/sarmadkung/rideme/services/api/internal/finance"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
+	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/internal/settings"
@@ -150,9 +152,13 @@ func run() error {
 		identity.Options{OTPBypass: cfg.OTPBypass},
 	)
 
-	// Booking, pricing and routing. The routing service has one provider today
-	// — a straight-line estimator that labels every result as estimated — so a
-	// fare built on a guess is never presented as a measured one.
+	// Booking, pricing and routing. The straight-line estimator is always the
+	// last resort, so a fare built on a guess is never presented as a measured
+	// one; a configured provider simply moves most routes off the guess.
+	routingProviders, err := buildRoutingProviders(cfg, redis, logger)
+	if err != nil {
+		return err
+	}
 	jobStore := jobs.NewStore(pool.Pool)
 	bookingStore := booking.NewStore(pool.Pool)
 	// The values the owner decided (BD-01, BD-02, BD-04, BD-11, BD-12) are
@@ -162,28 +168,68 @@ func run() error {
 	// the plain city string a quote still carries.
 	zoneStore := zones.NewStore(pool.Pool)
 	zonesHandler := zones.NewHandler(zones.NewService(zoneStore))
+	// One routing service and one tracking store for the whole process:
+	// dispatch scores candidates with the same routes a quote was priced from,
+	// and reads the same position pool a driver reports into.
+	routes := routing.NewService(routingProviders...)
+	trackingStore := tracking.NewStore(pool.Pool, redis.Client)
+	merchantStore := merchant.NewStore(pool.Pool)
 	bookingService := booking.NewService(
 		jobStore, bookingStore,
 		pricing.NewEngine(nil),
-		routing.NewService(),
+		routes,
 		platformSettings,
 		zoneStore,
 		nil,
-	)
+	).WithTracking(trackingStore, logger)
+	// An order follows the delivery it produced (document 070). Wired after
+	// construction because booking is generic over job type and knows nothing
+	// about shops — only that some jobs were made on something's behalf.
+	bookingService.WithDeliveries(merchant.NewService(merchantStore))
 	providerStore := providers.NewStore(pool.Pool)
 	bookingHandler := booking.NewHandler(bookingService, jobStore, providerStore, bookingStore)
 
 	// The driver surface. Availability, position reporting and "what am I
 	// holding" — the three things a driver's phone needs that no endpoint
 	// offered before.
+	// The ledger is the only record of what a driver earned, so the earnings
+	// surface reads it directly rather than a total kept beside it.
 	driverHandler := driver.NewHandler(driver.NewService(
-		providerStore, tracking.NewStore(pool.Pool, redis.Client), jobStore,
-		tracking.DefaultLimits(), nil))
+		providerStore, trackingStore, jobStore,
+		tracking.DefaultLimits(), nil).WithLedger(finance.NewStore(pool.Pool)))
+
+	// Place search. Built only when a geocoder is configured; the routes are
+	// absent otherwise (see places.NewHandler).
+	placesHandler := places.NewHandler(buildGeocoder(cfg, logger))
+
+	// The merchant surface (document 072). The order lifecycle and the
+	// acceptance deadline were both built and verified in Phase 10; until now
+	// nothing served them, so the sweeper below was cancelling orders that no
+	// merchant had any way to answer.
+	// WithJobs is what turns a ready order into a delivery: document 070's two
+	// lifecycles, linked at READY_FOR_PICKUP and nowhere else.
+	merchantHandler := merchant.NewHandler(
+		merchant.NewService(merchantStore).WithJobs(jobStore))
+
+	// The customer's side of the same lifecycle (documents 068, 071): the
+	// shops near them, one shop's catalogue, a cart, and a checkout that
+	// records where the order is going.
+	groceryHandler := merchant.NewCustomerHandler(merchant.NewCustomerService(merchantStore))
+
+	// Answering an offer, and watching the trip it becomes. Both surfaces are
+	// new; everything behind them was built and unreachable — the accept and
+	// reject routes answered 503 pointing at a dispatch surface that did not
+	// exist, and no endpoint had ever served a driver's position to the
+	// customer waiting for them.
+	dispatchStore := dispatch.NewStore(pool.Pool)
+	offerHandler := dispatch.NewHandler(dispatchStore, providerStore, trackingStore, logger)
+	trackHandler := tracking.NewHandler(trackingStore, driverIDLookup{providerStore})
 
 	server := &http.Server{
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
-			driverHandler, zonesHandler, issuer, serviceName, version, logger, cfg.CORSAllowedOrigins),
+			driverHandler, zonesHandler, placesHandler, merchantHandler, groceryHandler,
+			offerHandler, trackHandler, issuer, serviceName, version, logger, cfg.CORSAllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -193,8 +239,17 @@ func run() error {
 	// Deadline enforcement (BD-04, BD-12). The values these act on are rows;
 	// this is the thing that acts on them. Without it an unanswered grocery
 	// order and a job that found no driver both wait forever.
-	dispatchRunner := dispatch.NewRunner(nil, jobStore, platformSettings, logger, nil)
-	deadlines := sweeper.New(merchant.NewStore(pool.Pool), dispatchRunner, logger, 0, nil)
+	// The dispatch engine, and the runner that drives it.
+	//
+	// The engine was built and tested in Phase 8 and never constructed: the
+	// runner was created with a nil engine, nothing called Attempt, and no job
+	// ever left REQUESTED. A customer's booking reached the database and no
+	// driver. Round is the call that closes that gap.
+	dispatchEngine := dispatch.NewEngine(dispatchStore, jobStore, providerStore,
+		trackingStore, routes, logger, nil)
+	dispatchRunner := dispatch.NewRunner(dispatchEngine, jobStore, platformSettings, logger, nil).
+		WithOffers(dispatchStore)
+	deadlines := sweeper.New(merchantStore, dispatchRunner, logger, 0, nil)
 	sweepCtx, stopSweeping := context.WithCancel(context.Background())
 	defer stopSweeping()
 	go deadlines.Run(sweepCtx)
@@ -228,4 +283,72 @@ func run() error {
 	}
 	logger.Info("stopped cleanly")
 	return nil
+}
+
+// buildRoutingProviders turns MAP_PROVIDER into the provider chain.
+//
+// An empty chain is legitimate: routing.Service falls back to its straight-line
+// estimator and marks every result estimated, which is what a platform without
+// a maps contract should show. Config has already refused a selected provider
+// with no credential, so a failure here is a real one.
+func buildRoutingProviders(cfg *config.Config, redis *cache.Client, logger *slog.Logger) ([]routing.Provider, error) {
+	switch cfg.MapProvider {
+	case "google":
+		provider, err := routing.NewGoogleProvider(cfg.MapsAPIKey, routing.WithGoogleLogger(logger))
+		if err != nil {
+			return nil, fmt.Errorf("routing provider: %w", err)
+		}
+		// Every route is billed, and a city quotes the same trips repeatedly
+		// (document 104). The cache sits in front of the provider rather than
+		// in front of the fallback chain, so a Google route and a straight-line
+		// estimate can never share an entry.
+		cached := routing.NewCachingProvider(
+			provider,
+			routing.NewRedisCache(redis.Client, logger),
+			routing.DefaultCacheTTL,
+		)
+		logger.Info("routing provider configured",
+			"provider", provider.Name(), "cache_ttl", routing.DefaultCacheTTL.String())
+		return []routing.Provider{cached}, nil
+	default:
+		logger.Warn("no routing provider configured; distances are straight-line estimates",
+			"map_provider", cfg.MapProvider)
+		return nil, nil
+	}
+}
+
+// buildGeocoder returns the configured geocoder, or nil.
+//
+// Nil is a legitimate outcome and not an error: without a maps provider the
+// platform has no way to turn text into a place, and the honest response is
+// for the search endpoints not to exist rather than to answer badly.
+func buildGeocoder(cfg *config.Config, logger *slog.Logger) routing.Geocoder {
+	if cfg.MapProvider != "google" {
+		return nil
+	}
+	geocoder, err := routing.NewGoogleGeocoder(cfg.MapsAPIKey, routing.WithGoogleLogger(logger))
+	if err != nil {
+		// Config has already refused google with no key, so this cannot happen
+		// from configuration. Log rather than fail: place search is a
+		// convenience, and losing it must not stop the platform booking rides.
+		logger.Error("geocoder could not be built; place search is disabled", "error", err.Error())
+		return nil
+	}
+	logger.Info("geocoder configured", "provider", geocoder.Name())
+	return geocoder
+}
+
+// driverIDLookup narrows the provider store to the one question the tracking
+// surface asks: is the caller the driver they are watching?
+//
+// An adapter rather than a wider interface, so tracking does not import
+// providers to learn one field.
+type driverIDLookup struct{ providers *providers.Store }
+
+func (l driverIDLookup) DriverIDForUser(ctx context.Context, userID string) (string, error) {
+	driver, err := l.providers.DriverByUserID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return driver.ID, nil
 }

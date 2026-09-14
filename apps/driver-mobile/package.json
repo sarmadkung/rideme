@@ -21,19 +21,20 @@
     }
   },
   "dependencies": {
+    "@platform/api-client": "workspace:*",
     "@platform/config": "workspace:*",
+    "@platform/mobile": "workspace:*",
     "@platform/types": "workspace:*",
     "@platform/ui": "workspace:*",
+    "@platform/validation": "workspace:*",
     "expo": "~57.0.17",
+    "expo-application": "~7.0.7",
+    "expo-location": "~57.0.16",
+    "expo-secure-store": "~15.0.7",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-native": "0.86.3",
-    "@platform/api-client": "workspace:*",
-    "@platform/validation": "workspace:*",
-    "expo-secure-store": "~15.0.7",
-    "expo-application": "~7.0.7",
-    "zod": "^4.1.13",
-    "@platform/mobile": "workspace:*"
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

@@ -406,3 +406,158 @@ describe('admin: zones and pricing', () => {
     expect(createCall?.body).toMatchObject({ job_type: 'RIDE', zone_id: 'zone-1' });
   });
 });
+
+describe('generated response types', () => {
+  // These two endpoints previously returned hand-written interfaces built by
+  // hand-written mappers, beside the generated types for everything else.
+  // ADR-007 makes the Go type the only description of a response, so the
+  // assertions below are about shape as much as behaviour.
+  const place = {
+    name: 'Packages Mall',
+    address: 'Walton Road, Lahore',
+    point: { lat: 31.4697, lon: 74.2728 },
+  };
+
+  it('returns places in the shape the server sends', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/places': { status: 200, body: { places: [place] } },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    const found = await client.searchPlaces('packages');
+    expect(found).toEqual([place]);
+  });
+
+  it('rejects a place that does not match the contract', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/places': { status: 200, body: { places: [{ name: 'no point' }] } },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    // Silently coercing this is how a customer gets sent to latitude zero.
+    await expect(client.searchPlaces('packages')).rejects.toThrow();
+  });
+
+  it('parses earnings against the generated schema', async () => {
+    const window = { from: '2026-09-02T00:00:00Z', to: '2026-09-09T00:00:00Z' };
+    const earnings = {
+      today: { net: { amount_minor: 240000, currency: 'PKR' }, trips: 6, ...window },
+      week: { net: { amount_minor: 1450000, currency: 'PKR' }, trips: 34, ...window },
+      trips: [
+        {
+          job_id: 'job-1',
+          amount: { amount_minor: 40000, currency: 'PKR' },
+          at: '2026-09-08T18:30:00Z',
+        },
+      ],
+    };
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/driver/earnings': { status: 200, body: earnings },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    expect(await client.driverEarnings()).toEqual(earnings);
+  });
+
+  it('does not report an unreachable ledger as nothing earned', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/driver/earnings': {
+        status: 503,
+        body: {
+          code: 'unavailable',
+          message: 'earnings are unavailable right now',
+          request_id: 'r',
+        },
+      },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    await expect(client.driverEarnings()).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('the grocery surface', () => {
+  const cart = {
+    id: 'order-1',
+    store_id: 'store-1',
+    status: 'CART',
+    items_total: { amount_minor: 25000, currency: 'PKR' },
+    items: [],
+    created_at: '2026-09-12T09:00:00Z',
+  };
+
+  it('asks for shops around a position and parses what comes back', async () => {
+    const { fetchImpl, calls } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/stores': {
+        status: 200,
+        body: {
+          stores: [
+            {
+              id: 'store-1',
+              merchant_name: 'Al-Fatah',
+              name: 'Gulberg',
+              latitude: 31.52,
+              longitude: 74.35,
+              distance_m: 812.5,
+              open: false,
+            },
+          ],
+        },
+      },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    const stores = await client.listStores({ latitude: 31.52, longitude: 74.35 });
+    // A shut shop is an answer, not an omission — the server lists it and says
+    // so, and the client must not quietly drop it.
+    expect(stores[0]?.open).toBe(false);
+    expect(calls.at(-1)?.url).toContain('lat=31.52');
+  });
+
+  it('sends an added line in the server’s own field names', async () => {
+    const { fetchImpl, calls } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'POST /api/v1/orders/order-1/items': { status: 200, body: cart },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    await client.addCartItem('order-1', {
+      productId: 'p-1',
+      quantity: 2,
+      substitutionPreference: 'ASK_ME',
+    });
+
+    expect(calls.at(-1)?.body).toEqual({
+      product_id: 'p-1',
+      quantity: 2,
+      substitution_preference: 'ASK_ME',
+    });
+  });
+
+  it('refuses an order whose money does not match the contract', async () => {
+    const { fetchImpl } = stubFetch({
+      'POST /api/v1/auth/otp/verify': { status: 200, body: tokens },
+      'GET /api/v1/orders/order-1': {
+        status: 200,
+        body: { ...cart, items_total: { amount_minor: '25000', currency: 'PKR' } },
+      },
+    });
+    const client = createApiClient({ baseUrl: 'https://api.test', fetch: fetchImpl });
+    await client.verifyOtp('03001234567', '123456');
+
+    // A string where an integer count of paisa belongs is how a total becomes
+    // "2500025000" the first time something adds to it.
+    await expect(client.getGroceryOrder('order-1')).rejects.toThrow();
+  });
+});

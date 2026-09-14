@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { tokens } from '@platform/ui';
-import { useAuth } from '@platform/mobile/useAuth';
+import { useAuth } from '@platform/auth';
 import { getApiClient } from './api/client';
 import { LoginScreen } from './screens/LoginScreen';
 import { ZonesScreen } from './screens/ZonesScreen';

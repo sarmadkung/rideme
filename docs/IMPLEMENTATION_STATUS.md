@@ -274,7 +274,8 @@ Verified 2026-08-28. Documents 18, 47, 48, 95, 96, 98, 102, 103.
 | Task | Status | Tests | Verified | Notes |
 |------|--------|-------|----------|-------|
 | Migration `000005` | VERIFIED | n/a | YES | full chain down → up → down → up observed |
-| **CAP-2 boundary created (`095`)** | VERIFIED | 12 | YES | `route`/`Matrix`/`EstimateETA`, normalized response, one provider behind it |
+| **CAP-2 boundary created (`095`)** | VERIFIED | 12 | YES | `route`/`Matrix`/`EstimateETA`, normalized response, providers behind it |
+| **Google routing provider (`104`, `346`)** | VERIFIED | 11 | YES | Directions + Distance Matrix; live-checked against the real API — see 2026-08-29 below |
 | Routing modes by vehicle (`095`) | VERIFIED | 2 | YES | a truck does not get a car route |
 | Fallback never presented as exact (`096`) | VERIFIED | 3 | YES | every estimate is labelled `estimated`; a total provider outage still ranks candidates |
 | `Drivers × Pickup` matrix (`096`) | VERIFIED | 2 | YES | the reduction Phase 8's `eta_score` performs |
@@ -588,10 +589,15 @@ Documents 17, 28, 48, 116, 179.
 | User-facing error mapping | VERIFIED | 2 | asserted to leak no internal code; preserves the server's deliberate ambiguity about whether an account exists |
 | ADR-006 consequences handled | VERIFIED | n/a | mobile Jest maps `@platform/*` to source, so transitive deps and ESM `.js` specifiers both needed handling |
 
-**Not built.** Screens and navigation for booking, tracking, order history, notifications and
-profile. Driver onboarding, availability, offer acceptance, trip workflow, earnings. Background
-location and its native module. Offline mutation queue. Push registration. Performance budgets
-(BD-19 requires real-device measurement).
+**Not built.** Order history and profile screens. Driver onboarding. **Background** location and
+its native module. Push registration and notification preferences. Map display and navigation
+handoff. Performance budgets (BD-19 requires real-device measurement).
+
+**Built since this table was written**, each with its own entry below: customer booking and
+driver trip flows (2026-08-29) · foreground location (2026-08-29) · customer place search
+(2026-09-08) · offline mutation queue (2026-09-08, built and tested but deliberately wired to
+nothing pending B-7/BD-21) · driver earnings (2026-09-09). The per-slice entries are the
+authority; this table is the phase summary and was stale until 2026-09-09.
 
 ## Phase 13 — Operational Dashboards · **PARTIAL**
 
@@ -658,25 +664,15 @@ billing-locked since 2026-08-27, which is external to this repository.
 
 ## Remaining Non-Blocking Work
 
-Phase numbers below use the `IMPLEMENTATION_PLAN.md` spine. See
-`MASTER_IMPLEMENTATION_ROADMAP.md` for the governing order and the translation table.
+**Superseded 2026-09-09.** This section held a second phase-status table, written against the
+`IMPLEMENTATION_PLAN.md` spine during Phase 1, when every phase after 1 genuinely was
+`NOT_STARTED`. It was never updated, so by 2026-09-09 it reported eleven verified phases as not
+started and contradicted both the per-phase sections above and the roadmap's live record.
 
-| Phase | Status | Notes |
-|---|---|---|
-| 2 — infrastructure hardening | NOT_STARTED | local infrastructure landed in Phase 1; cloud is Phase 15 |
-| 3 — backend foundation | NOT_STARTED | BD-07 due before financial code |
-| 4 — authentication | NOT_STARTED | |
-| 5 — canonical domain | NOT_STARTED | ADR-004 to resolve here |
-| 6 — pricing / quote | NOT_STARTED | |
-| 7 — dispatch | NOT_STARTED | BD-03, BD-04 |
-| 8 — location + realtime | NOT_STARTED | BD-15, BD-17 |
-| 9 — ride vertical slice | NOT_STARTED | BD-01 … BD-06 |
-| 10 — delivery | NOT_STARTED | BD-10, BD-16 |
-| 11 — grocery | NOT_STARTED | BD-11, BD-12 |
-| 12 — cargo | NOT_STARTED | BD-13 |
-| 13 — financial completeness | NOT_STARTED | BD-08, BD-09 |
-| 14 — operations console | NOT_STARTED | |
-| 15 — production readiness | NOT_STARTED | BD-14, BD-15, BD-19 |
+It is removed rather than corrected. A second place recording which phase is finished is a
+second place that can be wrong, and the roadmap already owns that record:
+`MASTER_IMPLEMENTATION_ROADMAP.md` → **Live record**, in the roadmap's own numbering. Per-phase
+evidence stays in the sections above.
 
 ## Blocked
 
@@ -840,7 +836,7 @@ now decodes a real response with `DisallowUnknownFields`.
 
 | Not built | Why |
 |---|---|
-| Map selection | No map provider is integrated (CAP-2). Pickup and destination are chosen from named places rather than a pin. The flow behind the control is the real one. |
+| Map selection | No *on-screen* map is integrated. Server-side routing uses Google (2026-08-29) and free-text place search landed 2026-09-08, so a customer can book anywhere in the city by typing — but still by typing, not by dropping a pin. |
 | Navigation stack | The flow is linear with no back destination worth preserving. A navigator before a second flow is scaffolding without a user. |
 | Realtime tracking | The gateway exists; no client transport does. Polling every 5s, stopping at terminal states. |
 | Driver location on a map | Follows map selection. The job's assignment is shown, not its position. |
@@ -901,6 +897,843 @@ A driver going online from the wrong place would be offered jobs across the
 city, so this must be replaced before the app is put in front of anyone. It is
 marked in the source at `apps/driver-mobile/App.tsx`.
 
+**Resolved 2026-08-29** — see "Driver Foreground Location" below. The fixed
+coordinate is gone.
+
 Also absent, and deliberately: no map, no navigation hand-off, no push
 notification for an offer (the app polls while online and stops when offline),
 no earnings screen.
+
+## Google Routing Provider — 2026-08-29
+
+The routing boundary built in Phase 6 had one provider behind it: a straight-line
+estimator labelling every result `estimated`. Every fare the platform quoted was
+therefore a great-circle distance multiplied by 1.3. A key now exists, so the
+boundary has a real provider and most routes are measured.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `GoogleProvider` implements `Provider` (`346`) | VERIFIED | 11 | YES | Directions for `Route`, Distance Matrix for `Matrix`; no new interface |
+| Live routes are labelled `live` (`096`) | VERIFIED | 1 | YES | and the estimator's are still `estimated`; the two remain distinguishable |
+| Traffic duration is real or absent | VERIFIED | 2 | YES | `duration_in_traffic` when present; zero rather than an echo of free-flow, which would claim a model the response never had |
+| **Truck routes are refused, not substituted (`095`)** | VERIFIED | 2 | YES | Google has no profile modelling axle weight or lane bans. The call is not made; `Service` falls back and the caller sees `estimated` |
+| In-body failures are failures | VERIFIED | 1 | YES | both endpoints answer HTTP 200 for `REQUEST_DENIED`; checking only the status code would price a trip off a fallback and never say so |
+| **The API key never reaches an error** | VERIFIED | 1 | YES | the key is a query parameter, so the request URL is a credential; `*url.Error` is unwrapped before it is logged |
+| Oversized matrices are refused (`104`) | VERIFIED | 1 | YES | 25×25 and 100 elements are Google's ceilings; splitting would multiply a billed call without the caller asking |
+| Per-cell failures do not discard the grid | VERIFIED | 1 | YES | one unreachable driver must not stop dispatch ranking everybody else |
+| Selecting a provider requires its credential | VERIFIED | 2 | YES | `MAP_PROVIDER=google` with no `MAPS_API_KEY` refuses to start, rather than falling back silently |
+| Observability (`104`) | PARTIAL | n/a | — | endpoint, latency and outcome are logged; there is no metrics system in the service yet, so success rate and fallback rate are not aggregated |
+
+**Verification.** `go test ./...` passes; `make api-lint` and `make contracts-check` clean.
+Unit tests use an `httptest` stub, so the suite makes no billed calls. A one-off live check
+against the real API confirmed the wiring end to end:
+
+```text
+driving      12.0 km   28 min  traffic=1769s  provider=google        confidence=live
+motorcycle   12.0 km   28 min  traffic=1769s  provider=google        confidence=live
+truck        11.2 km   44 min  traffic=0s     provider=straight-line confidence=estimated
+```
+
+Lahore Fort → Gulberg is 12.0 km by road against the estimator's 11.2 km — the guess was
+7% short, and it was 7% short in the customer's favour on this route and would be wrong in
+the other direction elsewhere. The truck row is the design working: it fell back rather than
+being handed a car's route.
+
+**Not done.** `two_wheeler` returns the same route as `driving` in Lahore, so the motorcycle
+profile is currently a distinction without a difference — Google appears not to differentiate
+it in this market. No caching (`101`, `104` both ask for it); every quote is a billed call.
+No geocoding or reverse geocoding. No on-screen map in any client — that is separate work
+and remains Phase 12's largest mobile gap.
+
+## Driver Foreground Location — 2026-08-29
+
+The driver shell reported a fixed point in Gulberg, Lahore, for every driver who went online.
+The placeholder was marked in the source as something that "must be replaced before the app is
+put in front of anyone". It is replaced.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `useLocation` wraps `expo-location` | VERIFIED | 11 | YES | permission, watch, teardown; `expo-location@57.0.16` |
+| Every fix carries the four fields (`048`) | VERIFIED | 1 | YES | timestamp, accuracy, heading, speed; timed by the device, not by arrival |
+| **Sentinels are omitted, not reported** | VERIFIED | 1 | YES | stationary Android hardware reports heading `-1`; sending it claims a direction that does not exist, so the field is absent instead |
+| **Refused ≠ switched off ≠ not ready** | VERIFIED | 3 | YES | three states, three messages, three different actions from the driver; one sentence for all three sends most of them to the wrong setting |
+| A refusal is recoverable | VERIFIED | 2 | YES | `retry()` and a "Check again" control; granting permission in Settings must not need an app restart |
+| The rougher of two fixes is discarded | VERIFIED | 1 | YES | beyond 100 m, the previous fix is kept — but a rough *first* fix is accepted, or a driver starting their shift indoors could never go online |
+| The GPS session is torn down | VERIFIED | 1 | YES | including the race where the permission dialog resolves after unmount |
+| Position reported only while online (`102`) | VERIFIED | n/a | — | an off-duty driver's whereabouts are nobody's business; the effect is gated on `isOnline` |
+| Native permission declarations | VERIFIED | n/a | YES | `NSLocationWhenInUseUsageDescription`, Android `ACCESS_*_LOCATION`, and the `expo-location` config plugin; background is explicitly **not** requested |
+
+**Verification.** 51 driver-app tests pass (37 before). `make verify` green.
+
+**Not done.** Background location — it needs a config plugin change, an Android foreground
+service, and measurement on real hardware; asking for the permission before the app uses it
+invites a store rejection, so it is not requested. No native filtering layer: `expo-location`'s
+own `distanceInterval` does the movement filtering, and document 99's native layer is not
+justified until measurement says JavaScript-side delivery is the problem
+(`native-module-boundary`).
+
+**Open decision.** The reporting interval and distance threshold per job state are undocumented
+and are now recorded as **B-6 / BD-20** in `BLOCKED_TASKS.md`. The hook takes both as options and
+defaults to 25 m / 5 s — engineering defaults, marked as such, not a decision inferred from
+silence. Nothing state-dependent is built on them.
+
+## Route Caching — 2026-09-08
+
+Every quote was a billed Google call. Documents 101 and 104 both ask for caching;
+104 names route requests among the platform's principal map costs and asks
+directly to "avoid duplicate route requests" and "reuse route estimates".
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `CachingProvider` wraps a provider (`104`) | VERIFIED | 12 | YES | in front of one provider, not the fallback chain — a Google route and a straight-line estimate must never share an entry |
+| **A reused route is labelled `cached`** | VERIFIED | 1 | YES | document 96: "Never present a fallback as exact." `ConfidenceCached` already existed in the enum |
+| TTL is short on purpose | VERIFIED | 1 | YES | 5 minutes: road distance barely changes, but `TrafficDurationSeconds` an hour old is not stale, it is wrong |
+| **A burst is billed once** | VERIFIED | 1 | YES | single-flight. The cache alone does not help a burst — every caller misses because none has returned yet. 20 simultaneous identical quotes → 1 call |
+| Keys do not round a trip into a different one | VERIFIED | 2 | YES | 4 decimal places ≈ 11 m, finer than a GPS fix; a 500 m difference is a different pickup and is priced as one |
+| Mode and provider version are in the key | VERIFIED | 2 | YES | a truck and a car ask different questions; an upgraded provider must not serve the previous one's answers |
+| Failures are not remembered | VERIFIED | 1 | YES | a rate limit clears; caching it would extend the outage past its end |
+| Scheduled trips bypass the cache | VERIFIED | 1 | YES | a 6pm departure is a different question and must not poison the entries meaning "now" |
+| Matrices are not cached | VERIFIED | 1 | YES | a matrix key is the whole grid, so a hit means the same drivers in the same places — when the answer has most likely changed. 104's advice for matrices is to batch, not cache |
+| A broken cache costs money, not bookings | VERIFIED | n/a | — | `RedisCache` swallows and logs every failure; `Cache` cannot return an error by design |
+
+**Verification.** `go test ./pkg/routing/ -race` run 8 times consecutively, all clean.
+
+**A real defect the race detector caught.** The first concurrency test was flaky at about one
+run in five. The race was in the test's own provider — an unsynchronised counter — but chasing
+it exposed a genuine gap in the implementation: `CachingProvider` had no single-flight, so
+twenty customers quoting the same trip in the same second produced twenty billed calls. The
+cache would have looked like it was working while doing nothing for the one case it exists to
+prevent. `singleflight.Group` was added and the test now asserts the collapse rather than
+merely asserting the absence of a race.
+
+**Not done.** No cache warming, no hit-rate metric — there is still no metrics system in the
+service, so the cache's effect is visible only as a fall in provider log lines.
+## Place Search — 2026-09-08
+
+The customer app picked from five hard-coded Lahore landmarks. Booking anywhere else
+was impossible, and the screen said so in a comment. The server can now turn typed
+text into a place.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `Geocoder` is its own boundary (`105`, `346`) | VERIFIED | 13 | YES | routing.go always said "a provider that also geocodes implements Geocoder separately" — routing and geocoding are billed as different products and can come from different vendors |
+| `GET /api/v1/places` and `/places/reverse` (`014`) | VERIFIED | 10 | YES | authenticated: each call costs money |
+| **The key stays on the server** | VERIFIED | n/a | — | a client searching Google directly needs a key in its bundle, and a key in a bundle is a key anyone can spend |
+| The shared Google HTTP call | VERIFIED | 2 | YES | routing and geocoding share one `get`, so the "key never reaches an error" guarantee cannot drift between them; asserted separately for both |
+| **An outage is not an empty result** | VERIFIED | 2 | YES | 404 for no match, 503 for a broken provider. A customer shown "no results" for an outage retypes their address until they give up |
+| The provider's message is not shown | VERIFIED | 1 | YES | it can name a disabled API or a restricted key — an operator's problem, already logged |
+| Search is biased, not filtered | VERIFIED | 2 | YES | "Liberty" matches several Pakistani cities and a customer in Lahore means Lahore, but an airport across town stays findable |
+| Unroutable results are dropped | VERIFIED | 1 | YES | one would sit in the list looking selectable and fail at quote time |
+| Bounded query and result count | VERIFIED | 2 | YES | an unbounded string is a billed call somebody else sized |
+| Reverse keeps the point asked about | VERIFIED | 1 | YES | moving a pickup to the provider's snapped centroid is a worse answer than the one the customer gave |
+| No geocoder → the routes do not exist | VERIFIED | 1 | YES | an endpoint that always fails is worse than an absent one; a client can detect a 404 and fall back to its own list |
+
+**A defect found by running against the real API, not by reading documentation.** Reverse
+geocoding returned `G9C5+5F5` — a Plus Code. Google orders reverse results by specificity and
+for a point that is not on a building the most specific answer is a Plus Code: precise, correct
+and unusable on a screen where a customer is confirming a pickup. `preferNamedResult` now takes
+the first result that is not one, keeping the Plus Code only where it is the sole answer (a
+field, an unaddressed plot). Live re-check: `31.5204,74.3587` now resolves to
+"50-N Gurumangat Rd" instead.
+
+**Verification.** `go vet` and `go test ./...` clean. Live check against the real API resolved
+"Liberty Market", "Emporium Mall" and "Johar Town block G" to correct Lahore coordinates.
+
+**Not done.** No geocode caching — document 104 asks to "cache stable geocoding" and an address
+is genuinely stable, unlike traffic, so this is the clearest remaining saving. Text Search is
+used rather than Autocomplete: Autocomplete is the better as-you-type experience but returns
+identifiers without coordinates, so every selection costs a second Place Details call. No client
+UI yet — the customer app still shows the five landmarks.
+
+## Customer Place Search — 2026-09-08
+
+The booking screen offered five hard-coded Lahore landmarks. Everywhere else in the city
+was unbookable. A customer can now type an address.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `usePlaceSearch` hook | VERIFIED | 9 | YES | debounced, position-biased, cancellable |
+| `searchPlaces` on the client | VERIFIED | n/a | — | 404 → empty list, because nothing matching is an answer |
+| Search field per stop | VERIFIED | 5 | YES | name and address both shown; the address is how two places with one name are told apart |
+| **Debounced at 300ms** | VERIFIED | 1 | YES | document 104 asks to "debounce search"; typing "Liberty" is one billed call, not seven |
+| Under 3 characters does not search | VERIFIED | 1 | YES | one or two match most of the city and tell the customer nothing |
+| **A stale answer never overwrites a newer one** | VERIFIED | 2 | YES | a slow response to "Lib" must not replace the results for "Liberty Market" |
+| An outage is not an empty result | VERIFIED | 2 | YES | asserted at both the hook and the screen |
+| The landmarks remain as a floor | VERIFIED | 1 | YES | search can be unavailable — no geocoder, provider down, phone offline — and a customer must still be able to book |
+| The chosen name survives into the quote | VERIFIED | 1 | YES | `StopInput` is coordinates and the platform never stores a name, so the screen holds it; the contract is unchanged |
+
+**A defect found by the test runner crashing.** The first version of the hook took the client as
+an effect dependency. A caller that rebuilds its client each render — which is ordinary React —
+restarted the search on every re-render, which is an infinite loop rather than a debounce; it
+exhausted the Node heap and killed the runner outright. The client is now held in a ref, and a
+test asserts that an unstable client identity still produces exactly one call.
+
+**Verification.** 49 customer-mobile tests, up from 35. `make lint`, `make typecheck` and
+`make test` clean.
+
+**Not done.** No map and no pin. Autocomplete-as-you-type would be a better experience than
+Text Search but costs a second Place Details call per selection. No recent or saved places.
+## Offline Mutation Queue — 2026-09-08
+
+Connectivity in this market is a normal condition, not a rare failure. A driver loses
+signal in a basement car park and regains it two streets later.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `MutationQueue` in `@platform/mobile` | VERIFIED | 16 | YES | durable, bounded, ordered |
+| **The idempotency key is the caller's** | VERIFIED | 1 | YES | generated when the user acted, not at send time (document 377) — a replayed booking must not become a second job |
+| Survives an app kill | VERIFIED | 1 | YES | a second instance is what a cold start looks like |
+| A failed send is retried once, not duplicated | VERIFIED | 1 | YES | the failure path is where a queue quietly does work twice |
+| Order is preserved past a stuck mutation | VERIFIED | 1 | YES | delivering a later intent first puts them out of sequence, which the server cannot unpick |
+| **Racing flushes share one pass** | VERIFIED | 1 | YES | a reconnect event and a foreground event arriving together is ordinary |
+| Bounded, oldest dropped first | VERIFIED | 2 | YES | the newest intent is the likeliest to still be true |
+| Expiry is per kind, with no default | VERIFIED | 2 | YES | a kind nobody has ruled on is never expired — see B-6/BD-21 |
+| A corrupt store is an empty one | VERIFIED | 2 | YES | refusing to start over an unparseable cache takes the app down for data it can live without |
+| An unwritable store still works in memory | VERIFIED | 1 | YES | losing the queue to an app kill is bad; refusing the user's action is worse |
+| Cleared on sign-out | VERIFIED | 1 | YES | one account's intent must never flush under another's session |
+
+`@platform/mobile` now runs its own tests. The placeholder script was honest while the package
+held only `useAuth`, which the customer app exercises; the queue is pure logic and deserves a
+runner rather than borrowing an app's.
+
+**Nothing is wired to it yet, deliberately.** Which mutations may be queued, and for how long,
+is a product decision that no document makes and that `mobile-offline-sync` names as a blocking
+condition. It is recorded as **B-7 / BD-21**. Queuing a driver's job acceptance means a driver
+who lost signal may accept a job that was reassigned four minutes ago, with the customer already
+in another car — defensible, but not the platform's call to make silently.
+
+**Verification.** 16 tests, `vitest run` in `@platform/mobile`.
+## Driver Earnings — 2026-09-09
+
+A driver could work a shift and had no way to see what they had made. The ledger held
+the answer and nothing asked it.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `EarningsBetween` / `TripEarningsSince` | VERIFIED | 9 | YES | integration, against a real Postgres ledger |
+| `GET /api/v1/driver/earnings` | VERIFIED | n/a | YES | behind the driver role, like every other driver route |
+| **Read from the ledger, not a counter** | VERIFIED | 9 | YES | a second record of what a driver earned is a second record that can disagree with the books, and the one that disagrees is always the one the driver is looking at |
+| **Net, not gross** | VERIFIED | 1 | YES | BD-05 is a flat 20% commission; a driver shown the gross would query every payout they ever received |
+| **A reversal needs no special case** | VERIFIED | 1 | YES | it writes an opposing entry, so the sum already reflects it — anything that excluded reversals separately would be a second rule to keep in step with document 53 |
+| One driver never sees another's | VERIFIED | 1 | YES | |
+| No history is zero, not an error | VERIFIED | 1 | YES | a new driver must see PKR 0, not a failure |
+| An inverted window is refused | VERIFIED | 1 | YES | zero would read as "you earned nothing", which is a different and alarming statement |
+| Trips listed under the total | VERIFIED | 2 | YES | a driver checking earnings is usually checking one trip they think was underpaid |
+| The list is bounded | VERIFIED | 1 | YES | a driver scrolls a shift, not a career |
+| **An outage never shows as zero** | VERIFIED | 2 | YES | asserted at the endpoint (503, not an empty total) and on the screen |
+| The day is the driver's, not UTC's | VERIFIED | n/a | — | a shift ending at 2am belongs to the day it started; a total resetting mid-shift is a support ticket |
+
+**Verification.** The full integration suite passes against real Postgres, Redis, NATS and
+MinIO — `go test -tags=integration ./tests/` green in 16.5s, schema at version 11. 59
+driver-app tests, up from 51.
+
+**Not done.** No payout view: what a driver has *earned* and what has been *paid out* are
+different questions, and the second needs the payout flow that has no provider yet. No date
+range picker — today and the last seven days are what a driver asks for.
+
+## Contract Drift Closed — Place Search and Driver Earnings · 2026-09-09
+
+Two slices in a row hand-wrote their TypeScript response types beside the generated ones.
+`packages/api-client` declared `Place`, `EarningsTotal`, `TripEarning` and `DriverEarnings` as
+local interfaces and built them with hand-written `toPlace`, `toEarningsTotal` and
+`toTripEarning` mappers, while `driverAssignment()` two lines away parsed a generated schema.
+ADR-007 exists to make that impossible, and `contractgen`'s own header says a client needing a
+type "must add it here rather than hand-writing a matching interface".
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `Point`, `Place` registered (`093`, `094`) | IMPLEMENTED | 2 | — | inner-first, so `Place.point` resolves to `Point` rather than an inline shape |
+| `EarningsTotal`, `TripEarning`, `DriverEarnings` registered | IMPLEMENTED | 2 | — | |
+| The hand-written interfaces and mappers are gone | IMPLEMENTED | n/a | — | `moneySchema` left `api-client` with them: nothing there parses money by hand any more |
+| **Responses are parsed, not coerced** | IMPLEMENTED | 1 | — | the old `toPlace` read `Number(point['lat'])` on an absent field, so a malformed place became latitude `NaN`; the generated schema rejects it instead |
+| An unreachable ledger still is not zero | IMPLEMENTED | 1 | — | asserted at the client now as well as at the endpoint and the screen |
+| Consumers moved to the generated shape | IMPLEMENTED | n/a | — | `place.point.lat/lon`, `trip.job_id`; `formatWhen` parses the RFC 3339 string the wire carries |
+
+**Why the gate did not catch it.** `make contracts-check` regenerates and diffs, so it fails when
+a *registered* Go type changes without regeneration. A new endpoint whose types were never
+registered changes nothing it can see. The blind spot was already recorded under Phase 2's
+"Remaining Non-Blocking Work" as the hand-maintained registration list; this is what it costs in
+practice. Nothing here closes it — a new unregistered endpoint would still pass.
+
+**Verification.** Partial, and deliberately so: this session had no Go toolchain, so
+`make contracts` was not run and the two `generated.ts` files carry a **predicted** emitter
+output. `make contracts-check` is the assertion — if the prediction is wrong it fails and prints
+the difference. Run on the developer machine: 59 driver-app tests and 49 customer-app tests pass;
+`tsc` clean on both apps and on `types`, `validation` and `api-client`; prettier and eslint clean.
+`@platform/api-client`'s own suite (4 tests added) could not run there — its rollup binary is
+built for the host platform, not the workspace VM — so those four are IMPLEMENTED, not VERIFIED,
+until `pnpm test` runs.
+
+## Merchant Order Management — 2026-09-09
+
+Phase 10 built and verified the grocery order lifecycle, the acceptance deadline BD-12 set, and
+the sweep that enforces it. Nothing served any of it. `internal/merchant` had a domain and a
+store and no handler, so for eleven days the platform has been cancelling orders that no
+merchant had any way to answer. This is document 072's surface.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `GET /merchant/orders` — document 072's five queues | IMPLEMENTED | 4 | — | `new`, `preparing`, `ready`, `completed`, `cancelled`; cursor paging like every other list |
+| **Eleven states into five queues is a decision** | IMPLEMENTED | 1 | — | asserted per queue: `CONFIRMED` sits in Preparing, not New, or the queue that must be watched is never empty; `PICKED_UP`/`DELIVERING` sit in Completed, because from the shop's side the work is done |
+| `GET /merchant/orders/{id}` with lines | IMPLEMENTED | 1 | — | line totals computed, and each line's substitution preference — a picker needs it before they reach the gap on the shelf |
+| **The queue carries no lines** | IMPLEMENTED | 1 | — | thirty orders would otherwise be thirty-one queries; `(merchant_id, status, created_at DESC)` was already indexed for this |
+| `Accept` · `Reject` · `Start Preparing` | IMPLEMENTED | 6 | — | compare-and-set on the status the surface read, so an order the sweeper cancelled a moment ago is not confirmed on top of the cancellation |
+| **Accepting twice is not an error** | IMPLEMENTED | 1 | — | a merchant on a bad connection taps Accept twice; they answered once |
+| **An unpaid order is not confirmed** | IMPLEMENTED | 1 | — | `PAYMENT_PENDING` is visible in New but refused by Accept: confirming commits the shop's stock, and no payment surface exists to ask whether the money arrived |
+| A rejection needs a reason | IMPLEMENTED | 2 | — | absent, empty and whitespace all refused; a customer cannot act on a rejection that says nothing |
+| Rejection is impossible once picking started | IMPLEMENTED | 1 | — | document 070; after that the resolution is operational, not a rejection |
+| **The role says a merchant is calling, not which one** | IMPLEMENTED | 4 | — | every action is scoped to the merchant the caller operates; another shop's order answers 404, not 403, because "this id exists but is not yours" is itself a disclosure |
+| Two shops under one account are refused | IMPLEMENTED | 2 | — | `owner_user_id` is indexed, not unique. Guessing would show an owner the wrong queue, and an order accepted from the wrong queue is one nobody can fulfil. Document 076's OWNER/MANAGER/STAFF roles are where this belongs and are not built |
+| A suspended merchant can look but not act | IMPLEMENTED | 1 | — | they still need to see what happened to their orders |
+| **The customer is not named to the shop** | IMPLEMENTED | 1 | — | a shop needs what to pick and by when; a field nobody needs is a field that leaks |
+
+**Not done, and why: `Mark Ready`.** Document 072's definition of done is acceptance *to
+ready-for-pickup*, and this stops at `PREPARING`. `READY_FOR_PICKUP` is the transition that
+produces the delivery Job (document 070), and an order has nowhere to be delivered: document
+071's checkout flow includes an Address step, and the `orders` table has no delivery address —
+the only `address` columns in migration `000009` belong to merchants and stores. Marking an
+order ready today would strand it in a state with no driver and no destination, silently. The
+missing column belongs to the checkout slice, which also has no surface yet.
+
+**Also not done.** No customer surface: `OpenCart`, `AddItem` and `Place` are still store
+methods nobody serves, so in production the only orders this queue can show are ones a test
+made. That is the other half of the loop and the next slice. `Report Issue` (document 074's
+substitution flow) has its domain logic and its store method and no route.
+
+**Found while reading.** `Store.SweepAcceptTimeouts` and `Store.ExpireOverdue` both cancel
+unanswered orders. The running sweeper calls `ExpireOverdue`; `SweepAcceptTimeouts` is
+reachable only from its own tests, writes a different `cancelled_reason` (`merchant did not
+respond` against `MERCHANT_ACCEPT_TIMEOUT`), sets no `cancelled_by`, and takes no
+`FOR UPDATE SKIP LOCKED`. Two implementations of one rule, one of them dead. Not touched here
+— it predates this slice and deleting it means moving its tests.
+
+**Verification.** Partial: this session had no Go toolchain, so nothing Go was compiled or run.
+17 handler tests and 7 integration tests are written and unverified — `make verify` and
+`go test -tags=integration ./tests/` are the assertion. Nothing outside `internal/merchant`
+changed except the router's parameter list and `main.go`'s construction, and no migration was
+added.
+
+## Grocery Ordering — the Customer's Half — 2026-09-09
+
+The merchant queue landed with nothing to put in it: `OpenCart`, `AddItem` and `Place` were
+store methods no endpoint called, so the only orders that queue could show were ones a test
+made. This is the other half — documents 068 and 071 — and the migration the whole lifecycle
+was missing.
+
+**Migration 000012 — an order now has somewhere to go.** Document 071's checkout is
+Browse → Product → Cart → **Address** → Delivery Option → Quote → Payment → Place Order, and the
+Address step had nowhere to land: the only `address` columns in `000009` belong to merchants and
+stores. That is why `READY_FOR_PICKUP` could never produce the delivery Job document 070
+promises — a job needs a dropoff stop and there was nothing to put in one. The address sits on
+the order rather than being read from the customer's profile later: a customer sending groceries
+to their mother's house has given a destination for that order, and a later profile edit must
+not move a delivery that already happened.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `GET /stores` — shops near a point | IMPLEMENTED | 6 | — | nearest first, distance computed in the database over the GIST index that was already there |
+| **A shut shop is listed as shut, not hidden** | IMPLEMENTED | 2 | — | a customer looking for their usual kiryana at 3am needs to see it is closed, not that it has vanished; `Open` applies the store's hours, not its business status |
+| Hours are one query, not one per shop | IMPLEMENTED | n/a | — | thirty shops would otherwise be thirty-one round trips; same for variants |
+| Radius defaults and is capped | IMPLEMENTED | 1 | — | 5 km default, 25 km ceiling — engineering defaults, marked as such: a real service radius is zones (`097`) and they are not built |
+| `GET /stores/{id}/products` with variants | IMPLEMENTED | 2 | — | variants carry a price *difference*, per document 068 |
+| **Availability is this branch's stock** | IMPLEMENTED | 3 | — | document 069: the same product is on the shelf in Gulberg and not in DHA. A product with no inventory row is unavailable, because `Reserve` refuses it — offering it would be a cart that fails at checkout for no visible reason |
+| `POST /orders` · `POST /orders/{id}/items` · `GET /orders/{id}` · `GET /orders` | IMPLEMENTED | 5 | — | adding a line answers with the whole cart, so a running total is the one the server computed |
+| **The cart's merchant comes from the shop** | IMPLEMENTED | 1 | — | never from the client: a caller that could name both could name a mismatched pair, and an order under the wrong merchant is one the right merchant never sees |
+| `POST /orders/{id}/place` records the destination | IMPLEMENTED | 3 | — | written by the statement that places the order, not by a call beside it: two statements can be interrupted between, and a `PLACED` order with nowhere to go is one a merchant accepts and nobody can deliver |
+| **Half a destination is refused twice** | IMPLEMENTED | 3 | — | `Delivery.Valid` in Go and a CHECK constraint in the table. A name with no coordinates cannot be routed to; coordinates with no name cannot be read out to a driver. Null island is rejected as well — it is what an unset pair of floats looks like |
+| Somebody else's cart is invisible | IMPLEMENTED | 3 | — | 404, not 403, for the same reason the merchant surface does it |
+| A placed order can no longer be edited | IMPLEMENTED | 1 | — | the merchant may already be picking it, and a line added after acceptance is one nobody agreed to |
+| A cart is not order history | IMPLEMENTED | 1 | — | an order list containing a cart shows a customer something they have not done yet next to things they have |
+| Quantity and preference are bounded | IMPLEMENTED | 2 | — | 1–100, and document 074's three preferences; a fourth would be stored and then read by `ResolveIssue`'s default, quietly turning a typo into a rule |
+| `ErrEmptyCart` replaces an unwrapped error | IMPLEMENTED | 1 | — | it reached a client as an internal failure the moment a client existed |
+
+**`Store.Place` now takes a destination.** Eleven call sites across three integration test files
+were updated. The signature change is the point: an order that cannot be delivered should not be
+placeable, and making the destination optional would have left the invariant to whichever caller
+remembered it.
+
+**Still not done, and now the only thing between here and a working grocery order:**
+`Mark Ready`. The destination exists, so the blocker is no longer the schema — it is that
+`READY_FOR_PICKUP` must create a `GROCERY` Job with the store as pickup and this address as
+dropoff, and hand it to dispatch. That crosses `jobs` and `dispatch`, which makes it Level 5
+under §E, and it is the next slice.
+
+**Also not done.** Document 071's other checkout validations: store open, prices current,
+quantities available, delivery area supported, minimum order rules. `StoreOpenAt` and `Reserve`
+both exist and are still unused by checkout. They were not added here because every existing
+fixture creates a store with no opening hours, so enforcing "store is open" at `Place` would have
+failed ten tests for a reason unrelated to what they assert. One invariant per slice; this is the
+next one after Mark Ready. `Report Issue` (document 074) still has no route.
+
+**Verification.** Partial, the same as the merchant half: no Go toolchain in this session, so
+nothing was compiled or run. 15 handler tests and 11 integration tests are written and
+unverified. `make verify`, `make migrate-up`/`migrate-down` (schema goes to version 12 and back)
+and `go test -tags=integration ./tests/` are the assertion.
+
+## Dispatch Was Never Called — 2026-09-09
+
+Phase 7 (ride booking) and Phase 8 (dispatch engine) are both recorded above as VERIFIED. There
+was no call between them.
+
+`booking.Create` writes a job as `REQUESTED`. `booking.StartSearching` — the method whose
+comment reads "moves a confirmed job into dispatch" — had **no callers**. `dispatch.NewEngine`
+was **never constructed**: `main.go` built the runner as
+`dispatch.NewRunner(nil, jobStore, ...)`, with a nil engine, because the only thing that used
+the runner was the sweeper's expiry pass. `Runner.Attempt` returns immediately for any job that
+is not already `SEARCHING`, and nothing had any callers outside tests.
+
+So every job any customer had ever created sat at `REQUESTED` and was offered to nobody. The
+scoring engine, the nine-term formula, the widening rings, the reservations, the concurrency
+guarantees document 046 demands — all built, all tested, never once run against a real booking.
+`GET /driver/assignment` could only ever answer 404, and the driver app's offer screen could
+never have shown anything.
+
+Every test in `dispatch_integration_test.go` creates its job already `SEARCHING`. That is why
+the gap survived a phase marked VERIFIED: the tests started downstream of the missing call.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The engine is constructed | IMPLEMENTED | n/a | — | one routing service and one tracking store for the process, so dispatch scores against the same routes a quote was priced from and the same pool a driver reports into |
+| `jobs.NeedingDispatch` | IMPLEMENTED | 4 | — | `REQUESTED`, plus `SEARCHING` with no live assignment — the second is what keeps a search alive after a rejection or a timeout |
+| **A job holding an offer is not offered again** | IMPLEMENTED | 1 | — | two live offers for one job is exactly the defect document 046 is about |
+| `Runner.Round` drives the pass | IMPLEMENTED | 5 | — | expired offers released first, because a job whose offer just timed out is precisely a job that needs the next ring |
+| `REQUESTED` → `SEARCHING` is compare-and-set | IMPLEMENTED | 1 | — | a job cancelled between the query and the write is left alone rather than dragged back into a search |
+| **A scheduled job is not dispatched early** | IMPLEMENTED | 1 | — | a driver sent to a pickup nobody is waiting at is worse than a job that waits for its time |
+| One bad job does not stop the pass | IMPLEMENTED | n/a | — | a job with no pickup stop and a driver accepting mid-round are both ordinary; neither is a reason to leave every other waiting customer unserved |
+| A nil engine stays inert | IMPLEMENTED | 1 | — | `Attempt` would have dereferenced it the moment anything called `Round`. It now no-ops, and does not move jobs into a search nothing can drive |
+| Offer TTLs are swept | IMPLEMENTED | 1 | — | `dispatch.Store.SweepExpired` also had no production caller, so an ignored offer held a customer's booking forever |
+| The sweeper runs the round | IMPLEMENTED | n/a | — | dispatch before expiry: expiring first would end searches that still had rings left |
+
+**Observation, not fixed.** `Attempt` measures the search deadline as
+`now - job.updated_at`, and `release` sets `updated_at` when it returns a job to `SEARCHING`. So
+each released offer restarts the 90-second clock, and the real bound on a search is
+`dispatch_config.max_attempts` rather than BD-04's ninety seconds. Both bounds hold, but they do
+not mean what the names suggest. Recording it rather than changing it: the fix is a
+`search_started_at` column, and that is a migration and a decision about which of the two
+bounds BD-04 actually specifies.
+
+**Not done.** `POST /jobs` still does not trigger a round; a booking waits for the next sweeper
+tick, up to fifteen seconds. Dispatching inline on create would tie a customer's request to a
+routing call and a geo search, so the queue is the right shape — but the first round should be
+kicked immediately rather than waited for, and that is a follow-up. The dispatch outbox
+(`PendingEvents`/`MarkPublished`) still has no publisher, so nothing downstream hears
+`job.assigned`.
+
+**Verification.** Partial: no Go toolchain in this session, so nothing was compiled or run. Six
+integration tests are written and unverified, including the first one that walks a booking from
+`REQUESTED` to an offer in a driver's hands — the ride critical-journey coverage R-3 moved into
+Phase 8 and which has never existed. `go test -tags=integration ./tests/` is the assertion; it
+needs Postgres **and** Redis, because the geo search is the first step of a real dispatch.
+
+## Mark Ready — an Order Becomes a Delivery — 2026-09-09
+
+Document 072's definition of done is "a merchant can process an order from acceptance to
+ready-for-pickup without admin intervention", and the merchant surface stopped at `PREPARING`.
+This closes it, and with it document 070's one link between two lifecycles: reaching
+`READY_FOR_PICKUP` produces a delivery Job whose pickup is the shop and whose dropoff is the
+address the customer gave at checkout.
+
+The order does not become the job and the job does not carry the order's states. A driver app has
+no business understanding `PREPARING`, and a merchant dashboard has no business understanding
+`ARRIVING` — which is exactly why `000009` gave orders and jobs separate status columns.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /merchant/orders/{id}/ready` | IMPLEMENTED | 10 | — | the last of document 072's five actions |
+| The job is `GROCERY`, `REQUESTED`, requested **by the customer** | IMPLEMENTED | 2 | — | a delivery exists for the person waiting at the other end, and every customer-facing view of a job is scoped by requester. REQUESTED means the dispatch round picks it up like any other job — nothing in dispatch needs to know this came from a shop |
+| Pickup is the shop, dropoff is the checkout address | IMPLEMENTED | 2 | — | the pickup stop carries the branch name and the merchant's phone: a driver at the door needs to know which shop and who to ask for |
+| **Both ends are checked before anything moves** | IMPLEMENTED | 3 | — | a shop with no coordinates and an order with no address are both refused *before* the transition, so a refusal leaves the order where the merchant can still act on it rather than stranded in READY_FOR_PICKUP |
+| **One order, one delivery** | IMPLEMENTED | 3 | — | compare-and-set on `orders.job_id`, so two dashboards tapping Mark Ready together still send one driver. Two drivers collecting one order is one driver who drove for nothing |
+| Marking ready twice answers with the first delivery | IMPLEMENTED | 1 | — | idempotent like Accept and Start Preparing |
+| **A stranded order is repaired by a retry** | IMPLEMENTED | 1 | — | the order moves first and the job is created second, because two stores cannot share one transaction. If the job creation fails, the order sits in the Ready queue with nobody coming and calling Mark Ready again finishes it. The other order round would leave an orphan job offered to a driver for an order that never became ready |
+| No job store, no Mark Ready | IMPLEMENTED | 1 | — | 503 rather than moving an order to a state no driver will ever be offered |
+| Ownership and merchant status still apply | IMPLEMENTED | 2 | — | another shop's order is 404; a suspended merchant is 403 |
+| **The whole grocery path, end to end** | IMPLEMENTED | 1 | — | placed with a destination → accepted → prepared → ready → dispatch round → offered to a grocery-capable driver nearby. Every step existed and was verified in isolation; none of them joined up |
+
+**What this makes reachable.** Phase 10 is recorded as VERIFIED and was, at the domain layer.
+Until this week a grocery order could not be created over HTTP, could not be answered by a
+merchant, had nowhere to be delivered, and could not become a delivery. All four are now closed,
+and the last one only works because dispatch is finally called at all.
+
+**Not done.** `Report Issue` — document 074's substitution flow — still has no route, so a picker
+who finds an empty shelf has no way to say so and BD-11's repricing has no trigger. The order's
+own lifecycle past `READY_FOR_PICKUP` (`PICKED_UP`, `DELIVERING`, `DELIVERED`) is still not
+driven by anything: the delivery job advances through its own states as the driver works, and
+nothing mirrors those onto the order. That is the next link, and document 070 is explicit that it
+should be an event rather than a shared column.
+
+**Verification.** Partial: no Go toolchain in this session. 10 handler tests and 4 integration
+tests are written and unverified. The integration tests need Postgres **and** Redis — the last
+one runs a real dispatch round, so it needs the geo pool.
+
+## A Driver Answers, a Customer Watches — 2026-09-09
+
+Two more surfaces that were built and unreachable, and they are the two either side of an
+accepted job.
+
+**A driver could not accept an offer.** `POST /driver/jobs/{id}/accept` and `/reject` existed in
+booking and answered **503 — "offer responses are served by the dispatch surface"** — and no
+dispatch surface was ever built. `dispatch.Store.Accept`, with its offer consumption, its
+reservation, its in-transaction eligibility re-check and its five race sentinels, had no route.
+So the moment the dispatch round started making offers, the driver's app could see one through
+`GET /driver/assignment` and had no way to say yes. The routes are now served by
+`dispatch.Handler` and removed from booking's, because two acceptance paths is how two drivers
+end up holding one job — and `ServeMux` would have panicked on the duplicate pattern anyway.
+
+**A customer could not see their driver.** `tracking.AuthorizeView`, the audit log it writes,
+`LiveSession` and `Current` were all built, tested and callerless, and `StartSession`/`EndSession`
+had no callers either — so document 102's scoping had nothing to scope, because no session was
+ever opened.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /driver/jobs/{id}/accept` · `/reject` | IMPLEMENTED | 8 | — | the paths document 035 gives and the driver app already calls; only the code behind them is new |
+| **Losing a race is a conflict, not a failure** | IMPLEMENTED | 1 | — | four sentinels, three messages: offer gone, another driver took it, and — distinct from both — your account cannot take jobs, because a suspended driver told "somebody was faster" would keep tapping |
+| Accepting leaves the geo pool and opens tracking | IMPLEMENTED | 1 | — | `Accept`'s own comment asks for the first ("cleared by the caller, which owns Redis"); the second is what authorises the customer to watch |
+| **Neither side effect can fail the acceptance** | IMPLEMENTED | 1 | — | both follow a committed transaction: a driver told the request failed would tap again on a job they already hold. Logged, not returned |
+| A lost race opens no tracking | IMPLEMENTED | 1 | — | |
+| A customer cannot answer an offer | IMPLEMENTED | 2 | — | role-gated, and an account with no driver record is refused before the store is touched |
+| `GET /jobs/{id}/track` | IMPLEMENTED | 7 | — | current position, heading and speed, scoped and audited |
+| **The scope is chosen by who is asking** | IMPLEMENTED | 1 | — | five cases asserted. The role passed to `AuthorizeView` is the one that justified the scope, not whichever the token listed first: an operator who is also a customer would otherwise be refused their own console |
+| A driver watching somebody else's trip is just a customer | IMPLEMENTED | 1 | — | `ScopeAssignedJob` only when the caller is the driver on that job |
+| **A frozen marker says so** | IMPLEMENTED | 1 | — | a position that has not moved for two minutes is a phone that lost signal, not a parked car. Returned and labelled `stale`, because the last known place is still useful |
+| An unknown position is not an untracked trip | IMPLEMENTED | 1 | — | 503, so a client keeps asking; a shift starting indoors is not a finished job |
+| An untracked job is a 404, and permission is not checked for it | IMPLEMENTED | 1 | — | the ordinary state of every job before acceptance and after it ends |
+| Somebody else's trip is 403, and the refusal is logged | IMPLEMENTED | 2 | — | the audit row exists before anyone asks who looked; the refusals are the interesting half |
+| A finished trip stops being watchable | IMPLEMENTED | 2 | — | `booking.Execute` closes the session when the job finishes and `Cancel` when it is cancelled — the only two ways a trip stops |
+
+**Where the session close sits, and why it cannot fail.** `booking.Service` takes tracking as an
+optional dependency and logs at error level if a session will not close. The job has already
+finished by then: a driver who completed a trip must not be told the command failed. That does
+mean an unclosed session leaves a trip watchable, and there is no sweep for it yet — recorded
+here rather than pretended away.
+
+**Not done.** `tracking.JobTrack` — the durable breadcrumb — still has no caller: this serves the
+live marker, and the trip's path belongs to a receipt or a replay, which is its own surface.
+Nothing pushes; a customer's app still polls this endpoint, and the realtime hub still has no
+transport.
+
+**Verification.** Partial: no Go toolchain in this session. 15 handler tests and 3 integration
+tests are written and unverified. The integration tests exercise document 102's authorization SQL
+against a real database for the first time.
+
+## Stock a Placed Order Holds — 2026-09-09
+
+`inventory` has carried the constraint that makes overselling impossible since `000009`:
+`reserved_quantity <= quantity`, enforced by the database rather than by whoever remembered to
+check. `Reserve` and `ReleaseReservation` were written and tested in Phase 10. **Nothing ever
+called either.** So two customers could both place an order for the last bag of rice, and one of
+them was going to be disappointed by a shop rather than by a screen — which is the failure
+document 069 exists to prevent and the one `ErrOutOfStock` was already mapped for.
+
+Reserving is only half a rule, so this slice is the whole of it: an order holds stock from the
+moment it is placed, gives it back on every path that ends it before pickup, and consumes it when
+the goods leave the shelf. Migration `000013` records which of those has happened, because
+releasing twice invents stock and consuming twice loses it.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| Placing an order reserves every line | IMPLEMENTED | 2 | — | in the transaction that places it, not after: doing it afterwards leaves a window where an order exists for goods somebody else is being sold |
+| **One statement for the whole cart** | IMPLEMENTED | n/a | — | a cart of twelve lines is one round trip, and cannot half succeed. The row count is compared against the line count, so a single unavailable line refuses the placement |
+| **The last bag of rice is sold once** | IMPLEMENTED | 1 | — | two customers, one unit: the second is refused with `ErrOutOfStock` and their cart is still a cart, so they can change it rather than owning an order for goods that do not exist |
+| A rejected order gives the stock back | IMPLEMENTED | 1 | — | the shop keeps the goods, so the shelf does |
+| An order nobody answered gives it back | IMPLEMENTED | n/a | — | the sweeper releases what each expired order held; ten minutes of held rice for an order that no longer exists is stock the next customer is told the shop lacks |
+| **Neither release nor consume can run twice** | IMPLEMENTED | 2 | — | compare-and-set on `stock_state`. Three releases in a row leave the shelf exactly where one did |
+| Picked goods leave the shelf | IMPLEMENTED | 2 | — | Mark Ready consumes: `quantity` falls and the hold ends. Held-forever would mean a shop whose count never changes, and a shelf empty in the aisle and full in the database sells the next customer nothing |
+| The retry path does not consume twice | IMPLEMENTED | 1 | — | Mark Ready is idempotent, and the second call skips the transition and the consumption with it |
+| **An uncounted shelf still reserves** | IMPLEMENTED | 1 | — | `quantity IS NULL` is a real shop — most kiryanas track availability, not counts. It holds and releases like any other, and its null count survives consumption |
+| A product that never reached a shelf cannot be ordered | IMPLEMENTED | 1 | — | no inventory row means no match, which is the same answer `Reserve` has always given and the same one the catalogue now shows |
+
+**A fixture change that is the point, not noise.** Every integration fixture that placed an order
+had to start stocking its product. `aShop` and `aShopOwnedBy` now write an availability row,
+because a shop with a catalogue and no shelf is a shop that cannot take an order — which is
+correct behaviour and would otherwise have failed a dozen tests about something else.
+
+**Not done.** A customer cannot cancel their own order — there is no endpoint, so the customer's
+release path does not exist yet even though the mechanism does. Consumption happens at
+`READY_FOR_PICKUP` rather than at handover to the driver; if an order is cancelled after being
+bagged, the goods are already counted as gone, which is arguably right and definitely
+undocumented. `ReleaseReservation`, the single-line method, is now the only one of the pair still
+uncalled — the order-level release supersedes it and it should probably go.
+
+**Verification.** Partial: no Go toolchain in this session. 2 handler tests and 7 integration
+tests are written and unverified. Run `make migrate-up`/`migrate-down` too — the schema goes to
+version 13 and back.
+
+## The Order Follows Its Delivery — 2026-09-10
+
+The grocery lifecycle stopped at `READY_FOR_PICKUP`. The delivery job moved through its own
+states as the driver worked — accepted, at the shop, on the way, delivered — and nothing told the
+order. A customer's shopping could arrive at their door while the order still said the shop had
+finished bagging it, and `PICKED_UP`, `DELIVERING` and `DELIVERED` were three states in a machine
+nothing could reach.
+
+Document 070 is explicit that the two lifecycles "communicate through explicit events", and this
+is that communication in one direction: a job tells the order it produced what happened to it.
+The order never pushes back, and nothing in the job's flow depends on the answer.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `DeliveryProgress` maps job states onto order states | IMPLEMENTED | 1 | — | ten job states asserted, and **seven of them move nothing**: the gaps are the decision |
+| **Arriving at the shop collects nothing** | IMPLEMENTED | 1 | — | `AT_PICKUP` deliberately does not move the order. One that said `PICKED_UP` then is an order the shop believes has left while the bags are on the counter |
+| The order walks rather than jumps | IMPLEMENTED | 2 | — | `IN_PROGRESS` takes it through `PICKED_UP` to `DELIVERING`, so "when did the driver collect it?" has a row to answer from |
+| A repeated event moves nothing | IMPLEMENTED | 2 | — | the driver's client retries; an order already delivered stays delivered and one ahead of the event does not go backwards |
+| **A ride moves no order** | IMPLEMENTED | 1 | — | every ride and every parcel takes this path and finds no order, which is the ordinary case rather than a failure |
+| A failed delivery fails the order | IMPLEMENTED | 2 | — | `FAILED`, not `CANCELLED`: the goods were picked and somebody has to deal with a bagged order nobody collected, and cancelled would suggest nothing was ever done |
+| An order that already ended is not ended again | IMPLEMENTED | 1 | — | |
+| **Following never fails the driver's command** | IMPLEMENTED | n/a | — | the job has already moved. A driver who tapped "delivered" must not be told it failed because a grocery order would not follow; logged at error level, because a customer looking at an order that says `PICKED_UP` after their shopping arrived has been told something false |
+| Booking stays generic over job type | IMPLEMENTED | n/a | — | the interface is declared in booking and implemented by merchant, so booking knows some jobs were made on something's behalf and nothing about shops |
+
+**Where this is weaker than document 070 asks.** The link is a synchronous interface call, not an
+event. The dispatch outbox exists (`PendingEvents`/`MarkPublished`) and still has no publisher;
+when it gets one, this is the first thing that should move onto it — a delivery that fails to
+notify its order would then retry instead of being logged.
+
+**Not done.** A customer still cannot cancel their own order, so the customer's stock-release path
+still does not exist. `Report Issue` (document 074) still has no route.
+
+**Verification.** Partial: no Go toolchain in this session. 6 handler tests and 2 integration
+tests are written and unverified; the integration pair walks a real order from ready to delivered
+and asserts the history rows behind it.
+
+## Report Issue — the Empty Shelf — 2026-09-10
+
+Document 072 lists five merchant actions and four were built. This is the fifth, and behind it
+the last substantial body of grocery logic that had been written, tested and left unreachable:
+`ResolveIssue`, `PriceDifference`, `RecordIssue` and `IssuesOf`. A picker who found an empty
+shelf had no way to say so, and BD-11 — resolved by the owner on 2026-08-28, "the customer pays
+the substitute's actual price, up or down" — had nothing that could trigger it.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /merchant/orders/{id}/items/{itemId}/issue` | IMPLEMENTED | 8 | — | document 072's Report Issue |
+| **The customer's preference decides, not the shop's proposal** | IMPLEMENTED | 3 | — | a substitute offered for a line marked `DO_NOT_ALLOW` becomes a removal. `ResolveIssue` owns that rule and the surface asks it rather than repeating it |
+| An `ALLOW` substitution applies at once | IMPLEMENTED | 1 | — | `AUTO_APPLIED`, the line becomes `SUBSTITUTED`, and BD-11 reprices it |
+| **An `ASK_ME` substitution changes nothing yet** | IMPLEMENTED | 2 | — | the line is untouched and so is the total. The customer owes what they ordered until they answer — and the price they are being asked about travels with the question |
+| A substitute needs a name and a price | IMPLEMENTED | 1 | — | "something else" is neither something a picker can bag nor something a customer can be charged for |
+| Only while somebody is picking | IMPLEMENTED | 1 | — | before `PREPARING` nobody has looked at the shelf; after it the order has left the shop |
+| `POST /orders/{id}/issues/{issueId}/decision` | IMPLEMENTED | 5 | — | the customer's answer, and only theirs: the point of `ASK_ME` is that the shop does not decide |
+| **Accepting charges the substitute's price** | IMPLEMENTED | 2 | — | asserted against a real total: two lines at 250 become 400 each, and the total follows |
+| **Declining loses the line rather than restoring it** | IMPLEMENTED | 2 | — | the shelf is empty, which is why they were asked |
+| Answering twice is refused | IMPLEMENTED | 2 | — | compare-and-set on `PENDING`. The merchant may have given up and removed the item while the customer thought about it; whoever got there first decided |
+| The original line is never rewritten | IMPLEMENTED | 1 | — | document 074. What was ordered stays readable after what was supplied changed — the substitute's price lives on the issue row and the total is recomputed from both |
+| Issues travel with the order, both sides | IMPLEMENTED | 2 | — | a picker sees what was already reported so they do not report it twice, and a customer sees the question on the screen they are already looking at |
+
+**Not done.** A customer still cannot cancel their own order. `IssuesOf` now carries the money on
+an issue, which it did not before — the previous query selected the substitute's name and not
+its price, so an issue was a question nobody could have answered.
+
+**Verification.** Partial: no Go toolchain in this session. 13 handler tests and 4 integration
+tests are written and unverified. The integration tests are the ones that matter here: they run
+BD-11's repricing through `recomputeTotal` against a real order rather than asserting what a stub
+was told.
+
+## A Customer Calls Off Their Own Order — 2026-09-10
+
+`CustomerCancellable` has existed since Phase 10 and nothing asked it. A customer who ordered by
+mistake, or whose plans changed, could do nothing about it: their order sat in the shop's New
+queue until a merchant answered or the ten-minute sweep cancelled it for them. It also left the
+one release path the reservation slice could not reach — stock held by an order only the customer
+wanted to end.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| `POST /orders/{id}/cancel` | IMPLEMENTED | 4 | — | their own order, and only theirs |
+| **Cancellation depends on state, and the state rule already existed** | IMPLEMENTED | 2 | — | `CART`, `PLACED`, `PAYMENT_PENDING`, `CONFIRMED` — asserted per state, and the five later states asserted refused |
+| **A refusal names who can help** | IMPLEMENTED | 1 | — | "already being prepared — contact support to cancel it". Once a picker has walked the aisles, calling it off wastes goods somebody handled, and that is a conversation rather than a tap |
+| No reason required | IMPLEMENTED | 1 | — | absent body, empty object and empty string all accepted. A customer who changed their mind owes nobody an explanation, and a required field collects "asdf" |
+| **The stock comes back with the cancellation** | IMPLEMENTED | 1 | — | in `CancelByCustomer`, not in a later pass: an order cancelled while holding a shop's last bag of rice keeps it out of circulation until somebody notices |
+| Who cancelled it is recorded | IMPLEMENTED | 1 | — | `cancelled_by = 'CUSTOMER'` and the reason. "The shop had no stock" and "I changed my mind" are different conversations with support and different numbers in a merchant's report |
+| An order being picked keeps its stock held | IMPLEMENTED | 1 | — | the refusal changes nothing, including the reservation |
+
+**Grocery is now reachable end to end.** Browse a shop, fill a cart, check out to an address,
+have it accepted, picked, have an empty shelf reported and answered, marked ready, dispatched,
+offered, accepted by a driver, tracked to the door, and delivered — or cancelled, by the
+customer, the merchant, or the clock, with the stock returning in each case.
+
+**Verification.** Partial: no Go toolchain in this session. 4 handler tests and 2 integration
+tests are written and unverified.
+
+## A Shop Can Run Its Counter — 2026-09-11
+
+`merchant-dashboard` had been a reserved directory holding one `.gitkeep` since Phase 1, while
+seven merchant endpoints were built behind it across three slices. Every grocery order in the
+system therefore depended on a merchant who had no way to answer it: accept, reject, pick, report
+an empty shelf and hand the bag to a driver were all reachable only by `curl`. Document 72's
+definition of done — "process an order from acceptance to ready-for-pickup without admin
+intervention" — was the one part of grocery that no amount of backend could satisfy.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The merchant's shapes joined the contract | IMPLEMENTED | 3 | — | `MerchantOrder`, `MerchantOrderItem`, `MerchantOrderIssue`, plus `MERCHANT_QUEUES`, `ISSUE_ACTIONS` and `GROCERY_ORDER_STATUSES`. A queue name is a value the client *sends*; hand-writing the list beside the generated types is the duplication ADR-007 exists to prevent |
+| Seven client methods over the same generated schemas | VERIFIED | n/a | YES | no hand-written response interface, no hand-written mapper — the drift closed on 2026-09-09 stayed closed |
+| **The login flow moved out of `@platform/mobile`** | VERIFIED | 3 | YES | it is not mobile-specific, and a web build cannot import a package that reaches for the device keystore. Now `@platform/auth`, re-exported from `@platform/mobile`, so neither mobile app changed a line. CAP-6: extract at the second consumer, which is this one |
+| Login, five queues, one order (`072`, `077`) | VERIFIED | 3 | YES | opens on New — the only queue where doing nothing is a decision, because BD-12 cancels an unanswered order |
+| **Accept is never offered on an order awaiting payment** | VERIFIED | 1 | YES | the server refuses it with "waiting on payment", which is a question for the payment flow and not something a shop can act on. Reject stays: a shop that cannot fill the order should not have to wait for a payment to succeed first |
+| The action list mirrors the service's guards | VERIFIED | 3 | YES | Accept from `PLACED`, Reject before preparation, Start Preparing from `CONFIRMED`, Mark Ready from `PREPARING`, Report Issue only while picking. `077` asks the UI to hide unavailable actions **and** the backend to enforce them; this is the display copy, never the authority |
+| **The screen renders the answer, never the expectation** | VERIFIED | 1 | YES | Accept on an order the customer cancelled a second earlier shows cancelled. Every action returns the order as the server now holds it and that replaces local state wholesale |
+| **A refusal survives the reload that follows it** | VERIFIED | 1 | YES | found by its own test: `reload` clears the error before fetching, so setting the message first left the shop with a silently corrected order and no idea why the tap did nothing. The order of two lines |
+| The countdown to the accept deadline | VERIFIED | 3 | YES | whole minutes, floored at zero — the sweeper is about to cancel it, and "0m" is urgent where "—" reads as no hurry. A local minute hand, so it is not only as fresh as the last poll |
+| Report Issue, with the customer's preference shown first | VERIFIED | n/a | YES | a picker sees "no substitutes" on the line *before* they hit the gap. The form proposes; what happens is `ResolveIssue`'s decision, and the reported list says which |
+| A substitute needs a name and a price before the button works | VERIFIED | n/a | YES | the server refuses it; the button refuses it first, without the round trip |
+| Rejection asks for the reason the server requires | VERIFIED | n/a | YES | |
+| Queues poll every fifteen seconds | VERIFIED | 1 | YES | quietly: no spinner on a background tick, and a poll stands down while the operator is paging |
+
+**A merchant can now work.** Sign in, watch New with its clock, accept or reject with a reason,
+start picking, report an empty shelf as a removal or a priced substitute, and mark ready — which
+creates the delivery job and hands the bag to a driver. Four of document 77's thirteen screens
+exist; the other nine are products, inventory, settlements and team, and none of them has a
+backend yet.
+
+**Not done.** Everything in `077` that is not orders: Products, Categories, Inventory, Stores,
+Operating Hours, Settlements, Reports, Settings, Team — no endpoint serves any of them. No
+WebSocket: `077` asks for one and the realtime hub still has no transport, so a fifteen-second
+poll stands in and is the first thing the socket should replace. No router, no TanStack Query, no
+Tailwind, no Playwright — ADR-011 records why, and what each of them is waiting for. An account
+that operates more than one shop is refused by the server with a message saying so, and this
+surface does not offer a picker.
+
+**Verification.** Real, and for the first time since 2026-09-09. `pnpm test` cannot run on this
+session's workspace VM — the repository's `rollup` binary is the host platform's — so the suite
+was run against the same sources in the session's own Linux container, with the `@platform/*`
+packages aliased to their source exactly as the workspace resolves them:
+
+```text
+✓ actions.test.ts   (12 tests)
+✓ useOrder.test.ts   (4 tests)
+✓ useQueue.test.ts   (5 tests)
+✓ env.test.ts        (3 tests)
+Test Files  4 passed (4)     Tests  24 passed (24)
+```
+
+The run also cost `useQueue.test.ts` a rewrite, and this is the honest part: the version merged
+in #26 **hangs** — it handed the hook a fresh client object on every render, and the workspace
+runs Vitest without globals, so Testing Library never registered the cleanup that would have
+stopped the polling interval. Two test files that had never been executed looked fine in review.
+
+It found two defects that review had not: the lost refusal message above, and a hook that spins
+forever when handed a fresh client object on every render — the second is a property of
+`useJobs` too, is not reachable from either app (the client is a module singleton), and is left
+alone rather than fixed inconsistently in one of the two.
+
+`tsc` is clean over the new app and all six `@platform` packages it touches, under the workspace's
+own `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`. Prettier is clean.
+
+**Unverified, and why.** No Go toolchain and no reachable module proxy in this session, so
+`make contracts` did not run: the three structs and three enums added to `contractgen` are
+compiled by nothing, and the six shapes appended to the two `generated.ts` files are a
+**predicted** emitter output, prettier-formatted as the Makefile formats it. `make contracts-check`
+is the assertion — if the prediction is wrong it fails and prints the difference. The new app is
+also not installed: `pnpm install` must run before `apps/merchant-dashboard` resolves its
+workspace dependencies, and `@platform/auth` has gained `react` and `@platform/api-client`.
+
+## The Customer's Half of the Shop — 2026-09-12
+
+The merchant console closed one half of the gap; this is the other. Nine customer endpoints —
+shops nearby, a catalogue, a cart, checkout to an address, the order, the substitution question
+and the cancellation — had been reachable only by `curl` since 2026-09-09, and `customer-mobile`
+had three screens, all of them about rides. Grocery was a backend with no customer.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The customer's shapes joined the contract | IMPLEMENTED | 1 | — | `Store`, `ProductVariant`, `Product`, `GroceryDelivery`, `GroceryOrderLine`, `GroceryOrder`, and `SUBSTITUTION_PREFERENCES` — a value the client *sends*, so hand-writing the list is the duplication ADR-007 prevents |
+| **`MerchantOrderIssue` became `OrderIssue`** | VERIFIED | 19 | YES | it is one row: the shop proposes on it and the customer answers on it. Two names for one shape is how two clients come to disagree about what it says — renamed now, while it had one consumer |
+| Nine client methods over the generated schemas | VERIFIED | 3 | YES | including the assertion that a total arriving as a string is refused rather than coerced: `"25000"` is how a total becomes `"2500025000"` the first time something adds to it |
+| `useGrocery` — the flow, not the screens | VERIFIED | 9 | YES | shops → cart → checkout → tracking, in shared TypeScript with no React Native import, so it is testable without rendering and identical on both platforms (document 48) |
+| **The running total is always the server's** | VERIFIED | 2 | YES | adding a line returns the cart, and the screen renders what came back. A client that added the line itself would be computing money |
+| Browse shops from a point the customer names | VERIFIED | 5 | YES | there is no location permission in this app — foreground location is the driver's feature — so "near me" is asked, not sensed, and the first screen opens with shops on it |
+| **A shut shop is listed and not enterable** | VERIFIED | 2 | YES | hiding it tells a customer their usual kiryana has vanished; letting them fill a cart in it ends in a rejection an hour later |
+| The substitution preference, per line, at the moment the line is added | VERIFIED | 2 | YES | document 74. It is the only moment the customer is thinking about *this* item, and `ASK_ME` is offered explicitly rather than inherited from the server's default |
+| Checkout captures the address the order cannot go without | VERIFIED | 4 | YES | `MarkReady` refuses an order with no destination. The geocoder's line is the starting point and the customer edits it — no geocoder knows a flat number, and a rider has to find the door |
+| **The substitution question sits above everything else** | VERIFIED | 4 | YES | a picker is standing at a shelf waiting for it. Both prices are shown, and BD-11's difference in both directions — a cheaper substitute is a refund, and saying so is the difference between a fair swap and a surprise |
+| Cancellation is offered exactly while the service allows it | VERIFIED | 3 | YES | mirrors `CustomerCancellable`. No reason is asked for: a customer who changed their mind owes nobody an explanation, and a required field collects "asdf" |
+| **`PlacePicker` left `BookingScreen`** | VERIFIED | 12 | YES | CAP-6's rule — extract at the second consumer, which is checkout. A ride needs a pickup and an order needs a door; both are "name this place". `BookingScreen`'s twelve tests pass unchanged |
+| Two services in one shell | VERIFIED | 1 | YES | a tab each, and neither is switchable away from once committed: a ride being tracked and an order being delivered are both happening in the world, and hiding one loses the only way back to it |
+
+**A customer can now shop.** Find a shop, fill a basket with a substitution rule per line, say
+where it goes and who to ring, watch it through accepted → picked → on its way → delivered,
+answer the shop when a shelf is empty, and call it off while that is still allowed.
+
+**Not done.** No payment: `PAYMENT_PENDING` is rendered and nothing in this app pays anything —
+Phase 11's provider adapter does not exist. No order history; `listGroceryOrders` is on the
+client and no screen asks for it, so closing the app loses sight of an order in flight. **Product
+variants are in the contract and ignored by the screen** — `addCartItem` takes a `variantId` and
+nothing sends one, so a shop selling rice in two sizes shows two prices and can only be sold the
+default. No map, and no push: the app polls its own order every eight seconds, which is the
+realtime transport's stand-in on this side exactly as the fifteen-second poll is on the
+merchant's.
+
+**Verification. `pnpm test` is not the only way to run these tests, and that changes what can be
+claimed.** Every mobile slice since 2026-08-29 recorded "no toolchain in this session". The
+JavaScript workspace's runner does fail here — the checked-in `rollup` binary is the host
+platform's — but **jest-expo runs on this VM unmodified**, and so does `tsc`, `eslint` and
+`prettier`. Run:
+
+```text
+customer-mobile   jest   12 suites   78 tests  (49 before this slice)
+driver-mobile     jest    8 suites   59 tests  — unchanged by the auth move
+api-client                           19 tests  (3 added, in the session container)
+packages + merchant-dashboard        74 tests  (in the session container)
+tsc               clean on all four apps and every @platform package
+eslint            clean
+```
+
+The screen tests found two of their own defects before review did: a `react-hooks` rule this
+workspace's ESLint config does not load (the disable comment was an error, and the effect was
+rewritten to name the stable action instead of suppressing the rule), and a shop list that
+re-queried on an unstable dependency.
+
+**Unverified, and why.** Still no Go toolchain and no reachable module proxy, so `make contracts`
+did not run: six structs and one enum added to `contractgen` are compiled by nothing, and their
+TypeScript is a **predicted** emitter output, prettier-formatted as the Makefile formats it.
+`make contracts-check` is the assertion. `pnpm install` has still not run in this session — the
+`@platform` links the new dependency edges need were made by hand here, which is enough to build
+and typecheck but is not a substitute for the lockfile being updated.
+
+## The Lockfile Described a Workspace That No Longer Existed — 2026-09-13
+
+Three application manifests changed between 2026-09-08 and 2026-09-12 — `merchant-dashboard`
+gained nineteen dependencies as it stopped being a reserved directory, `@platform/auth` took a
+dependency on `@platform/api-client`, and `@platform/mobile` gained one — and `pnpm-lock.yaml`
+was last written on 2026-09-08. The workspace built anyway, because the links those new edges
+need were made by hand on the machine doing the work.
+
+`.github/workflows/ci.yml` runs `pnpm install --frozen-lockfile`. That command exists to refuse
+exactly this state, so CI would have failed on its first green run — and so would any clone of
+this repository, for anybody.
+
+| Task | Status | Verified | Notes |
+|------|--------|----------|-------|
+| `pnpm-lock.yaml` regenerated | VERIFIED | YES | `pnpm install --lockfile-only`, pnpm 10.33.0, the version `packageManager` pins |
+| **Additive only** | VERIFIED | YES | 73 insertions, **zero deletions**: the three missing importers and their edges, and not one resolved version changed. Nothing anybody is running moves |
+| `--frozen-lockfile` passes | VERIFIED | YES | 265 ms, which is what CI's install step does before it installs anything |
+| `node_modules` untouched | VERIFIED | YES | `--lockfile-only` resolves and writes the lockfile and links nothing. This matters more than it sounds: the checked-out tree is shared with a macOS host, and a full install from Linux would replace every native binary in it with the wrong platform's |
+| Leftover drafts removed | VERIFIED | YES | `_to_delete/` held three `.tmp.md` drafts of an ADR and two status entries, all three of which had landed in `docs/` |
+
+**How this happened, and the general version of it.** A session that cannot run `pnpm install`
+can still make a workspace build by creating the `@platform` symlinks by hand, and the
+2026-09-12 entry says so plainly. What it could not do is update the lockfile, because the
+lockfile needs the registry and a resolver. The gap is invisible on the machine where the work
+happened and total everywhere else — which is the same shape as every other defect this week:
+something that works because one particular process is holding it up.
+
+**Verification.** Full, for once. Every command above was run and its output observed.
+
+## A Shop Can Sell the 2L — 2026-09-13
+
+`ProductVariant` reached the contract, the generated types and `@platform/api-client` on
+2026-09-12, and `addCartItem` has taken a `variantId` since the customer surface was built. The
+shop screen never offered one. A shop selling milk in two sizes showed the 1L's price on the
+product and could only ever be sold the default line, which the entry above recorded as not done.
+
+| Task | Status | Tests | Verified | Notes |
+|------|--------|-------|----------|-------|
+| The size a customer picked is the size that is sold | VERIFIED | 1 | YES | `variantId` reaches `addCartItem`, which has accepted it all along |
+| **The price shown is the chosen size's** | VERIFIED | 1 | YES | document 68 stores a *difference* rather than a price, so a screen rendering `product.price` shows the 2L at the 1L's money. Computed for display only — what the customer is charged is the line the server writes from its own catalogue |
+| A row opens on a size that is in stock | VERIFIED | 1 | YES | a shop whose 1L has run out opens on the 2L rather than on a selection that cannot be added |
+| **A size that has run out is shown, not hidden** | VERIFIED | 1 | YES | same rule as the shut shop: hiding it says the shop does not stock the 2L at all, when the truth is that it is out today. Shown, labelled, and not selectable |
+| Every size out means out of stock | VERIFIED | 1 | YES | the product's own flag is about the default line; a product whose every size has gone cannot be sold whatever it says |
+| **A shelf with no sizes is untouched** | VERIFIED | 2 | YES | most of a kiryana's shelf. The call it makes is byte-identical — three arguments, no variant — which the pre-existing test asserts and which caught the first version of this change sending a fourth `undefined` |
+
+**Verification.** Full. `jest-expo` on the workspace VM: 12 suites, **84 tests** (78 before), the
+six new ones in `ShopScreen`. `tsc --noEmit` clean, `eslint` clean, `prettier` clean.

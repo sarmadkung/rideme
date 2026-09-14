@@ -129,9 +129,17 @@ const styles = StyleSheet.create({
     marginBottom: tokens.space.md,
   },
   title: { color: tokens.color.text, fontSize: tokens.fontSize.lg, fontWeight: '600' },
-  detail: { color: tokens.color.textMuted, fontSize: tokens.fontSize.md, marginTop: tokens.space.xs },
+  detail: {
+    color: tokens.color.textMuted,
+    fontSize: tokens.fontSize.md,
+    marginTop: tokens.space.xs,
+  },
   meta: { color: tokens.color.success, fontSize: tokens.fontSize.sm, marginTop: tokens.space.sm },
-  error: { color: tokens.color.danger, fontSize: tokens.fontSize.sm, marginBottom: tokens.space.md },
+  error: {
+    color: tokens.color.danger,
+    fontSize: tokens.fontSize.sm,
+    marginBottom: tokens.space.md,
+  },
   button: {
     backgroundColor: tokens.color.accent,
     borderRadius: tokens.radius.md,

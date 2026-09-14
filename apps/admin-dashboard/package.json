@@ -16,7 +16,6 @@
     "@platform/auth": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/maps": "workspace:*",
-    "@platform/mobile": "workspace:*",
     "@platform/types": "workspace:*",
     "@platform/ui": "workspace:*",
     "@platform/validation": "workspace:*",

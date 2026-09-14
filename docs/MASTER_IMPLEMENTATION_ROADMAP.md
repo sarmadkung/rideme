@@ -1299,7 +1299,7 @@ Phase N — <name>
 | 9 — Delivery and cargo | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-10/BD-13/BD-16 mechanisms built, values unset |
 | 10 — Grocery and merchant | **VERIFIED** | 2026-08-28 | 2026-08-29 | none — BD-11 and BD-12 resolved 2026-08-28; sweeper auto-cancels unanswered orders |
 | 11 — Payments and financial | **VERIFIED** | 2026-08-28 | 2026-08-29 | BD-05 resolved (flat 20%); BD-06/BD-09 open but block nothing built |
-| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | customer booking and driver trip flows built and tested; **no map, no real location source, no push, no offline queue, no earnings**; BD-17/18/19 unmeasured |
+| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | booking, trip, place search, foreground location and earnings built and tested; offline queue built but wired to nothing (B-7/BD-21); **no map, no push**; BD-17/18/19 unmeasured |
 | 13 — Operational dashboards | **PARTIAL** | 2026-08-28 | — | admin job list only; **merchant dashboard is an empty directory**; support and finance consoles outstanding |
 | 14 — Production infrastructure | **PARTIAL** | 2026-08-28 | — | CI contract gate built; **container does not build**; cloud needs credentials |
 | 15 — Hardening and release | **PARTIAL** | 2026-08-28 | — | full local verification run; load/E2E/remote CI outstanding |

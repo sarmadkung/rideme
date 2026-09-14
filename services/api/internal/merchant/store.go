@@ -71,7 +71,9 @@ func (s *Store) SetConfig(ctx context.Context, c Config) error {
 const orderColumns = `id::text, merchant_id::text, COALESCE(store_id::text, ''),
 	customer_user_id::text, status, COALESCE(job_id::text, ''), currency, items_total_minor,
 	accepted_at, preparation_started_at, ready_at, expected_ready_at, accept_deadline,
-	COALESCE(rejection_reason, ''), created_at, updated_at`
+	COALESCE(rejection_reason, ''), created_at, updated_at,
+	COALESCE(delivery_address, ''), COALESCE(ST_Y(delivery_location::geometry), 0),
+	COALESCE(ST_X(delivery_location::geometry), 0), COALESCE(delivery_notes, '')`
 
 func scanOrder(row pgx.Row) (Order, error) {
 	var o Order
@@ -79,7 +81,8 @@ func scanOrder(row pgx.Row) (Order, error) {
 	var totalMinor int64
 	err := row.Scan(&o.ID, &o.MerchantID, &o.StoreID, &o.CustomerUserID, &o.Status, &o.JobID,
 		&currency, &totalMinor, &o.AcceptedAt, &o.PreparationStart, &o.ReadyAt,
-		&o.ExpectedReadyAt, &o.AcceptDeadline, &o.RejectionReason, &o.CreatedAt, &o.UpdatedAt)
+		&o.ExpectedReadyAt, &o.AcceptDeadline, &o.RejectionReason, &o.CreatedAt, &o.UpdatedAt,
+		&o.Delivery.Address, &o.Delivery.Lat, &o.Delivery.Lon, &o.Delivery.Notes)
 	if err != nil {
 		return Order{}, err
 	}
@@ -199,14 +202,22 @@ func recomputeTotal(ctx context.Context, tx pgx.Tx, orderID string) error {
 	return nil
 }
 
-// Place moves a cart to PLACED and sets the acceptance deadline.
+// Place moves a cart to PLACED, recording where it is going and when the
+// merchant must answer by.
 //
 // It refuses when no timeout is configured. BD-12 is unresolved, and the
 // business decision register asks for "an explicit unset state that fails
 // loudly rather than defaulting silently" — a guessed timeout would either
 // auto-cancel orders merchants were about to accept, or leave customers
 // waiting indefinitely.
-func (s *Store) Place(ctx context.Context, orderID string, now time.Time) (Order, error) {
+func (s *Store) Place(ctx context.Context, orderID string, to Delivery, now time.Time) (Order, error) {
+	// The destination is written by the statement that places the order, not
+	// by a call beside it. Two statements can be interrupted between, and an
+	// order that is PLACED with nowhere to go is one the merchant will accept
+	// and nobody can deliver.
+	if !to.Valid() {
+		return Order{}, ErrNoDestination
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Order{}, fmt.Errorf("begin: %w", err)
@@ -221,7 +232,7 @@ func (s *Store) Place(ctx context.Context, orderID string, now time.Time) (Order
 		return Order{}, fmt.Errorf("load order: %w", err)
 	}
 	if itemCount == 0 {
-		return Order{}, errors.New("merchant: an empty cart cannot be placed")
+		return Order{}, ErrEmptyCart
 	}
 
 	// The merchant's own window if it set one, otherwise the platform default
@@ -245,10 +256,24 @@ func (s *Store) Place(ctx context.Context, orderID string, now time.Time) (Order
 	}
 	deadline := now.Add(time.Duration(*timeoutSeconds) * time.Second)
 
+	// Hold the stock in the same transaction that places the order. Document
+	// 069 asks for atomic reservation, and doing it afterwards means a window
+	// where an order exists for goods somebody else is also being sold.
+	if err := reserveOrderStock(ctx, tx, orderID); err != nil {
+		return Order{}, err
+	}
+
 	order, err := scanOrder(tx.QueryRow(ctx,
-		`UPDATE orders SET status = 'PLACED', accept_deadline = $2, updated_at = now()
+		`UPDATE orders SET status = 'PLACED', accept_deadline = $2,
+		                   delivery_address = $3,
+		                   delivery_location = ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography,
+		                   delivery_notes = NULLIF($6, ''),
+		                   stock_state = 'RESERVED',
+		                   updated_at = now()
 		  WHERE id = $1 AND status = 'CART' RETURNING `+orderColumns,
-		orderID, deadline))
+		orderID, deadline, to.Address,
+		to.Lon, to.Lat, // PostGIS takes x=lon, y=lat
+		to.Notes))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrStale
 	}
@@ -319,6 +344,12 @@ func (s *Store) Reject(ctx context.Context, orderID string, from OrderStatus, ac
 	if _, err := s.pool.Exec(ctx,
 		`UPDATE orders SET rejection_reason = $2 WHERE id = $1`, orderID, reason); err != nil {
 		return Order{}, fmt.Errorf("record rejection reason: %w", err)
+	}
+	// The shop keeps the goods, so the shelf gets them back. A rejection that
+	// left the stock held would take a bag of rice out of circulation for an
+	// order nobody is preparing.
+	if err := s.ReleaseOrderStock(ctx, orderID); err != nil {
+		return Order{}, err
 	}
 	return order, nil
 }
@@ -482,9 +513,12 @@ func (s *Store) RecordIssue(ctx context.Context, issue Issue, itemStatus string)
 // IssuesOf returns an order's recorded item problems.
 func (s *Store) IssuesOf(ctx context.Context, orderID string) ([]Issue, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text, order_id::text, order_item_id::text, reason, action,
-		        COALESCE(substitute_name, ''), resolution, created_at
-		   FROM order_item_issues WHERE order_id = $1 ORDER BY created_at`, orderID)
+		`SELECT i.id::text, i.order_id::text, i.order_item_id::text, i.reason, i.action,
+		        COALESCE(i.substitute_name, ''), i.substitute_unit_price_minor,
+		        i.price_difference_minor, i.resolution, i.created_at, o.currency
+		   FROM order_item_issues i
+		   JOIN orders o ON o.id = i.order_id
+		  WHERE i.order_id = $1 ORDER BY i.created_at`, orderID)
 	if err != nil {
 		return nil, fmt.Errorf("load item issues: %w", err)
 	}
@@ -492,14 +526,90 @@ func (s *Store) IssuesOf(ctx context.Context, orderID string) ([]Issue, error) {
 
 	var out []Issue
 	for rows.Next() {
-		var issue Issue
-		if err := rows.Scan(&issue.ID, &issue.OrderID, &issue.OrderItemID, &issue.Reason,
-			&issue.Action, &issue.SubstituteName, &issue.Resolution, &issue.CreatedAt); err != nil {
+		issue, err := scanIssue(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, issue)
 	}
 	return out, rows.Err()
+}
+
+// scanIssue reads an issue and the money on it.
+//
+// The prices are what a customer is being asked about — "we have this instead,
+// it costs this much" — so an issue without them is a question nobody can
+// answer.
+func scanIssue(row pgx.Row) (Issue, error) {
+	var issue Issue
+	var substituteMinor, differenceMinor *int64
+	var currency money.Currency
+	if err := row.Scan(&issue.ID, &issue.OrderID, &issue.OrderItemID, &issue.Reason,
+		&issue.Action, &issue.SubstituteName, &substituteMinor, &differenceMinor,
+		&issue.Resolution, &issue.CreatedAt, &currency); err != nil {
+		return Issue{}, err
+	}
+	if substituteMinor != nil {
+		amount, err := money.New(*substituteMinor, currency)
+		if err != nil {
+			return Issue{}, err
+		}
+		issue.SubstitutePrice = &amount
+	}
+	if differenceMinor != nil {
+		amount, err := money.New(*differenceMinor, currency)
+		if err != nil {
+			return Issue{}, err
+		}
+		issue.PriceDifference = &amount
+	}
+	return issue, nil
+}
+
+// SettleIssue records the customer's answer to a substitution.
+//
+// Compare-and-set on PENDING, so a customer tapping twice — or tapping as the
+// merchant gives up and removes the item — settles it once. BD-11 only reaches
+// the total through this: an unanswered substitution changes nothing, and an
+// accepted one is charged at what was actually supplied.
+func (s *Store) SettleIssue(ctx context.Context, orderID, issueID, resolution,
+	itemStatus string) (Issue, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Issue{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	issue, err := scanIssue(tx.QueryRow(ctx,
+		`UPDATE order_item_issues i SET resolution = $3
+		   FROM orders o
+		  WHERE i.id = $2 AND i.order_id = $1 AND o.id = i.order_id AND i.resolution = 'PENDING'
+		 RETURNING i.id::text, i.order_id::text, i.order_item_id::text, i.reason, i.action,
+		           COALESCE(i.substitute_name, ''), i.substitute_unit_price_minor,
+		           i.price_difference_minor, i.resolution, i.created_at, o.currency`,
+		orderID, issueID, resolution))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Issue{}, ErrIssueSettled
+	}
+	if err != nil {
+		return Issue{}, fmt.Errorf("settle issue: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE order_items SET status = $2 WHERE id = $1`, issue.OrderItemID, itemStatus); err != nil {
+		return Issue{}, fmt.Errorf("update item status: %w", err)
+	}
+	// The total is read from the lines and the settled substitutions, so it
+	// has to be recomputed here rather than adjusted: document 74 forbids
+	// mutating the original line, and the substitute's price lives on the
+	// issue row this statement just settled.
+	if err := recomputeTotal(ctx, tx, orderID); err != nil {
+		return Issue{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Issue{}, fmt.Errorf("commit: %w", err)
+	}
+	return issue, nil
 }
 
 // --- inventory (document 69) -------------------------------------------------
@@ -652,4 +762,268 @@ func (s *Store) ExpireOverdue(ctx context.Context, now time.Time, limit int) ([]
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	return expired, nil
+}
+
+// --- the merchant's own view -------------------------------------------------
+
+// MerchantByOwner finds the merchant a signed-in owner operates.
+//
+// It refuses rather than guesses when an owner has more than one. The column
+// is indexed, not unique, so two shops under one account is representable, and
+// document 76's OWNER/MANAGER/STAFF roles — which is where "which shop am I
+// acting for" belongs — are not built. Showing one shop's queue to an owner who
+// meant the other is a merchant accepting an order they cannot fulfil.
+func (s *Store) MerchantByOwner(ctx context.Context, userID string) (Merchant, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text, owner_user_id::text, name, status,
+		        COALESCE(phone, ''), COALESCE(address, ''), created_at
+		   FROM merchants WHERE owner_user_id = $1 ORDER BY created_at LIMIT 2`, userID)
+	if err != nil {
+		return Merchant{}, fmt.Errorf("load merchant: %w", err)
+	}
+	defer rows.Close()
+
+	var found []Merchant
+	for rows.Next() {
+		var m Merchant
+		if err := rows.Scan(&m.ID, &m.OwnerUserID, &m.Name, &m.Status,
+			&m.Phone, &m.Address, &m.CreatedAt); err != nil {
+			return Merchant{}, fmt.Errorf("scan merchant: %w", err)
+		}
+		found = append(found, m)
+	}
+	if err := rows.Err(); err != nil {
+		return Merchant{}, fmt.Errorf("load merchant: %w", err)
+	}
+	switch len(found) {
+	case 0:
+		return Merchant{}, ErrNotFound
+	case 1:
+		return found[0], nil
+	default:
+		return Merchant{}, ErrManyMerchants
+	}
+}
+
+// OrdersFor lists one merchant's orders in the given states, newest first.
+//
+// Deliberately without items: a queue of thirty orders would be thirty-one
+// queries, and a queue view shows counts and deadlines rather than lines. The
+// detail endpoint loads the lines for the one order a merchant opened.
+//
+// (merchant_id, status, created_at DESC) is indexed for exactly this.
+func (s *Store) OrdersFor(ctx context.Context, merchantID string, statuses []OrderStatus,
+	before *time.Time, limit int) ([]Order, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	wanted := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		wanted = append(wanted, string(status))
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+orderColumns+`
+		   FROM orders
+		  WHERE merchant_id = $1
+		    AND status = ANY($2::text[])
+		    AND ($3::timestamptz IS NULL OR created_at < $3)
+		  ORDER BY created_at DESC
+		  LIMIT $4`, merchantID, wanted, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list merchant orders: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Order
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan merchant order: %w", err)
+		}
+		out = append(out, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list merchant orders: %w", err)
+	}
+	return out, nil
+}
+
+// AttachJob links the delivery job an order produced.
+//
+// Compare-and-set on the column being empty, so a second call cannot replace
+// the job a first one created — which would strand a driver holding a job the
+// order no longer points at.
+func (s *Store) AttachJob(ctx context.Context, orderID, jobID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE orders SET job_id = $2, updated_at = now()
+		  WHERE id = $1 AND job_id IS NULL`, orderID, jobID)
+	if err != nil {
+		return fmt.Errorf("attach job: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrJobAlreadyAttached
+	}
+	return nil
+}
+
+
+// --- inventory held by an order (document 069) -------------------------------
+
+// reserveOrderStock holds every line of an order against the store's inventory.
+//
+// One statement for the whole cart rather than one per line: a cart of twelve
+// items is one round trip, and — more importantly — one statement cannot half
+// succeed. The `reserved_quantity + i.quantity <= quantity` predicate is the
+// same one Reserve uses, and the table's own CHECK is behind it, so two
+// customers reaching for the last bag of rice cannot both be told yes.
+//
+// A line whose store holds no inventory row for it does not match, which is
+// how a product nobody stocked is refused rather than silently sold.
+func reserveOrderStock(ctx context.Context, tx pgx.Tx, orderID string) error {
+	var lines int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM order_items WHERE order_id = $1`, orderID).Scan(&lines); err != nil {
+		return fmt.Errorf("count order lines: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE inventory inv
+		    SET reserved_quantity = inv.reserved_quantity + i.quantity, updated_at = now()
+		   FROM order_items i
+		   JOIN orders o ON o.id = i.order_id
+		  WHERE i.order_id = $1
+		    AND inv.store_id = o.store_id
+		    AND inv.product_id = i.product_id
+		    AND inv.variant_id IS NOT DISTINCT FROM i.variant_id
+		    AND inv.available
+		    AND (inv.quantity IS NULL OR inv.reserved_quantity + i.quantity <= inv.quantity)`,
+		orderID)
+	if err != nil {
+		return fmt.Errorf("reserve order stock: %w", err)
+	}
+	if int(tag.RowsAffected()) != lines {
+		// Some line could not be held. The caller's transaction rolls back, so
+		// the ones that could are not left reserved for an order that never
+		// existed.
+		return ErrOutOfStock
+	}
+	return nil
+}
+
+// ReleaseOrderStock hands back what a cancelled order was holding.
+//
+// Compare-and-set on the order's stock state, so a release cannot run twice:
+// the second one would invent stock the shop does not have. Cancelling an order
+// that never reserved anything is not an error — it is most orders, since
+// nothing before this held stock at all.
+func (s *Store) ReleaseOrderStock(ctx context.Context, orderID string) error {
+	return s.settleOrderStock(ctx, orderID, "RELEASED")
+}
+
+// ConsumeOrderStock turns a reservation into stock that has gone.
+//
+// Called when the goods leave the shelf. Reserved-but-never-consumed would mean
+// a shop's stock level never falls, and a shelf that is empty in the aisle and
+// full in the database is how the next customer is sold nothing.
+func (s *Store) ConsumeOrderStock(ctx context.Context, orderID string) error {
+	return s.settleOrderStock(ctx, orderID, "CONSUMED")
+}
+
+func (s *Store) settleOrderStock(ctx context.Context, orderID, to string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE orders SET stock_state = $2, updated_at = now()
+		  WHERE id = $1 AND stock_state = 'RESERVED'`, orderID, to)
+	if err != nil {
+		return fmt.Errorf("settle order stock: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		// Nothing was being held, or somebody settled it first. Both are
+		// ordinary and neither should undo the caller's work.
+		return nil
+	}
+
+	// RELEASED gives the reservation back; CONSUMED takes the goods with it.
+	// The quantity column is nullable — a shop that tracks availability but not
+	// counts — and COALESCE keeps that shop's rows untouched by the subtraction
+	// while still clearing the hold.
+	query := `UPDATE inventory inv
+	             SET reserved_quantity = GREATEST(0, inv.reserved_quantity - i.quantity),
+	                 updated_at = now()
+	            FROM order_items i
+	           WHERE i.order_id = $1
+	             AND inv.store_id = (SELECT store_id FROM orders WHERE id = $1)
+	             AND inv.product_id = i.product_id
+	             AND inv.variant_id IS NOT DISTINCT FROM i.variant_id`
+	if to == "CONSUMED" {
+		query = `UPDATE inventory inv
+		            SET reserved_quantity = GREATEST(0, inv.reserved_quantity - i.quantity),
+		                quantity = CASE WHEN inv.quantity IS NULL THEN NULL
+		                                ELSE GREATEST(0, inv.quantity - i.quantity) END,
+		                updated_at = now()
+		           FROM order_items i
+		          WHERE i.order_id = $1
+		            AND inv.store_id = (SELECT store_id FROM orders WHERE id = $1)
+		            AND inv.product_id = i.product_id
+		            AND inv.variant_id IS NOT DISTINCT FROM i.variant_id`
+	}
+	if _, err := tx.Exec(ctx, query, orderID); err != nil {
+		return fmt.Errorf("settle inventory: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// OrderByJobID finds the order a delivery job was created for.
+//
+// The link document 070 describes, read from the other end: the job knows
+// nothing about the order, so following a delivery back to the shop that
+// produced it starts here.
+func (s *Store) OrderByJobID(ctx context.Context, jobID string) (Order, error) {
+	order, err := scanOrder(s.pool.QueryRow(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE job_id = $1`, jobID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Order{}, ErrNotFound
+	}
+	if err != nil {
+		return Order{}, fmt.Errorf("load order by job: %w", err)
+	}
+	return order, nil
+}
+
+// CancelByCustomer ends an order at the customer's request.
+//
+// Distinct from Reject, which is the shop declining: the same terminal state
+// reached for a different reason, recorded as such, because "the shop had no
+// stock" and "I changed my mind" are different conversations with support and
+// different numbers in a merchant's report.
+//
+// The stock comes back here rather than in a later pass. An order cancelled
+// while still holding a shop's last bag of rice keeps it out of circulation
+// for as long as nobody notices.
+func (s *Store) CancelByCustomer(ctx context.Context, orderID string, from OrderStatus,
+	reason string) (Order, error) {
+	if !CustomerCancellable(from) {
+		return Order{}, fmt.Errorf("%w: an order that is %s cannot be cancelled by the customer",
+			ErrNotCancellable, from)
+	}
+	order, err := s.Transition(ctx, orderID, from, StatusCancelled, "CUSTOMER", "",
+		map[string]any{"reason": reason, "cancelled_by": "customer"})
+	if err != nil {
+		return Order{}, err
+	}
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE orders SET cancelled_by = 'CUSTOMER', cancelled_reason = NULLIF($2, '')
+		  WHERE id = $1`, orderID, reason); err != nil {
+		return Order{}, fmt.Errorf("record cancellation: %w", err)
+	}
+	if err := s.ReleaseOrderStock(ctx, orderID); err != nil {
+		return Order{}, err
+	}
+	return order, nil
 }

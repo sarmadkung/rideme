@@ -52,6 +52,9 @@ type Config struct {
 
 	OTPProvider string
 	MapProvider string
+	// MapsAPIKey authenticates the routing provider. Secret: it travels as a
+	// query parameter, so a request URL built from it is a credential.
+	MapsAPIKey string
 
 	// OTPBypass skips the code-correctness check in VerifyOTP so local
 	// testing never has to read a code out of the server log. Everything
@@ -96,6 +99,7 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 		JWTSecret:   l.required("JWT_SECRET"),
 		OTPProvider: l.optional("OTP_PROVIDER", "noop"),
 		MapProvider: l.optional("MAP_PROVIDER", "noop"),
+		MapsAPIKey:  l.optional("MAPS_API_KEY", ""),
 		OTPBypass:   l.optionalBool("AUTH_OTP_BYPASS", false),
 		// The admin dashboard's default local port (document 24's port table).
 		// Harmless to keep as a default in every environment: it only ever
@@ -117,6 +121,20 @@ func Load(lookup func(string) (string, bool)) (*Config, error) {
 	}
 	if cfg.OTPBypass && cfg.Env != EnvDevelopment {
 		l.problem("AUTH_OTP_BYPASS must not be set outside development (got APP_ENV=%q)", cfg.Env)
+	}
+
+	switch cfg.MapProvider {
+	case "noop":
+	case "google":
+		// Selecting a provider without the credential it needs would start the
+		// service in a state where every route silently falls back to a
+		// straight-line estimate, which is exactly the outcome MAP_PROVIDER was
+		// set to avoid.
+		if strings.TrimSpace(cfg.MapsAPIKey) == "" {
+			l.problem("MAP_PROVIDER is google but MAPS_API_KEY is empty")
+		}
+	default:
+		l.problem("MAP_PROVIDER must be noop or google (got %q)", cfg.MapProvider)
 	}
 
 	if len(l.problems) > 0 {

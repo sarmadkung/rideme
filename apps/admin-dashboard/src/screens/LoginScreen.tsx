@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { tokens } from '@platform/ui';
-import type { AuthActions, AuthState } from '@platform/mobile/useAuth';
+import type { AuthActions, AuthState } from '@platform/auth';
 
 /**
  * Phone-OTP sign-in (document 028) — the same flow every RideMe surface uses,
  * including this one. An admin is a regular user who has been granted the
  * ADMIN or SUPER_ADMIN role; there is no separate admin login mechanism.
  *
- * The flow itself lives in @platform/mobile's useAuth, unchanged: it is pure
+ * The flow itself lives in @platform/auth's useAuth, unchanged: it is pure
  * React with no React Native dependency, so the web dashboard reuses it
  * directly rather than re-implementing phone-OTP a third time.
  */

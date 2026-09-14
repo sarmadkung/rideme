@@ -73,8 +73,31 @@ func (s *Sweeper) Once(ctx context.Context) {
 		} else if len(expired) > 0 {
 			s.logger.Info("orders expired unanswered", slog.Int("count", len(expired)))
 		}
+		// An order nobody answered was holding stock from the moment it was
+		// placed. Ten minutes of held rice for an order that no longer exists
+		// is stock the next customer is told the shop does not have.
+		for _, order := range expired {
+			if err := s.orders.ReleaseOrderStock(ctx, order.ID); err != nil {
+				s.logger.Error("could not release stock for an expired order",
+					slog.String("order_id", order.ID), slog.String("error", err.Error()))
+			}
+		}
 	}
 	if s.dispatch != nil {
+		// Drive dispatch before expiring searches. A job that has just become
+		// due for its next ring must get that ring on this pass; expiring
+		// first would end searches that still had attempts left in them.
+		round, err := s.dispatch.Round(ctx, s.batch)
+		if err != nil {
+			s.logger.Error("dispatch round failed", slog.String("error", err.Error()))
+		} else if round.Considered > 0 {
+			s.logger.Info("dispatch round",
+				slog.Int("considered", round.Considered),
+				slog.Int("started", round.Started),
+				slog.Int("offered", round.Offered),
+				slog.Int64("offers_released", round.Released))
+		}
+
 		expired, err := s.dispatch.Sweep(ctx, s.batch)
 		if err != nil {
 			s.logger.Error("dispatch search sweep failed", slog.String("error", err.Error()))

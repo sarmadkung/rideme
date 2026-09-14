@@ -1,0 +1,592 @@
+package merchant
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/sarmadkung/rideme/services/api/internal/jobs"
+	"github.com/sarmadkung/rideme/services/api/pkg/money"
+)
+
+// StatusActive is the only merchant status that may act on an order.
+const StatusActive = "ACTIVE"
+
+// MaxRejectionReason bounds the reason a merchant types.
+const MaxRejectionReason = 500
+
+// OrderStore is what the merchant surface needs from persistence.
+//
+// An interface rather than *Store so the handler's behaviour — ownership,
+// idempotency, which states each action is legal from — is testable without a
+// database. *Store satisfies it.
+type OrderStore interface {
+	MerchantByOwner(ctx context.Context, userID string) (Merchant, error)
+	OrdersFor(ctx context.Context, merchantID string, statuses []OrderStatus,
+		before *time.Time, limit int) ([]Order, error)
+	OrderByID(ctx context.Context, id string) (Order, error)
+	Transition(ctx context.Context, orderID string, from, to OrderStatus,
+		actorType, actorID string, metadata map[string]any) (Order, error)
+	Reject(ctx context.Context, orderID string, from OrderStatus, actorID, reason string) (Order, error)
+	OutletByID(ctx context.Context, id string) (Outlet, error)
+	AttachJob(ctx context.Context, orderID, jobID string) error
+	ConsumeOrderStock(ctx context.Context, orderID string) error
+	OrderByJobID(ctx context.Context, jobID string) (Order, error)
+	RecordIssue(ctx context.Context, issue Issue, itemStatus string) (Issue, error)
+	SettleIssue(ctx context.Context, orderID, issueID, resolution, itemStatus string) (Issue, error)
+	IssuesOf(ctx context.Context, orderID string) ([]Issue, error)
+}
+
+// JobCreator is the delivery half of document 070's two lifecycles.
+//
+// An order produces a Job; it does not become one. They are separate
+// lifecycles with one link, so this is the whole of the coupling: the merchant
+// module knows how to ask for a delivery and nothing about how one is
+// dispatched. *jobs.Store satisfies it.
+type JobCreator interface {
+	Create(ctx context.Context, job jobs.Job, actor jobs.Actor) (jobs.Job, error)
+}
+
+// Service is the merchant's own view of its orders (document 072).
+type Service struct {
+	store OrderStore
+	jobs  JobCreator
+}
+
+func NewService(store OrderStore) *Service { return &Service{store: store} }
+
+// WithJobs attaches the job store, which is what lets an order be handed to a
+// driver.
+//
+// Optional, and nil is a legitimate state: without it Mark Ready refuses
+// rather than moving an order to READY_FOR_PICKUP that no driver will ever be
+// offered. An order stranded in a state with no delivery is worse than one a
+// merchant cannot mark ready yet.
+func (s *Service) WithJobs(creator JobCreator) *Service {
+	s.jobs = creator
+	return s
+}
+
+// Queue is one of document 072's five dashboard queues.
+type Queue string
+
+const (
+	QueueNew       Queue = "new"
+	QueuePreparing Queue = "preparing"
+	QueueReady     Queue = "ready"
+	QueueCompleted Queue = "completed"
+	QueueCancelled Queue = "cancelled"
+)
+
+// Statuses maps a queue onto the lifecycle states it holds.
+//
+// Eleven states into five queues, so the mapping is a decision rather than a
+// translation. Two are worth stating:
+//
+//   - CONFIRMED sits in Preparing, not New. Once a merchant has accepted, the
+//     order is no longer a question waiting on them, and leaving it in New
+//     means the queue that must be watched is never empty.
+//   - PICKED_UP and DELIVERING sit in Completed. They are in a driver's hands;
+//     from the shop's side the work is done. The customer's view of the same
+//     order is "on its way", and that is a different screen.
+func (q Queue) Statuses() ([]OrderStatus, bool) {
+	switch q {
+	case QueueNew:
+		// PAYMENT_PENDING is here to be seen, not to be accepted: it is a
+		// question for the payment flow, and Accept refuses it.
+		return []OrderStatus{StatusPlaced, StatusPaymentPending}, true
+	case QueuePreparing:
+		return []OrderStatus{StatusConfirmed, StatusPreparing}, true
+	case QueueReady:
+		return []OrderStatus{StatusReadyForPickup}, true
+	case QueueCompleted:
+		return []OrderStatus{StatusPickedUp, StatusDelivering, StatusDelivered}, true
+	case QueueCancelled:
+		return []OrderStatus{StatusCancelled, StatusFailed}, true
+	default:
+		return nil, false
+	}
+}
+
+// Queue lists the orders in one queue for the merchant this user operates.
+func (s *Service) Queue(ctx context.Context, userID string, queue Queue,
+	before *time.Time, limit int) ([]Order, error) {
+	statuses, ok := queue.Statuses()
+	if !ok {
+		return nil, ErrNoSuchQueue
+	}
+	m, err := s.merchantOf(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.OrdersFor(ctx, m.ID, statuses, before, limit)
+}
+
+// Order loads one of this merchant's orders, with its lines.
+func (s *Service) Order(ctx context.Context, userID, orderID string) (Order, error) {
+	_, order, err := s.owned(ctx, userID, orderID)
+	return order, err
+}
+
+// Accept confirms an order (document 072's Accept).
+//
+// Idempotent: a merchant who taps Accept twice on a bad connection has
+// answered once, and the second tap must not tell them something went wrong.
+func (s *Service) Accept(ctx context.Context, userID, orderID string) (Order, error) {
+	m, order, err := s.owned(ctx, userID, orderID)
+	if err != nil {
+		return Order{}, err
+	}
+	if err := active(m); err != nil {
+		return Order{}, err
+	}
+	if order.Status == StatusConfirmed {
+		return order, nil
+	}
+	if order.Status != StatusPlaced {
+		return Order{}, unacceptable(order.Status)
+	}
+	return s.store.Transition(ctx, order.ID, StatusPlaced, StatusConfirmed, "MERCHANT", m.ID, nil)
+}
+
+// Reject declines an order with a reason (document 072's Reject).
+//
+// The reason is required. Document 070 allows rejection only before
+// preparation, and a rejection with no reason is one the customer cannot act
+// on and support cannot explain.
+func (s *Service) Reject(ctx context.Context, userID, orderID, reason string) (Order, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return Order{}, ErrReasonRequired
+	}
+	if len(reason) > MaxRejectionReason {
+		reason = reason[:MaxRejectionReason]
+	}
+	m, order, err := s.owned(ctx, userID, orderID)
+	if err != nil {
+		return Order{}, err
+	}
+	if err := active(m); err != nil {
+		return Order{}, err
+	}
+	if !MerchantCancellable(order.Status) {
+		return Order{}, ErrNotCancellable
+	}
+	return s.store.Reject(ctx, order.ID, order.Status, m.ID, reason)
+}
+
+// StartPreparing begins picking (document 072's Start Preparing).
+//
+// Idempotent for the same reason Accept is.
+func (s *Service) StartPreparing(ctx context.Context, userID, orderID string) (Order, error) {
+	m, order, err := s.owned(ctx, userID, orderID)
+	if err != nil {
+		return Order{}, err
+	}
+	if err := active(m); err != nil {
+		return Order{}, err
+	}
+	if order.Status == StatusPreparing {
+		return order, nil
+	}
+	if order.Status != StatusConfirmed {
+		return Order{}, ErrNotPreparable
+	}
+	return s.store.Transition(ctx, order.ID, StatusConfirmed, StatusPreparing, "MERCHANT", m.ID, nil)
+}
+
+// MarkReady finishes the merchant's part and hands the order to a driver
+// (document 072's Mark Ready).
+//
+// This is document 070's "separate lifecycles, one link": reaching
+// READY_FOR_PICKUP produces a delivery Job whose pickup is the shop and whose
+// dropoff is the address the customer gave at checkout. The order does not
+// become the job and the job does not carry the order's states — a driver app
+// has no business understanding PREPARING.
+//
+// The order moves first and the job is created second, which is the safe way
+// round when two stores cannot share one transaction. If the job creation
+// fails, the order is READY_FOR_PICKUP with no job attached, and calling this
+// again creates it: recoverable, and visible in the queue as a ready order
+// with nobody coming. The other order would leave an orphan job offered to a
+// driver for an order that never became ready.
+func (s *Service) MarkReady(ctx context.Context, userID, orderID string) (Order, string, error) {
+	if s.jobs == nil {
+		return Order{}, "", ErrNoDeliveries
+	}
+	m, order, err := s.owned(ctx, userID, orderID)
+	if err != nil {
+		return Order{}, "", err
+	}
+	if err := active(m); err != nil {
+		return Order{}, "", err
+	}
+
+	switch order.Status {
+	case StatusReadyForPickup:
+		// Already answered. If the job exists this is the second tap on a bad
+		// connection; if it does not, the last attempt failed after the
+		// transition and this is the retry that finishes it.
+		if order.JobID != "" {
+			return order, order.JobID, nil
+		}
+	case StatusPreparing:
+	default:
+		return Order{}, "", ErrNotReadyable
+	}
+
+	// Both ends of the route must exist before anything moves. A job with a
+	// pickup nobody can route to is one no driver can take, and a job with no
+	// destination is one no driver can finish.
+	outlet, err := s.store.OutletByID(ctx, order.StoreID)
+	if err != nil {
+		return Order{}, "", err
+	}
+	pickup := jobs.Coordinate{Latitude: outlet.Lat, Longitude: outlet.Lon}
+	if !pickup.Valid() {
+		return Order{}, "", ErrNoPickupPoint
+	}
+	if !order.Delivery.Valid() {
+		return Order{}, "", ErrNoDestination
+	}
+
+	ready := order
+	if order.Status == StatusPreparing {
+		ready, err = s.store.Transition(ctx, order.ID, StatusPreparing, StatusReadyForPickup,
+			"MERCHANT", m.ID, nil)
+		if err != nil {
+			return Order{}, "", err
+		}
+		// The goods are off the shelf and in a bag. Held stock that is never
+		// consumed means a shop's count never falls, and a shelf that is empty
+		// in the aisle and full in the database sells the next customer
+		// nothing. Idempotent, so the retry path below does not double-count.
+		if err := s.store.ConsumeOrderStock(ctx, ready.ID); err != nil {
+			return Order{}, "", err
+		}
+	}
+
+	delivery, err := s.jobs.Create(ctx, jobs.Job{
+		Type: jobs.TypeGrocery,
+		// The customer, not the merchant: a delivery exists for the person
+		// waiting at the other end, and every customer-facing view of a job
+		// is scoped by requester.
+		RequesterUserID: ready.CustomerUserID,
+		MerchantID:      ready.MerchantID,
+		// REQUESTED, so the dispatch round picks it up like any other job.
+		// Nothing here knows how dispatch works and nothing there needs to
+		// know this came from a shop.
+		Status: jobs.StatusRequested,
+		Stops: []jobs.Stop{
+			{Sequence: 0, Type: jobs.StopPickup, Location: pickup, Address: outlet.Address,
+				ContactName: outlet.Name, ContactPhone: m.Phone},
+			{Sequence: 1, Type: jobs.StopDropoff,
+				Location: jobs.Coordinate{
+					Latitude: ready.Delivery.Lat, Longitude: ready.Delivery.Lon,
+				},
+				Address: ready.Delivery.Address},
+		},
+	}, jobs.Actor{Type: jobs.ActorMerchant, ID: m.ID})
+	if err != nil {
+		return ready, "", err
+	}
+
+	if err := s.store.AttachJob(ctx, ready.ID, delivery.ID); err != nil {
+		// The order is ready and a job exists; they are simply not linked.
+		// Reporting it is right — a caller that believed this succeeded would
+		// never retry — and the link is what the next retry repairs.
+		return ready, delivery.ID, err
+	}
+	ready.JobID = delivery.ID
+	return ready, delivery.ID, nil
+}
+
+// owned resolves the caller's merchant and the order, and refuses an order
+// belonging to somebody else.
+//
+// The refusal is ErrNotFound rather than a forbidden: a merchant who can
+// discover that an order id exists but belongs to a competitor has learned
+// something the platform did not mean to tell them.
+func (s *Service) owned(ctx context.Context, userID, orderID string) (Merchant, Order, error) {
+	m, err := s.merchantOf(ctx, userID)
+	if err != nil {
+		return Merchant{}, Order{}, err
+	}
+	order, err := s.store.OrderByID(ctx, orderID)
+	if err != nil {
+		return Merchant{}, Order{}, err
+	}
+	if order.MerchantID != m.ID {
+		return Merchant{}, Order{}, ErrNotFound
+	}
+	return m, order, nil
+}
+
+func (s *Service) merchantOf(ctx context.Context, userID string) (Merchant, error) {
+	m, err := s.store.MerchantByOwner(ctx, userID)
+	if errors.Is(err, ErrNotFound) {
+		// The role was granted; onboarding was not finished. Distinct from
+		// "not permitted", which would send the merchant to the wrong place.
+		return Merchant{}, ErrNotAMerchant
+	}
+	if err != nil {
+		return Merchant{}, err
+	}
+	return m, nil
+}
+
+func active(m Merchant) error {
+	if m.Status != StatusActive {
+		return ErrNotActive
+	}
+	return nil
+}
+
+func unacceptable(status OrderStatus) error {
+	if status == StatusPaymentPending {
+		return ErrAwaitingPayment
+	}
+	return ErrNotAcceptable
+}
+
+var (
+	// ErrNoSuchQueue reports a queue name outside document 072's five.
+	ErrNoSuchQueue = errors.New("merchant: no such queue")
+	// ErrReasonRequired reports a rejection with nothing said.
+	ErrReasonRequired = errors.New("merchant: a rejection needs a reason")
+	// ErrNotAcceptable reports Accept on an order that is not awaiting an answer.
+	ErrNotAcceptable = errors.New("merchant: this order is not waiting to be accepted")
+	// ErrAwaitingPayment reports Accept on an order whose payment has not
+	// settled. Confirming it would commit the shop's stock against a payment
+	// that may never arrive, and no payment surface exists to ask.
+	ErrAwaitingPayment = errors.New("merchant: this order is waiting on payment")
+	// ErrNotPreparable reports Start Preparing before acceptance.
+	ErrNotPreparable = errors.New("merchant: accept this order before preparing it")
+	// ErrNotReadyable reports Mark Ready on an order nobody is picking yet.
+	ErrNotReadyable = errors.New("merchant: start preparing this order before marking it ready")
+	// ErrNoDeliveries reports a deployment with no job store behind the
+	// merchant surface, where marking an order ready would strand it.
+	ErrNoDeliveries = errors.New("merchant: deliveries are unavailable")
+)
+
+// --- following the delivery (document 070) -----------------------------------
+
+// deliveryFlow is the order's side of a delivery, in order.
+//
+// The order and the job move through different states for the same journey,
+// and walking this path rather than jumping means the order's history records
+// that the goods were collected before they were on their way — which is what
+// a customer asking "when did the driver pick it up?" is asking.
+var deliveryFlow = []OrderStatus{
+	StatusReadyForPickup, StatusPickedUp, StatusDelivering, StatusDelivered,
+}
+
+// DeliveryProgress maps a delivery job's state onto the order's.
+//
+// Only three job states move an order, and the gaps are deliberate. A driver
+// arriving at the shop (AT_PICKUP) has not collected anything yet, and an
+// order that said PICKED_UP then would be one the shop believes has left while
+// the bags are still on the counter.
+func DeliveryProgress(status jobs.Status) (OrderStatus, bool) {
+	switch status {
+	case jobs.StatusInProgress, jobs.StatusAtDropoff:
+		// The driver has the goods and is moving. The walk records PICKED_UP
+		// on the way through.
+		return StatusDelivering, true
+	case jobs.StatusCompleted:
+		return StatusDelivered, true
+	case jobs.StatusCancelled, jobs.StatusExpired, jobs.StatusFailed:
+		// The goods were picked and the delivery did not happen. FAILED rather
+		// than CANCELLED: somebody has to deal with a bagged order nobody
+		// collected, and cancelled would suggest nothing was ever done.
+		return StatusFailed, true
+	default:
+		return "", false
+	}
+}
+
+// FollowDelivery moves an order to wherever its delivery has got to.
+//
+// Document 070: the two lifecycles "communicate through explicit events". This
+// is that communication, narrowed to one direction — a job tells the order it
+// produced what happened to it. The order never pushes back, and nothing in
+// the job's own flow depends on this succeeding.
+//
+// A job with no order is the ordinary case: every ride and every parcel.
+func (s *Service) FollowDelivery(ctx context.Context, jobID string, status jobs.Status) error {
+	target, moves := DeliveryProgress(status)
+	if !moves {
+		return nil
+	}
+	order, err := s.store.OrderByJobID(ctx, jobID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if target == StatusFailed {
+		if Machine.Terminal(order.Status) {
+			return nil
+		}
+		_, err := s.store.Transition(ctx, order.ID, order.Status, StatusFailed,
+			"SYSTEM", "", map[string]any{"reason": "delivery " + string(status)})
+		return err
+	}
+
+	from, to := flowIndexOf(order.Status), flowIndexOf(target)
+	if from < 0 || to <= from {
+		// Already there, or further on. A repeated event is ordinary — the
+		// driver's client retries — and moving backwards is not.
+		return nil
+	}
+	for i := from; i < to; i++ {
+		moved, err := s.store.Transition(ctx, order.ID, deliveryFlow[i], deliveryFlow[i+1],
+			"SYSTEM", "", map[string]any{"delivery": jobID})
+		if err != nil {
+			return err
+		}
+		order = moved
+	}
+	return nil
+}
+
+func flowIndexOf(status OrderStatus) int {
+	for i, s := range deliveryFlow {
+		if s == status {
+			return i
+		}
+	}
+	return -1
+}
+
+// --- item issues and substitutions (document 074) ----------------------------
+
+// ItemStatus values an issue can leave a line in.
+const (
+	ItemOrdered     = "ORDERED"
+	ItemSubstituted = "SUBSTITUTED"
+	ItemRemoved     = "REMOVED"
+)
+
+// MaxIssueReason bounds what a picker types at the shelf.
+const MaxIssueReason = 300
+
+// ReportIssue records what a picker found and what happens about it
+// (document 072's Report Issue, document 074's rules).
+//
+// The customer's standing instruction decides, not the merchant's proposal.
+// A shop offering a substitute for a line marked DO_NOT_ALLOW does not get to
+// make it — the item is removed and the customer gets a partial order rather
+// than something they explicitly refused. ResolveIssue owns that rule and this
+// asks it rather than repeating it.
+func (s *Service) ReportIssue(ctx context.Context, userID, orderID, itemID, reason string,
+	proposed IssueAction, substituteName string, substitutePrice *money.Amount) (Issue, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return Issue{}, ErrReasonRequired
+	}
+	if len(reason) > MaxIssueReason {
+		reason = reason[:MaxIssueReason]
+	}
+	switch proposed {
+	case ActionSubstitute, ActionRemove, ActionAsk:
+	default:
+		return Issue{}, ErrBadAction
+	}
+
+	m, order, err := s.owned(ctx, userID, orderID)
+	if err != nil {
+		return Issue{}, err
+	}
+	if err := active(m); err != nil {
+		return Issue{}, err
+	}
+	// A problem is found while picking. Before that nobody has looked at the
+	// shelf, and after it the order has left the shop.
+	if order.Status != StatusPreparing {
+		return Issue{}, ErrNotPicking
+	}
+
+	item, found := lineOf(order, itemID)
+	if !found {
+		return Issue{}, ErrNotFound
+	}
+
+	action := ResolveIssue(item.Preference, proposed)
+	if action == ActionSubstitute {
+		if strings.TrimSpace(substituteName) == "" || substitutePrice == nil {
+			// "Something else" is not a substitution a customer can be
+			// charged for or a picker can put in the bag.
+			return Issue{}, ErrSubstituteIncomplete
+		}
+	}
+
+	issue := Issue{
+		OrderID: order.ID, OrderItemID: item.ID, Reason: reason, Action: action,
+	}
+	itemStatus := ""
+
+	switch action {
+	case ActionSubstitute:
+		difference, err := PriceDifference(item.UnitPrice, *substitutePrice, item.Quantity)
+		if err != nil {
+			return Issue{}, err
+		}
+		issue.SubstituteName = strings.TrimSpace(substituteName)
+		issue.SubstitutePrice = substitutePrice
+		issue.PriceDifference = &difference
+		// The customer said ALLOW, so this is settled the moment it is
+		// recorded and BD-11 reprices the line with it.
+		issue.Resolution = ResolutionAutoApplied
+		itemStatus = ItemSubstituted
+
+	case ActionRemove:
+		// Nothing to ask: removal is what happens by default when nothing can
+		// be supplied, and the customer pays for what arrives.
+		issue.Resolution = ResolutionAutoApplied
+		itemStatus = ItemRemoved
+
+	case ActionAsk:
+		issue.SubstituteName = strings.TrimSpace(substituteName)
+		issue.SubstitutePrice = substitutePrice
+		if substitutePrice != nil {
+			difference, err := PriceDifference(item.UnitPrice, *substitutePrice, item.Quantity)
+			if err != nil {
+				return Issue{}, err
+			}
+			issue.PriceDifference = &difference
+		}
+		issue.Resolution = ResolutionPending
+		// The line is untouched and so is the total: an unanswered
+		// substitution changes nothing (BD-11). Passing no status is what
+		// keeps recomputeTotal out of it.
+	}
+
+	return s.store.RecordIssue(ctx, issue, itemStatus)
+}
+
+// Issues lists an order's item problems for whoever owns the order.
+func (s *Service) Issues(ctx context.Context, orderID string) ([]Issue, error) {
+	return s.store.IssuesOf(ctx, orderID)
+}
+
+func lineOf(order Order, itemID string) (Item, bool) {
+	for _, item := range order.Items {
+		if item.ID == itemID {
+			return item, true
+		}
+	}
+	return Item{}, false
+}
+
+var (
+	// ErrBadAction reports an action outside document 074's three.
+	ErrBadAction = errors.New("merchant: no such action for an item problem")
+	// ErrNotPicking reports an item problem on an order nobody is picking.
+	ErrNotPicking = errors.New("merchant: this order is not being prepared")
+	// ErrSubstituteIncomplete reports a substitution with no name or no price.
+	ErrSubstituteIncomplete = errors.New("merchant: a substitute needs a name and a price")
+)

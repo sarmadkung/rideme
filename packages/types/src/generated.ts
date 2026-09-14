@@ -24,6 +24,34 @@ export const CURRENCIES = ['PKR'] as const;
 
 export type Currency = (typeof CURRENCIES)[number];
 
+export const MERCHANT_QUEUES = ['new', 'preparing', 'ready', 'completed', 'cancelled'] as const;
+
+export type MerchantQueue = (typeof MERCHANT_QUEUES)[number];
+
+export const ISSUE_ACTIONS = ['SUBSTITUTE', 'REMOVE', 'REQUEST_CUSTOMER_DECISION'] as const;
+
+export type IssueAction = (typeof ISSUE_ACTIONS)[number];
+
+export const SUBSTITUTION_PREFERENCES = ['ALLOW', 'DO_NOT_ALLOW', 'ASK_ME'] as const;
+
+export type SubstitutionPreference = (typeof SUBSTITUTION_PREFERENCES)[number];
+
+export const GROCERY_ORDER_STATUSES = [
+  'CART',
+  'PLACED',
+  'PAYMENT_PENDING',
+  'CONFIRMED',
+  'PREPARING',
+  'READY_FOR_PICKUP',
+  'PICKED_UP',
+  'DELIVERING',
+  'DELIVERED',
+  'CANCELLED',
+  'FAILED',
+] as const;
+
+export type GroceryOrderStatus = (typeof GROCERY_ORDER_STATUSES)[number];
+
 export type EventName = string;
 
 export interface ApiErrorBody {
@@ -167,4 +195,128 @@ export interface Tariff {
   service_fee_minor: number;
   service_fee_bps: number;
   tax_bps: number;
+}
+
+export interface Point {
+  lat: number;
+  lon: number;
+}
+
+export interface Place {
+  provider_id?: string | undefined;
+  name: string;
+  address: string;
+  point: Point;
+}
+
+export interface EarningsTotal {
+  net: Money;
+  trips: number;
+  from: string;
+  to: string;
+}
+
+export interface TripEarning {
+  job_id: string;
+  amount: Money;
+  at: string;
+}
+
+export interface DriverEarnings {
+  today: EarningsTotal;
+  week: EarningsTotal;
+  trips: TripEarning[];
+}
+
+export interface MerchantOrderItem {
+  id: string;
+  name: string;
+  quantity: number;
+  unit_price: Money;
+  line_total: Money;
+  substitution_preference: string;
+  status: string;
+}
+
+export interface OrderIssue {
+  id: string;
+  order_item_id: string;
+  reason: string;
+  action: string;
+  resolution: string;
+  substitute_name?: string | undefined;
+  substitute_price?: Money | undefined;
+  price_difference?: Money | undefined;
+  created_at: string;
+}
+
+export interface MerchantOrder {
+  id: string;
+  status: string;
+  items_total: Money;
+  accept_deadline?: string | undefined;
+  accepted_at?: string | undefined;
+  preparation_started_at?: string | undefined;
+  expected_ready_at?: string | undefined;
+  rejection_reason?: string | undefined;
+  created_at: string;
+  items?: MerchantOrderItem[] | undefined;
+  job_id?: string | undefined;
+  issues?: OrderIssue[] | undefined;
+}
+
+export interface Store {
+  id: string;
+  merchant_name: string;
+  name: string;
+  address?: string | undefined;
+  latitude: number;
+  longitude: number;
+  distance_m: number;
+  open: boolean;
+}
+
+export interface ProductVariant {
+  id: string;
+  name: string;
+  price_diff: Money;
+  available: boolean;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  price: Money;
+  available: boolean;
+  variants?: ProductVariant[] | undefined;
+}
+
+export interface GroceryDelivery {
+  address: string;
+  latitude: number;
+  longitude: number;
+  notes?: string | undefined;
+}
+
+export interface GroceryOrderLine {
+  id: string;
+  name: string;
+  quantity: number;
+  unit_price: Money;
+  line_total: Money;
+  substitution_preference: string;
+  status: string;
+}
+
+export interface GroceryOrder {
+  id: string;
+  store_id?: string | undefined;
+  status: string;
+  items_total: Money;
+  items: GroceryOrderLine[];
+  delivery?: GroceryDelivery | undefined;
+  accept_deadline?: string | undefined;
+  created_at: string;
+  issues?: OrderIssue[] | undefined;
 }

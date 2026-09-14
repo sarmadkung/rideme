@@ -18,6 +18,8 @@ import (
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
+	"github.com/sarmadkung/rideme/services/api/internal/finance"
+	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/zones"
 	"github.com/sarmadkung/rideme/services/api/pkg/contract"
@@ -25,6 +27,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/pkg/health"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
 	"github.com/sarmadkung/rideme/services/api/pkg/money"
+	"github.com/sarmadkung/rideme/services/api/pkg/routing"
 )
 
 // Registry builds the contract. It is exported through this package's test so
@@ -50,6 +53,41 @@ func Registry() *contract.Registry {
 	)
 	r.Enum("Currency", "CURRENCIES", reflect.TypeOf(money.Currency("")),
 		string(money.PKR),
+	)
+	// The merchant's vocabulary (documents 70, 72, 74). These are values a
+	// dashboard sends — a queue name in a query, an action in an issue body —
+	// and branches on. Hand-writing them beside the generated types is the
+	// duplication B-2 removed, and a typo in one would 400 at runtime.
+	r.Enum("MerchantQueue", "MERCHANT_QUEUES", reflect.TypeOf(merchant.Queue("")),
+		string(merchant.QueueNew),
+		string(merchant.QueuePreparing),
+		string(merchant.QueueReady),
+		string(merchant.QueueCompleted),
+		string(merchant.QueueCancelled),
+	)
+	r.Enum("IssueAction", "ISSUE_ACTIONS", reflect.TypeOf(merchant.IssueAction("")),
+		string(merchant.ActionSubstitute),
+		string(merchant.ActionRemove),
+		string(merchant.ActionAsk),
+	)
+	r.Enum("SubstitutionPreference", "SUBSTITUTION_PREFERENCES",
+		reflect.TypeOf(merchant.SubstitutionPreference("")),
+		string(merchant.PreferAllow),
+		string(merchant.PreferDoNotAllow),
+		string(merchant.PreferAsk),
+	)
+	r.Enum("GroceryOrderStatus", "GROCERY_ORDER_STATUSES", reflect.TypeOf(merchant.OrderStatus("")),
+		string(merchant.StatusCart),
+		string(merchant.StatusPlaced),
+		string(merchant.StatusPaymentPending),
+		string(merchant.StatusConfirmed),
+		string(merchant.StatusPreparing),
+		string(merchant.StatusReadyForPickup),
+		string(merchant.StatusPickedUp),
+		string(merchant.StatusDelivering),
+		string(merchant.StatusDelivered),
+		string(merchant.StatusCancelled),
+		string(merchant.StatusFailed),
 	)
 	// Event names are open-ended and validated by shape, not enumerated
 	// (document 150 gives examples, not a closed list).
@@ -85,6 +123,37 @@ func Registry() *contract.Registry {
 	// 34, 142, 143).
 	r.Struct("Zone", zones.ZoneResponse{})
 	r.Struct("Tariff", booking.TariffResponse{})
+
+	// Place search (documents 93, 94). Registered late — the slice that built
+	// it hand-wrote a matching TypeScript interface instead, which is the
+	// duplication this file's own comment forbids.
+	r.Struct("Point", routing.Point{})
+	r.Struct("Place", routing.Place{})
+
+	// Driver earnings. Nested inner-first, so the outer struct's fields
+	// resolve to the names registered here rather than to inline shapes.
+	r.Struct("EarningsTotal", finance.Earnings{})
+	r.Struct("TripEarning", finance.TripEarning{})
+	r.Struct("DriverEarnings", driver.Earnings{})
+
+	// The merchant's order surface (documents 72, 74). The dashboard reads the
+	// same generated models the mobile apps do. Inner-first, so the order's
+	// items and issues resolve to the names registered here rather than to
+	// inline shapes.
+	r.Struct("MerchantOrderItem", merchant.OrderItemResponse{})
+	r.Struct("OrderIssue", merchant.IssueResponse{})
+	r.Struct("MerchantOrder", merchant.OrderResponse{})
+
+	// The customer's side of the same domain (documents 68, 71). `OrderIssue` is
+	// shared with the merchant above: one shape, one name — a substitution the
+	// shop proposed and the customer answers is one row, and naming it twice is
+	// how two clients come to disagree about what it says.
+	r.Struct("Store", merchant.OutletResponse{})
+	r.Struct("ProductVariant", merchant.VariantResponse{})
+	r.Struct("Product", merchant.ProductResponse{})
+	r.Struct("GroceryDelivery", merchant.DeliveryResponse{})
+	r.Struct("GroceryOrderLine", merchant.CartLine{})
+	r.Struct("GroceryOrder", merchant.CartResponse{})
 
 	return r
 }

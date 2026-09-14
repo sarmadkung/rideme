@@ -12,12 +12,22 @@ import type {
   ApiErrorBody,
   CancelResult,
   DriverAssignment,
+  DriverEarnings,
   DriverProfile,
   ErrorCode,
+  GroceryOrder,
   HealthResponse,
+  IssueAction,
   Job,
   LocationReport,
+  MerchantOrder,
+  MerchantQueue,
+  OrderIssue,
+  Place,
+  Product,
   Quote,
+  Store,
+  SubstitutionPreference,
   Tariff,
   Zone,
 } from '@platform/types';
@@ -25,11 +35,18 @@ import {
   apiErrorBodySchema,
   cancelResultSchema,
   driverAssignmentSchema,
+  driverEarningsSchema,
   driverProfileSchema,
+  groceryOrderSchema,
   healthResponseSchema,
   jobSchema,
   locationReportSchema,
+  merchantOrderSchema,
+  orderIssueSchema,
+  placeSchema,
+  productSchema,
   quoteSchema,
+  storeSchema,
   tariffSchema,
   zoneSchema,
 } from '@platform/validation';
@@ -153,6 +170,112 @@ export interface ApiClient {
   /** Admin-only: pricing configuration (documents 34, 142). */
   listTariffs(): Promise<Tariff[]>;
   createTariff(input: CreateTariffInput): Promise<Tariff>;
+
+  /**
+   * Places matching free text, biased toward `near` when it is known.
+   *
+   * Resolves to an empty array when nothing matched — that is an answer, and
+   * the caller should say "no results", not "something went wrong". A provider
+   * outage still throws, because the two must not look the same to a customer
+   * who would otherwise retype their address until they gave up.
+   */
+  searchPlaces(query: string, near?: { latitude: number; longitude: number }): Promise<Place[]>;
+
+  /** What the driver has made today and this week, and the trips behind it. */
+  driverEarnings(): Promise<DriverEarnings>;
+
+  /**
+   * The merchant's fulfilment surface (document 72).
+   *
+   * Every one of these is scoped server-side to the merchant the caller
+   * operates: the MERCHANT role says a shop is calling, not which shop, and
+   * another shop's order must be as invisible as one that does not exist.
+   */
+  listMerchantOrders(options?: {
+    queue?: MerchantQueue;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{ items: MerchantOrder[]; nextCursor?: string }>;
+  getMerchantOrder(id: string): Promise<MerchantOrder>;
+  acceptMerchantOrder(id: string): Promise<MerchantOrder>;
+  /** A rejection carries a reason. The server refuses one without it. */
+  rejectMerchantOrder(id: string, reason: string): Promise<MerchantOrder>;
+  startPreparingMerchantOrder(id: string): Promise<MerchantOrder>;
+  /** Ready hands the order to dispatch, which is why it can fail for reasons the shop cannot fix. */
+  markMerchantOrderReady(id: string): Promise<MerchantOrder>;
+  /**
+   * An empty shelf, and what the shop proposes about it (document 74).
+   *
+   * What actually happens is decided by the customer's standing preference on
+   * the line, server-side — so the returned issue's `action` may not be the
+   * one that was proposed, and the caller must render what came back rather
+   * than what it sent.
+   */
+  reportMerchantItemIssue(
+    orderId: string,
+    itemId: string,
+    issue: ItemIssueInput,
+  ): Promise<OrderIssue>;
+
+  /**
+   * The customer's side of grocery (documents 68, 71).
+   *
+   * A shop that is shut is still listed — `store.open` says so. A customer
+   * looking for their usual kiryana at 3am needs to see that it is closed,
+   * not that it has vanished, and the server is deliberate about that.
+   */
+  listStores(
+    near: { latitude: number; longitude: number },
+    options?: { radiusM?: number; limit?: number },
+  ): Promise<Store[]>;
+  storeCatalog(storeId: string, limit?: number): Promise<Product[]>;
+
+  /** Opens a cart at one shop, or returns the one already open there. */
+  openCart(storeId: string): Promise<GroceryOrder>;
+  /** The cart back, not the line: the running total is the server's to compute. */
+  addCartItem(orderId: string, item: CartItemInput): Promise<GroceryOrder>;
+  /** Checkout. The address is asked for here because this is where it is needed. */
+  placeGroceryOrder(orderId: string, delivery: DeliveryInput): Promise<GroceryOrder>;
+
+  listGroceryOrders(limit?: number): Promise<GroceryOrder[]>;
+  getGroceryOrder(id: string): Promise<GroceryOrder>;
+  /**
+   * Answers a substitution the shop asked about (BD-11).
+   *
+   * Accepting charges the substitute's price, up or down; declining loses the
+   * line rather than restoring it, because the shelf is empty — which is why
+   * they were asked. Either way the whole order comes back, because the answer
+   * changed the total.
+   */
+  decideGroceryIssue(orderId: string, issueId: string, accept: boolean): Promise<GroceryOrder>;
+  /** Their own order, and only while its state still allows it. */
+  cancelGroceryOrder(orderId: string, reason?: string): Promise<GroceryOrder>;
+}
+
+/** One line a customer adds to a cart. */
+export interface CartItemInput {
+  productId: string;
+  variantId?: string;
+  quantity: number;
+  /** What to do if the shelf is empty. The server's default applies when absent. */
+  substitutionPreference?: SubstitutionPreference;
+}
+
+/** Where an order is going. */
+export interface DeliveryInput {
+  address: string;
+  latitude: number;
+  longitude: number;
+  notes?: string;
+}
+
+/** What a picker reports when a line cannot be filled as ordered. */
+export interface ItemIssueInput {
+  reason: string;
+  action: IssueAction;
+  /** Required by the server when the action is a substitution, ignored otherwise. */
+  substituteName?: string;
+  substitutePriceMinor?: number;
 }
 
 /** One position report. Timestamped by the device, not the server. */
@@ -511,6 +634,155 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         await request('/driver/location', {
           method: 'POST',
           body: { fixes: fixes.map(toPositionBody) },
+        }),
+      );
+    },
+    async searchPlaces(query, near) {
+      try {
+        const body = (await request('/places', {
+          query: {
+            q: query,
+            lat: near?.latitude,
+            lon: near?.longitude,
+          },
+        })) as { places?: unknown[] };
+        return (body.places ?? []).map((place) => placeSchema.parse(place));
+      } catch (error) {
+        // Nothing matched. An empty list is the honest answer; an error here
+        // would put a normal outcome on the app's failure path.
+        if (error instanceof ApiError && error.status === 404) return [];
+        throw error;
+      }
+    },
+    async driverEarnings() {
+      return driverEarningsSchema.parse(await request('/driver/earnings'));
+    },
+    async listMerchantOrders(listOptions = {}) {
+      const body = (await request('/merchant/orders', {
+        query: {
+          queue: listOptions.queue,
+          limit: listOptions.limit,
+          cursor: listOptions.cursor,
+        },
+      })) as { items: unknown[]; page?: { next_cursor?: string } };
+
+      return {
+        items: body.items.map((item) => merchantOrderSchema.parse(item)),
+        ...(body.page?.next_cursor ? { nextCursor: body.page.next_cursor } : {}),
+      };
+    },
+    async getMerchantOrder(id) {
+      return merchantOrderSchema.parse(await request(`/merchant/orders/${encodeURIComponent(id)}`));
+    },
+    async acceptMerchantOrder(id) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/accept`, { method: 'POST' }),
+      );
+    },
+    async rejectMerchantOrder(id, reason) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/reject`, {
+          method: 'POST',
+          body: { reason },
+        }),
+      );
+    },
+    async startPreparingMerchantOrder(id) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/preparing`, { method: 'POST' }),
+      );
+    },
+    async markMerchantOrderReady(id) {
+      return merchantOrderSchema.parse(
+        await request(`/merchant/orders/${encodeURIComponent(id)}/ready`, { method: 'POST' }),
+      );
+    },
+    async reportMerchantItemIssue(orderId, itemId, issue) {
+      return orderIssueSchema.parse(
+        await request(
+          `/merchant/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/issue`,
+          {
+            method: 'POST',
+            body: {
+              reason: issue.reason,
+              action: issue.action,
+              substitute_name: issue.substituteName,
+              substitute_price_minor: issue.substitutePriceMinor,
+            },
+          },
+        ),
+      );
+    },
+    async listStores(near, storeOptions = {}) {
+      const body = (await request('/stores', {
+        query: {
+          lat: near.latitude,
+          lon: near.longitude,
+          radius_m: storeOptions.radiusM,
+          limit: storeOptions.limit,
+        },
+      })) as { stores?: unknown[] };
+      return (body.stores ?? []).map((store) => storeSchema.parse(store));
+    },
+    async storeCatalog(storeId, limit) {
+      const body = (await request(`/stores/${encodeURIComponent(storeId)}/products`, {
+        query: { limit },
+      })) as { products?: unknown[] };
+      return (body.products ?? []).map((product) => productSchema.parse(product));
+    },
+    async openCart(storeId) {
+      return groceryOrderSchema.parse(
+        await request('/orders', { method: 'POST', body: { store_id: storeId } }),
+      );
+    },
+    async addCartItem(orderId, item) {
+      return groceryOrderSchema.parse(
+        await request(`/orders/${encodeURIComponent(orderId)}/items`, {
+          method: 'POST',
+          body: {
+            product_id: item.productId,
+            variant_id: item.variantId,
+            quantity: item.quantity,
+            substitution_preference: item.substitutionPreference,
+          },
+        }),
+      );
+    },
+    async placeGroceryOrder(orderId, delivery) {
+      return groceryOrderSchema.parse(
+        await request(`/orders/${encodeURIComponent(orderId)}/place`, {
+          method: 'POST',
+          body: {
+            delivery: {
+              address: delivery.address,
+              latitude: delivery.latitude,
+              longitude: delivery.longitude,
+              notes: delivery.notes,
+            },
+          },
+        }),
+      );
+    },
+    async listGroceryOrders(limit) {
+      const body = (await request('/orders', { query: { limit } })) as { items: unknown[] };
+      return body.items.map((item) => groceryOrderSchema.parse(item));
+    },
+    async getGroceryOrder(id) {
+      return groceryOrderSchema.parse(await request(`/orders/${encodeURIComponent(id)}`));
+    },
+    async decideGroceryIssue(orderId, issueId, accept) {
+      return groceryOrderSchema.parse(
+        await request(
+          `/orders/${encodeURIComponent(orderId)}/issues/${encodeURIComponent(issueId)}/decision`,
+          { method: 'POST', body: { accept } },
+        ),
+      );
+    },
+    async cancelGroceryOrder(orderId, reason) {
+      return groceryOrderSchema.parse(
+        await request(`/orders/${encodeURIComponent(orderId)}/cancel`, {
+          method: 'POST',
+          body: { reason: reason ?? '' },
         }),
       );
     },

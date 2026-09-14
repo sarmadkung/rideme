@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/eligibility"
@@ -99,14 +100,98 @@ type Service struct {
 	// than a package-level lookup so a test can drive the policy directly.
 	settings *settings.Store
 	zones    zoneFinder
-	now      func() time.Time
+	// trips closes the tracking session when a job stops moving. Optional:
+	// without it a finished trip stays watchable, which is a privacy leak
+	// rather than a broken trip, so it degrades loudly in the log instead of
+	// refusing the command a driver just completed.
+	trips TripTracking
+	// deliveries is the order a job was created for, when it was created for
+	// one. Optional and one-directional: a job tells the order it produced
+	// what happened to it, and nothing in the job's own flow depends on the
+	// answer (document 070).
+	deliveries DeliveryFollower
+	logger     *slog.Logger
+	now        func() time.Time
+}
+
+// DeliveryFollower is the order side of document 070's link.
+//
+// Declared here rather than imported, so booking stays generic over job type:
+// it knows that some jobs were produced by something and tells that something
+// what happened, without knowing that groceries exist.
+type DeliveryFollower interface {
+	FollowDelivery(ctx context.Context, jobID string, status jobs.Status) error
+}
+
+// TripTracking is the half of tracking a job's lifecycle drives.
+//
+// Document 102 scopes location to "active service", and something has to
+// decide when the service stops being active. A session that is never closed
+// leaves a customer able to watch a driver after their trip ended.
+type TripTracking interface {
+	EndSession(ctx context.Context, jobID string) error
 }
 
 func NewService(jobStore *jobs.Store, quoteStore *Store, engine *pricing.Engine, routes *routing.Service, platformSettings *settings.Store, zoneStore zoneFinder, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{jobs: jobStore, quotes: quoteStore, pricing: engine, routes: routes, settings: platformSettings, zones: zoneStore, now: now}
+	return &Service{jobs: jobStore, quotes: quoteStore, pricing: engine, routes: routes,
+		settings: platformSettings, zones: zoneStore, logger: slog.Default(), now: now}
+}
+
+// WithTracking attaches the tracking session, so a job that stops moving stops
+// being watchable.
+func (s *Service) WithTracking(trips TripTracking, logger *slog.Logger) *Service {
+	s.trips = trips
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
+}
+
+// WithDeliveries attaches whatever follows a job on behalf of the order that
+// produced it.
+func (s *Service) WithDeliveries(follower DeliveryFollower) *Service {
+	s.deliveries = follower
+	return s
+}
+
+// followDelivery tells the order what its delivery just did, and never fails
+// the driver's command.
+//
+// The job has already moved. A driver who tapped "delivered" must not be told
+// it failed because a grocery order would not follow, and the order is
+// recoverable — the next event, or an operator, moves it. Logged at error
+// level because a customer looking at an order that says PICKED_UP after their
+// shopping arrived has been told something false.
+func (s *Service) followDelivery(ctx context.Context, jobID string, status jobs.Status) {
+	if s.deliveries == nil {
+		return
+	}
+	if err := s.deliveries.FollowDelivery(ctx, jobID, status); err != nil {
+		s.logger.Error("an order did not follow its delivery",
+			slog.String("job_id", jobID), slog.String("job_status", string(status)),
+			slog.String("error", err.Error()))
+	}
+}
+
+// endTracking closes a job's tracking session, and never fails the caller.
+//
+// The job has already finished or been cancelled by the time this runs. A
+// driver who completed a trip must not be told the command failed because a
+// session would not close, and the sweep that would clean up an orphaned
+// session does not exist yet — so this is logged at error level, which is what
+// it is.
+func (s *Service) endTracking(ctx context.Context, jobID, why string) {
+	if s.trips == nil {
+		return
+	}
+	if err := s.trips.EndSession(ctx, jobID); err != nil {
+		s.logger.Error("could not close tracking for a finished job",
+			slog.String("job_id", jobID), slog.String("reason", why),
+			slog.String("error", err.Error()))
+	}
 }
 
 var (
@@ -331,6 +416,10 @@ func (s *Service) Cancel(ctx context.Context, jobID, actorID string, actorType j
 	if err := s.quotes.RecordCancellation(ctx, jobID, string(actorType), actorID, reason, string(tier), fee); err != nil {
 		return jobs.Job{}, Cancellation{}, httpx.Internal("could not record the cancellation").WithCause(err)
 	}
+	// A cancelled trip stops being watchable, for the same reason a completed
+	// one does (document 102: location for active service only).
+	s.endTracking(ctx, jobID, "job cancelled")
+	s.followDelivery(ctx, jobID, cancelled.Status)
 	return cancelled, Cancellation{Tier: tier, Fee: fee}, nil
 }
 
@@ -470,6 +559,10 @@ func (s *Service) Execute(ctx context.Context, jobID, driverID string, cmd Comma
 			return jobs.Job{}, httpx.Internal("could not run the command").WithCause(err)
 		}
 		job = moved
+	}
+	s.followDelivery(ctx, jobID, job.Status)
+	if job.Finished() {
+		s.endTracking(ctx, jobID, "job finished")
 	}
 	return job, nil
 }

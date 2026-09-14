@@ -21,6 +21,24 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Expo's build-time configuration runs in Node before the bundler exists:
+    // CommonJS, with the Node globals the shipped code must never reach for.
+    // Scoped to this filename so the exemption cannot spread into app source.
+    files: ['**/app.config.js'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        require: 'readonly',
+        module: 'writable',
+        process: 'readonly',
+        __dirname: 'readonly',
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': [
         'error',

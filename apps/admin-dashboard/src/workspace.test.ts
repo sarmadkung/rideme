@@ -4,13 +4,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createApiClient } from '@platform/api-client';
-import { InMemoryTokenStorage } from '@platform/auth';
+import { InMemoryTokenStorage, useAuth } from '@platform/auth';
 import { APP_ENVS } from '@platform/config';
 import { haversineMeters } from '@platform/maps';
-// The /useAuth subpath, not the package root: the root also re-exports
-// tokenStorage.ts, which imports expo-secure-store — a native-only module
-// this web app's bundler must never be asked to resolve.
-import { useAuth } from '@platform/mobile/useAuth';
 import { ERROR_CODES } from '@platform/types';
 import { tokens } from '@platform/ui';
 import { healthResponseSchema } from '@platform/validation';
