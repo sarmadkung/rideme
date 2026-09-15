@@ -2310,3 +2310,90 @@ and merged past". That is a repository setting, not a code change.
 gofmt clean. `check-migrations.sh` executed, both ways. The Go changes are not
 compiled — no Go toolchain is reachable from this session and proxy.golang.org
 is blocked.
+
+## A Driver Stops Working Before The Debt Gets Large — 2026-09-15
+
+BD-09's first half, resolved by the owner. Cash settlement has been live since
+2026-09-14 and the balance it creates grew without bound; this is the thing
+that acts on it.
+
+### The owner's decision
+
+A driver holding more of the platform's cash than their cap **does not work
+until they hand it in**. Per vehicle type, overridable per driver, and
+explicitly *lower* than the PKR 3,000–5,000 discussed — the owner's words were
+that such a figure is too much for a rider.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| Migration `000017` — caps, per-driver override, settlements | Done | — | `check-migrations` passes |
+| `finance.OwedBy` / `LimitFor` / `StandingOf` | Done | 5 unit | Partial: no Go toolchain in this session |
+| `DriverRemittance` + `RecordSettlement` | Done | covered | Partial |
+| `GoOnline` refuses over the cap | Done | — | Partial |
+| Dispatch skips a capped driver mid-round | Done | — | Partial |
+| `GET /driver/balance` | Done | — | Partial |
+| `httpx.Error.WithDetails` | Done | — | Partial |
+
+### Decisions worth naming
+
+**The cap is enforced in two places, not one.** Go-online is the obvious one.
+The dispatch round is the one that matters: a driver crosses their cap *on the
+trip that pushes them over*, mid-shift, while already online. Checking only at
+sign-in would let them work the rest of the day past the limit and discover it
+tomorrow.
+
+**An unreadable balance permits.** Both enforcement points allow the driver
+through when the ledger errors, and the dispatch check's interface returns a
+bare `bool` to make that impossible to get wrong by accident. This is the one
+place in the money path where swallowing an error is right: a ledger outage
+that emptied the candidate pool would stop the whole city, and the platform can
+carry the risk of one more trip. It is logged at error level.
+
+**An empty cap table means no cap.** The inverse of BD-05, and deliberately.
+A guessed commission pays every driver the wrong amount; a missing cap row that
+failed closed would take every driver off the road at once.
+
+**Clearing the block costs less than clearing the debt.** A blocked driver is
+asked for the amount that returns them to the warning threshold, not their
+whole balance. Demanding everything when a fraction puts them back on the road
+is how a cap becomes a reason to drive for someone else.
+
+**The driver is warned before they are stopped.** A warning threshold sits
+below every cap, and it scales with a per-driver override so the proportion
+stays the same. Being cut off mid-shift with no notice is how a platform loses
+a driver permanently.
+
+**A settlement is two records written together.** The ledger movement and the
+operational row — who took the cash, which agent, what reference — commit in
+one transaction. A ledger entry with no settlement row is money nobody can
+account for; a settlement row with no ledger entry is a driver told they paid
+while the books still say they owe.
+
+### What the owner still has to supply
+
+**The numbers.** `driver_credit_limits` is empty. Until a row exists for a
+vehicle type, drivers of that type have no cap and the old unbounded behaviour
+continues. Each row needs a cap and a warning threshold, per vehicle type:
+`MOTORCYCLE`, `RICKSHAW`, `CAR`, `PICKUP`, `MAZDA`, `SHEHZORE`, `TRUCK`.
+
+**The liability.** Who bears the loss when a driver disappears owing money is
+still unallocated. A contract term, possibly a deposit — not a schema.
+
+### What this does not do
+
+No digital remittance rail. `driver_settlements.method` accepts
+`BANK_TRANSFER` and `WALLET` so adding one is a caller rather than a migration,
+but today the only path that works is `CASH` recorded by an operator — and the
+route that lets an operator record it does not exist yet. **A blocked driver
+currently has no in-product way to become unblocked.** That is the next slice
+and it is small.
+
+Customer-side digital payment is also not started. It is the higher-leverage
+half: a digitally paid fare never creates this debt at all.
+
+### Verification
+
+gofmt clean; `check-migrations.sh` passes at 17 migrations. Not compiled — no
+Go toolchain is reachable from this session and proxy.golang.org is blocked.
