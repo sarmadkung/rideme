@@ -163,11 +163,14 @@ type Job struct {
 	QuoteID           string
 	AssignedDriverID  string
 	AssignedVehicleID string
-	Stops             []Stop
-	Requirements      []Requirement
-	TerminatedAt      *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// PaymentMethod is how this job will be paid for (document 052). CASH
+	// unless a customer chose otherwise and the platform could offer it.
+	PaymentMethod string
+	Stops         []Stop
+	Requirements  []Requirement
+	TerminatedAt  *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Live reports whether the job is still moving through the operational flow.

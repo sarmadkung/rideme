@@ -2471,3 +2471,103 @@ No admin console screen; these are routes, not a UI.
 
 gofmt clean; `check-migrations` unchanged at 17. Not compiled — no Go toolchain
 is reachable from this session and proxy.golang.org is blocked.
+
+## A Customer Chooses How To Pay — 2026-09-15
+
+The owner's second decision of 2026-09-15: the platform keeps cash **and** adds
+digital, rather than replacing one with the other. This is the half that can be
+built before a provider exists, and it is built so that adding one later is
+configuration rather than surgery.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| Migration `000018` — method on jobs and orders, `payment_methods` table | Done | — | `check-migrations` passes at 18 |
+| `internal/payments` — `Provider`, `Gateway`, method gate | Done | 6 unit | Partial: no Go toolchain in this session |
+| `GET /payment-methods` | Done | covered | Partial |
+| Booking accepts and validates `payment_method` | Done | — | Partial |
+| `POST /webhooks/payments/{provider}` | Done | 5 unit | Partial |
+
+### The rule the package exists to enforce
+
+**A method is offerable only when something can process it.**
+
+A customer shown a card button that cannot charge a card has been lied to by
+the product, and they find out at the worst possible moment — standing next to
+a driver at the end of a trip, with no way to pay. So:
+
+- the database says what the business wants enabled (`payment_methods`),
+- the `Gateway` says what this binary can actually process,
+- the customer is offered the **intersection**, and
+- `Check` enforces it on the write path, because a client that renders the list
+  correctly is a hint and not a guarantee.
+
+`NewGateway()` is called in `main.go` with **no providers**, which is not a
+placeholder — it is the literal state of this deployment. Every digital method
+is therefore filtered out however the database is configured, and a method
+enabled with nothing behind it is logged as a misconfiguration rather than
+shown.
+
+A database CHECK refuses an enabled digital method with an empty provider, so
+that mistake cannot be made in SQL either.
+
+### Two zero-caller functions, finally called
+
+`finance.RecordWebhook` and `finance.VerifySignature` were written, tested and
+never called. The webhook receiver is that caller.
+
+It does nothing today, and that is correct rather than unfinished: every
+callback is refused at the first line because no provider is registered. **An
+open webhook endpoint that accepts anything is a way to tell the platform a
+payment succeeded when it did not.**
+
+What it does do when a provider exists:
+
+- **Records rejected callbacks as well as accepted ones.** Document 058 wants
+  the evidence — a burst of failing signatures is somebody probing, and an
+  endpoint that drops what it rejects cannot tell anyone that is happening.
+- **Deduplicates by the provider's event id**, falling back to a hash of the
+  body when the id cannot be read, so a replay still deduplicates rather than
+  being stored twice.
+- **Returns 5xx when it cannot record**, so the provider retries. Losing a
+  callback silently is how a captured payment never reaches the ledger.
+- **Returns 200 on a replay**, which is what stops a provider retrying forever
+  (document 052: "webhook processing must be idempotent").
+
+### Decisions worth naming
+
+**The method is checked before the idempotency lookup.** A refused method is
+refused the same way every time, rather than being replayed as a success by a
+retry of an earlier attempt.
+
+**`GET /payment-methods` is authenticated.** It holds nothing personal, but an
+unauthenticated list is a public statement of which providers this platform
+uses, which is reconnaissance for anybody probing the webhook route.
+
+**The provider is not serialised to the customer.** Which company processes a
+payment is not their concern, and naming it in a response is a detail that ends
+up in a client's switch statement.
+
+**An unset method is CASH.** Matching the column default, so a job created by a
+path that does not ask — a shop turning a ready order into a delivery — keeps
+the behaviour it had before the choice existed.
+
+### What this does not do
+
+**No provider, so no digital payment actually works.** `Provider` has no
+implementation. Authorize-at-confirm and capture-at-completion are the next
+slice and cannot be written honestly against nothing.
+
+**Settlement is untouched.** It still takes cash for every job, which is safe
+by construction: no digital method can be chosen, so no job reaches settlement
+with one.
+
+**Nothing acts on a recorded callback yet.** It lands durably with
+`processed_at IS NULL`, which is the state that column exists to represent.
+
+### Verification
+
+gofmt clean (formatted by `gofmt -w` in a container with a Go toolchain, then
+written back). `check-migrations` passes at 18. Not compiled — no Go toolchain
+is reachable from this session and proxy.golang.org is blocked.

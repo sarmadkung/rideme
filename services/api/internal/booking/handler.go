@@ -84,6 +84,9 @@ type createBody struct {
 	Stops        []stopBody        `json:"stops"`
 	Requirements map[string]string `json:"requirements,omitempty"`
 	ScheduledAt  *time.Time        `json:"scheduled_at,omitempty"`
+	// Omitted means cash, which is what every booking meant before the choice
+	// existed and what most of them will keep meaning.
+	PaymentMethod string `json:"payment_method,omitempty"`
 }
 
 type cancelBody struct {
@@ -210,6 +213,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		QuoteID: body.QuoteID, RequesterID: principal.UserID,
 		JobType: jobs.Type(body.JobType), Stops: toStops(body.Stops),
 		Requirements: toRequirements(body.Requirements), ScheduledAt: body.ScheduledAt,
+		PaymentMethod: body.PaymentMethod,
 		// Document 14 requires an Idempotency-Key on job creation.
 		IdempotencyKey: r.Header.Get(httpx.IdempotencyKeyHeader),
 	})
