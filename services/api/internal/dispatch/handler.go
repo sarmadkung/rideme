@@ -26,7 +26,32 @@ type Handler struct {
 	offers   Offers
 	drivers  DriverLookup
 	presence Presence
-	logger   *slog.Logger
+	// announce tells the customer a driver said yes. Optional: the acceptance
+	// is committed either way, and a customer whose stream missed it learns
+	// the same thing from the next fetch.
+	announce AcceptAnnouncer
+	// jobs supplies the customer behind the job, so the acceptance can reach
+	// their channel and not only the job's. A customer knows their own user id
+	// before they know a job exists, and subscribes accordingly.
+	jobs   JobLookup
+	logger *slog.Logger
+}
+
+// AcceptAnnouncer publishes an accepted offer.
+type AcceptAnnouncer interface {
+	JobAccepted(ctx context.Context, jobID, driverID, requesterUserID, jobType string)
+}
+
+// JobLookup is the one question this handler asks of the job store.
+type JobLookup interface {
+	ByID(ctx context.Context, id string) (jobs.Job, error)
+}
+
+// WithAnnouncer attaches the realtime gateway an acceptance is pushed through.
+func (h *Handler) WithAnnouncer(announce AcceptAnnouncer, jobStore JobLookup) *Handler {
+	h.announce = announce
+	h.jobs = jobStore
+	return h
 }
 
 // Offers is the acceptance half of the dispatch store.
@@ -104,11 +129,32 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
 			slog.String("job_id", jobID), slog.String("error", err.Error()))
 	}
 
+	h.announceAccepted(r, jobID, driverID)
+
 	httpx.WriteJSON(w, r, http.StatusOK, AcceptResponse{
 		AssignmentID: assignment.ID,
 		JobID:        assignment.JobID,
 		Status:       string(assignment.Status),
 	})
+}
+
+// announceAccepted publishes the acceptance, and never fails the request.
+//
+// Like the two calls above it, this follows a committed acceptance: the driver
+// holds the job whether or not anybody's screen heard about it, and document
+// 047 requires that a client recover by asking rather than by trusting this
+// path.
+func (h *Handler) announceAccepted(r *http.Request, jobID, driverID string) {
+	if h.announce == nil {
+		return
+	}
+	requesterUserID, jobType := "", ""
+	if h.jobs != nil {
+		if job, err := h.jobs.ByID(r.Context(), jobID); err == nil {
+			requesterUserID, jobType = job.RequesterUserID, string(job.Type)
+		}
+	}
+	h.announce.JobAccepted(r.Context(), jobID, driverID, requesterUserID, jobType)
 }
 
 func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {

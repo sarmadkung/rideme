@@ -62,6 +62,56 @@ func (p *Publisher) JobChanged(_ context.Context, jobID, requesterUserID, driver
 	}
 }
 
+// Offer is the payload behind job.assigned and job.accepted.
+//
+// Both events carry the same shape because they are the same fact at two
+// moments: this driver, this job. What differs is who is waiting for it — the
+// driver's phone for the offer, the customer's screen for the confirmation.
+type Offer struct {
+	JobID    string `json:"job_id"`
+	DriverID string `json:"driver_id"`
+	JobType  string `json:"job_type,omitempty"`
+}
+
+// JobAssigned announces that a job has been offered to a driver.
+//
+// Published to the driver's own channel above all: until this existed, a
+// driver's app learned it had an offer by asking, and dispatch gives a driver
+// seconds to answer before the round moves on (BD-04). Asking every few
+// seconds to find out about something with a countdown attached is the wrong
+// shape, and it is why the offer TTL felt shorter than it is.
+func (p *Publisher) JobAssigned(_ context.Context, jobID, driverID, jobType string) {
+	if p == nil || jobID == "" || driverID == "" {
+		return
+	}
+	event := p.envelope(EventJobAssigned, jobID, Offer{
+		JobID: jobID, DriverID: driverID, JobType: jobType,
+	})
+	p.hub.Publish(Channel{Kind: ChannelDriver, ID: driverID}, event)
+	p.hub.Publish(Channel{Kind: ChannelJob, ID: jobID}, event)
+}
+
+// JobAccepted announces that the driver said yes.
+//
+// The customer's event as much as the driver's: "a driver is on the way" is
+// the first moment a booking stops being a search, and a customer watching a
+// spinner is the one waiting hardest for it.
+func (p *Publisher) JobAccepted(_ context.Context, jobID, driverID, requesterUserID, jobType string) {
+	if p == nil || jobID == "" {
+		return
+	}
+	event := p.envelope(EventJobAccepted, jobID, Offer{
+		JobID: jobID, DriverID: driverID, JobType: jobType,
+	})
+	p.hub.Publish(Channel{Kind: ChannelJob, ID: jobID}, event)
+	if driverID != "" {
+		p.hub.Publish(Channel{Kind: ChannelDriver, ID: driverID}, event)
+	}
+	if requesterUserID != "" {
+		p.hub.Publish(Channel{Kind: ChannelUser, ID: requesterUserID}, event)
+	}
+}
+
 // DriverPosition is the payload behind driver.location.
 type DriverPosition struct {
 	DriverID   string    `json:"driver_id"`

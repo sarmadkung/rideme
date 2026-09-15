@@ -278,7 +278,12 @@ func run() error {
 	// exist, and no endpoint had ever served a driver's position to the
 	// customer waiting for them.
 	dispatchStore := dispatch.NewStore(pool.Pool)
-	offerHandler := dispatch.NewHandler(dispatchStore, providerStore, trackingStore, logger)
+	// A driver's phone learns it has an offer, rather than discovering one by
+	// asking. Dispatch gives a driver seconds to answer before the round moves
+	// on (BD-04), and polling for something with a countdown attached is why
+	// the offer window felt shorter than it is.
+	offerHandler := dispatch.NewHandler(dispatchStore, providerStore, trackingStore, logger).
+		WithAnnouncer(events, jobStore)
 	trackHandler := tracking.NewHandler(trackingStore, driverIDLookup{providerStore})
 
 	server := &http.Server{
@@ -303,7 +308,8 @@ func run() error {
 	// ever left REQUESTED. A customer's booking reached the database and no
 	// driver. Round is the call that closes that gap.
 	dispatchEngine := dispatch.NewEngine(dispatchStore, jobStore, providerStore,
-		trackingStore, routes, logger, nil)
+		trackingStore, routes, logger, nil).
+		WithAnnouncer(events)
 	dispatchRunner := dispatch.NewRunner(dispatchEngine, jobStore, platformSettings, logger, nil).
 		WithOffers(dispatchStore)
 	// The send pass. Without it a notification is a row nobody reads: queueing
