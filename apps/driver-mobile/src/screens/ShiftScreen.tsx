@@ -63,10 +63,25 @@ export function ShiftScreen({
         <Text style={styles.earningsLink}>See earnings</Text>
       </Pressable>
 
-      {shift.error !== null && (
-        <Text style={styles.error} testID="shift-error">
-          {shift.error}
-        </Text>
+      {/* BD-09's refusal, shown ahead of the generic error because it is the
+          only one the driver can act on themselves — and with the amount,
+          because "you cannot go online" without a number is something a driver
+          reads as the app being broken. */}
+      {shift.blockedByCash ? (
+        <View style={styles.blocked} testID="shift-blocked">
+          <Text style={styles.blockedTitle}>Hand in platform cash to go online</Text>
+          <Text style={styles.blockedBody}>
+            You are holding {shift.blockedByCash.owed}, which is at your limit of{' '}
+            {shift.blockedByCash.cap}. Hand in {shift.blockedByCash.clearing} at any office to start
+            accepting trips again.
+          </Text>
+        </View>
+      ) : (
+        shift.error !== null && (
+          <Text style={styles.error} testID="shift-error">
+            {shift.error}
+          </Text>
+        )
       )}
 
       <Pressable
@@ -123,6 +138,24 @@ const styles = StyleSheet.create({
     color: tokens.color.danger,
     fontSize: tokens.fontSize.sm,
     marginBottom: tokens.space.md,
+  },
+  blocked: {
+    backgroundColor: tokens.color.surface,
+    borderRadius: tokens.radius.md,
+    borderLeftWidth: 3,
+    borderLeftColor: tokens.color.warning,
+    padding: tokens.space.md,
+    marginBottom: tokens.space.md,
+    gap: tokens.space.xs,
+  },
+  blockedTitle: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.md,
+    fontWeight: '600',
+  },
+  blockedBody: {
+    color: tokens.color.textMuted,
+    fontSize: tokens.fontSize.sm,
   },
   earningsLink: {
     color: tokens.color.text,

@@ -2397,3 +2397,319 @@ half: a digitally paid fare never creates this debt at all.
 
 gofmt clean; `check-migrations.sh` passes at 17 migrations. Not compiled — no
 Go toolchain is reachable from this session and proxy.golang.org is blocked.
+
+## An Operator Can Take The Cash — 2026-09-15
+
+The gap named in the previous entry, closed. The credit cap could stop a driver
+working and nothing could start them again: the ledger knew how to record a
+repayment and no route called it, so a blocked driver was stuck until somebody
+ran SQL against production.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `internal/credit` — the operator's counter | Done | 6 unit | Partial: no Go toolchain in this session |
+| `POST /admin/drivers/{id}/settlements` | Done | covered | Partial |
+| `GET /admin/drivers/{id}/balance` and `/settlements` | Done | covered | Partial |
+| `GET|PUT /admin/credit-limits` | Done | covered | Partial |
+| `GET /driver/settlements` | Done | — | Partial |
+
+### Decisions worth naming
+
+**Support can see a balance and cannot settle it.** "Why can I not go online"
+is the call support takes, so they read balances. Recording that money arrived,
+and changing a cap, are admin-only: an agent who can mark a debt settled
+without cash changing hands is a fraud path with a help-desk login. There is a
+test that fails if that split is ever widened by accident.
+
+**The caps are set over HTTP, not by migration.** The previous entry promised a
+seed migration for the owner's numbers. A route is better: a cap is
+configuration the owner changes as they learn which drivers are reliable, and
+routing that through a deployment makes it something they ask an engineer for
+instead of something they do.
+
+**Uncapped vehicle types are named, not inferred.** `GET /admin/credit-limits`
+returns the configured limits *and* an explicit `uncapped` list. A type with no
+row has no limit at all — that is the fact an operator most needs on this
+screen, and leaving it to be deduced from absence is how it gets missed.
+
+**A settlement response carries the driver's new standing.** So the agent can
+tell the driver they are back on the road without a second request. If that
+follow-up read fails the settlement is still reported as created: reporting an
+error there would have the agent take the cash again.
+
+**A driver id that does not resolve refuses before any money is recorded.** A
+typo in a uuid would otherwise create a settlement nobody can find and a ledger
+entry against a subject that is not there.
+
+**The agent who took the cash is stored.** `recorded_by` on every settlement.
+When the counted notes and the recorded total disagree, the question is who
+counted them.
+
+### What the owner still has to supply
+
+The numbers, still. `driver_credit_limits` is empty, and no cap means no limit.
+Now settable without a deployment:
+
+```
+PUT /api/v1/admin/credit-limits
+{ "vehicle_type": "MOTORCYCLE", "cap_minor": 80000, "warn_minor": 50000 }
+```
+
+(That example is PKR 800 and PKR 500 — an illustration of the shape, not a
+recommendation. The values are the owner's.)
+
+### What this does not do
+
+No digital remittance rail: `BANK_TRANSFER` and `WALLET` are accepted as
+methods so adding one is a caller rather than a migration, but nothing
+processes them — an operator records them by hand after the money arrives.
+No admin console screen; these are routes, not a UI.
+
+### Verification
+
+gofmt clean; `check-migrations` unchanged at 17. Not compiled — no Go toolchain
+is reachable from this session and proxy.golang.org is blocked.
+
+## A Customer Chooses How To Pay — 2026-09-15
+
+The owner's second decision of 2026-09-15: the platform keeps cash **and** adds
+digital, rather than replacing one with the other. This is the half that can be
+built before a provider exists, and it is built so that adding one later is
+configuration rather than surgery.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| Migration `000018` — method on jobs and orders, `payment_methods` table | Done | — | `check-migrations` passes at 18 |
+| `internal/payments` — `Provider`, `Gateway`, method gate | Done | 6 unit | Partial: no Go toolchain in this session |
+| `GET /payment-methods` | Done | covered | Partial |
+| Booking accepts and validates `payment_method` | Done | — | Partial |
+| `POST /webhooks/payments/{provider}` | Done | 5 unit | Partial |
+
+### The rule the package exists to enforce
+
+**A method is offerable only when something can process it.**
+
+A customer shown a card button that cannot charge a card has been lied to by
+the product, and they find out at the worst possible moment — standing next to
+a driver at the end of a trip, with no way to pay. So:
+
+- the database says what the business wants enabled (`payment_methods`),
+- the `Gateway` says what this binary can actually process,
+- the customer is offered the **intersection**, and
+- `Check` enforces it on the write path, because a client that renders the list
+  correctly is a hint and not a guarantee.
+
+`NewGateway()` is called in `main.go` with **no providers**, which is not a
+placeholder — it is the literal state of this deployment. Every digital method
+is therefore filtered out however the database is configured, and a method
+enabled with nothing behind it is logged as a misconfiguration rather than
+shown.
+
+A database CHECK refuses an enabled digital method with an empty provider, so
+that mistake cannot be made in SQL either.
+
+### Two zero-caller functions, finally called
+
+`finance.RecordWebhook` and `finance.VerifySignature` were written, tested and
+never called. The webhook receiver is that caller.
+
+It does nothing today, and that is correct rather than unfinished: every
+callback is refused at the first line because no provider is registered. **An
+open webhook endpoint that accepts anything is a way to tell the platform a
+payment succeeded when it did not.**
+
+What it does do when a provider exists:
+
+- **Records rejected callbacks as well as accepted ones.** Document 058 wants
+  the evidence — a burst of failing signatures is somebody probing, and an
+  endpoint that drops what it rejects cannot tell anyone that is happening.
+- **Deduplicates by the provider's event id**, falling back to a hash of the
+  body when the id cannot be read, so a replay still deduplicates rather than
+  being stored twice.
+- **Returns 5xx when it cannot record**, so the provider retries. Losing a
+  callback silently is how a captured payment never reaches the ledger.
+- **Returns 200 on a replay**, which is what stops a provider retrying forever
+  (document 052: "webhook processing must be idempotent").
+
+### Decisions worth naming
+
+**The method is checked before the idempotency lookup.** A refused method is
+refused the same way every time, rather than being replayed as a success by a
+retry of an earlier attempt.
+
+**`GET /payment-methods` is authenticated.** It holds nothing personal, but an
+unauthenticated list is a public statement of which providers this platform
+uses, which is reconnaissance for anybody probing the webhook route.
+
+**The provider is not serialised to the customer.** Which company processes a
+payment is not their concern, and naming it in a response is a detail that ends
+up in a client's switch statement.
+
+**An unset method is CASH.** Matching the column default, so a job created by a
+path that does not ask — a shop turning a ready order into a delivery — keeps
+the behaviour it had before the choice existed.
+
+### What this does not do
+
+**No provider, so no digital payment actually works.** `Provider` has no
+implementation. Authorize-at-confirm and capture-at-completion are the next
+slice and cannot be written honestly against nothing.
+
+**Settlement is untouched.** It still takes cash for every job, which is safe
+by construction: no digital method can be chosen, so no job reaches settlement
+with one.
+
+**Nothing acts on a recorded callback yet.** It lands durably with
+`processed_at IS NULL`, which is the state that column exists to represent.
+
+### Verification
+
+gofmt clean (formatted by `gofmt -w` in a container with a Go toolchain, then
+written back). `check-migrations` passes at 18. Not compiled — no Go toolchain
+is reachable from this session and proxy.golang.org is blocked.
+
+## A Driver Sees What They Owe — 2026-09-15
+
+The cap can stop a driver working and an operator can now take their cash. The
+driver themselves still had no way to see any of it: the block arrived as
+"Something went wrong", which is what a driver reads as the app being broken,
+and then they drive for somebody else.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `contractgen` registers `DriverStanding`, `DriverBalance`, `DriverSettlement` | Done | — | **Needs `make contracts`** |
+| `ApiClient.driverBalance` / `driverSettlements` | Done | — | Lint clean |
+| `useShift` reads BD-09's refusal out of the error | Done | 3 unit | **Run: 66/66 jest green** |
+| `ShiftScreen` says what to hand in | Done | covered | **Run** |
+| `EarningsScreen` shows held platform cash | Done | 3 unit | **Run** |
+
+### `make contracts` must run before `make verify`
+
+Three Go types are newly registered in `contractgen` and the generated
+TypeScript has not been regenerated — no Go toolchain is reachable from this
+session, so the generator could not be run here.
+
+```
+make contracts   # regenerates packages/types and packages/validation
+make verify
+```
+
+ADR-007 makes the Go types authoritative and CI's contract gate fails on stale
+output, so this is the normal workflow rather than a workaround. It does mean
+`tsc` will fail until it runs; jest passes regardless, because babel strips
+types rather than checking them.
+
+### Decisions worth naming
+
+**The refusal has its own state field, not the generic error string.** BD-09's
+block is the only refusal a driver can act on themselves, and the amount has to
+survive into the screen. The server already sends the figures in the error
+details for exactly this reason; `cashBlock` reads them out, and an unrelated
+conflict is left as an ordinary error rather than rendering a card with three
+undefined amounts in it.
+
+**The block clears on every attempt.** A driver who has just handed in cash
+taps the button again, and a stale block would tell them they are still
+stopped.
+
+**What is owed is shown above what was earned, and never subtracted from it.**
+One is what the driver has made; the other is cash in their pocket that belongs
+to the platform. Netting them produces a number that answers neither question,
+and a driver would reasonably read it as a deduction from their pay.
+
+**A failed balance read does not hide the earnings.** The two questions are
+independent, and answering neither because one store was unreachable is worse
+than answering one.
+
+**No cap means no card.** A driver with no configured limit sees nothing rather
+than "you are holding PKR 0.00", which is noise on the screen they open to
+check their pay.
+
+### Verification
+
+**Run:** 66/66 jest tests across 8 suites, eslint clean, prettier written,
+`check-migrations` at 18. **Not run:** `tsc`, which needs `make contracts`
+first, and the Go side, which has no toolchain here.
+
+## A Review Pass Over Code That Has Never Compiled — 2026-09-15
+
+Four branches are stacked and unmerged, and the Go in them has never been
+through a compiler in this session. Rather than stack a fifth feature, this is
+a deliberate pass hunting the class of defect that only a build catches.
+
+Two real findings.
+
+### 1. `router_test.go` was three arguments behind the signature
+
+`newRouter` grew `creditHandler`, `paymentsHandler` and `webhookHandler` across
+the stack. The test calls it with a positional list of bare `nil`s, and that
+list stayed at twelve. **The test package would not have compiled.**
+
+This is the same shape that produced the earlier `fix(api): main compiles
+again` — a positional call falling behind a signature, silent until a build.
+Fixed, and guarded two ways:
+
+- the nils are grouped four-four-three-two with a comment naming which handler
+  each stands for, so a miscount is visible in review rather than only to the
+  compiler;
+- a new test asserts the router still serves health with no handlers wired,
+  which is the property `newRouter`'s nil-guards exist to provide and which
+  nothing previously exercised.
+
+### 2. A database failure told customers their card was declined
+
+`booking.Create` mapped **every** error from the payment-method check to
+"this payment method is not available":
+
+```go
+if err := s.methods.Allowed(ctx, method); err != nil {
+    return jobs.Job{}, httpx.Validation("this payment method is not available", ...)
+}
+```
+
+`Allowed` reads `payment_methods` from the database first. A failed query and a
+genuinely disallowed method produced the same message — so a customer would be
+told to change payment method to solve an outage they had nothing to do with,
+and support would receive a wave of "my card does not work" for a query that
+timed out.
+
+Fixed with a `booking.ErrMethodRefused` sentinel so the two answers survive the
+interface boundary: refused is a 422 naming the method, anything else is a 500.
+The distinction could not be made without a sentinel, because the interface
+returns a bare `error` and booking would otherwise have to guess — and the
+guess it was making was the damaging one.
+
+### What was checked and found sound
+
+- **Every consumer-declared interface against its implementation**: booking's
+  five, dispatch's four, driver's two, settlement's three, credit's two,
+  payments' one. All satisfied, including argument order and return arity.
+- **Struct literal fields** against their definitions —
+  `finance.Settlement`, `realtime.DriverPosition`, `tracking.Fix`,
+  `finance.CreditLimit`.
+- **Every `money.Amount` method called** against the type's method set.
+- **Unused imports** across every new and changed file — none.
+- **Every error sentinel declared this session** against whether a caller
+  handles it. The unhandled ones are unhandled correctly: `ErrUnbalanced`,
+  `ErrNoEntries` and `ErrMixedCurrency` are programming faults that should
+  reach a 500, and `settlement.ErrNotComplete` / `ErrNoDriver` are logged
+  rather than returned because settlement never fails a driver's command.
+
+### What this pass cannot do
+
+It reasons about types by reading them. It does not type-check, it cannot see a
+missing method on an embedded type or a subtle interface mismatch behind a type
+alias, and it proves nothing about behaviour. `make verify` remains the gate.
+The finding above is evidence the gate is load-bearing, not evidence it can be
+skipped.
+
+### Verification
+
+gofmt clean. Not compiled — no Go toolchain is reachable from this session and
+proxy.golang.org is blocked.

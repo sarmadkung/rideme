@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/credit"
 	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/finance"
@@ -25,6 +26,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/jobs"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/notify"
+	"github.com/sarmadkung/rideme/services/api/internal/payments"
 	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/internal/pricing"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
@@ -238,6 +240,28 @@ func run() error {
 	// Membership is what scopes a job channel to the people on that job;
 	// without it the authorizer denies job and merchant channels outright,
 	// which fails closed rather than open.
+	// The counter an agent stands behind (BD-09). The cap built alongside it
+	// could stop a driver working and nothing could start them again: the
+	// ledger knew how to record a repayment and no route called it, so a
+	// blocked driver was stuck until somebody ran SQL.
+	creditHandler := credit.NewHandler(ledger, providerStore)
+
+	// How a customer may pay (documents 052, 518). The owner decided on
+	// 2026-09-15 to keep cash and add digital; this is the half that can exist
+	// before a provider does.
+	//
+	// NewGateway is called with no providers, and that is not a placeholder —
+	// it is the literal state of this deployment. Every digital method is
+	// therefore filtered out of the customer's choices however the database is
+	// configured, and the webhook route refuses every callback. A customer
+	// shown a card button that cannot charge a card finds out at the worst
+	// moment: standing next to a driver at the end of a trip.
+	paymentStore := payments.NewStore(pool.Pool)
+	paymentGateway := payments.NewGateway()
+	paymentsHandler := payments.NewHandler(paymentStore, paymentGateway, logger)
+	webhookHandler := payments.NewWebhookHandler(ledger, paymentGateway, logger)
+	bookingService.WithPaymentMethods(paymentRules{store: paymentStore, gateway: paymentGateway})
+
 	hub := realtime.NewHub(realtime.RoleAuthorizer{Membership: jobMembership{jobStore}.can})
 	events := realtime.NewPublisher(hub, nil)
 	realtimeHandler := realtime.NewHandler(hub, driverIDLookup{providerStore})
@@ -290,7 +314,8 @@ func run() error {
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
 			driverHandler, zonesHandler, placesHandler, merchantHandler, groceryHandler,
-			offerHandler, trackHandler, realtimeHandler, notifyHandler, issuer, serviceName, version, logger,
+			offerHandler, trackHandler, realtimeHandler, notifyHandler, creditHandler,
+			paymentsHandler, webhookHandler, issuer, serviceName, version, logger,
 			cfg.CORSAllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -440,6 +465,32 @@ func (m jobMembership) can(sub realtime.Subscriber, ch realtime.Channel) (bool, 
 		return true, nil
 	}
 	return sub.DriverID != "" && job.AssignedDriverID == sub.DriverID, nil
+}
+
+// paymentRules is booking's view of what a customer may choose.
+//
+// The database says what the business wants enabled; the gateway says what
+// this binary can actually process. A customer may use the intersection, and
+// nothing else — checked on the write path rather than trusted from whatever
+// the client rendered.
+type paymentRules struct {
+	store   *payments.Store
+	gateway *payments.Gateway
+}
+
+func (p paymentRules) Allowed(ctx context.Context, method string) error {
+	configured, err := p.store.Configured(ctx)
+	if err != nil {
+		// Returned as itself, so booking can tell "could not check" from
+		// "not allowed". A customer told their card is unavailable because a
+		// query failed will change payment method to solve a problem they do
+		// not have.
+		return err
+	}
+	if err := p.gateway.Check(payments.Method(method), configured); err != nil {
+		return fmt.Errorf("%w: %w", booking.ErrMethodRefused, err)
+	}
+	return nil
 }
 
 // creditCheck asks the ledger whether a driver may carry more platform cash.

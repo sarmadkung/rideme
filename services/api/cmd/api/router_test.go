@@ -31,8 +31,50 @@ func testRouter(t *testing.T, probeErr error) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(checker, identity.NewHandler(nil), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	// One nil per handler parameter. Positional nils are exactly how this
+	// call silently falls behind the signature, so they are grouped and named
+	// rather than run together: a miscount is a compile error that says
+	// "not enough arguments" and nothing about which one is missing.
+	return newRouter(
+		checker, identity.NewHandler(nil),
+		nil, nil, nil, nil, // booking, driver, zones, places
+		nil, nil, nil, nil, // merchant, grocery, offers, tracking
+		nil, nil, nil, // realtime, notify, credit
+		nil, nil, // payment methods, payment webhooks
 		issuer, "api", "test", logger, nil)
+}
+
+// Every handler the router takes is reachable through it.
+//
+// This test exists because the call above fell three arguments behind the
+// signature and nothing said so until a compiler did. A positional list of
+// nils is exactly the shape that drifts: a new handler is added to `newRouter`
+// and to `main.go`, and the test keeps compiling right up until it does not.
+//
+// Counting the routes a fully-wired router registers would need every handler
+// constructed. Asserting that a nil handler is *skipped* rather than
+// dereferenced is cheap, and it is the property the nil-guards in `newRouter`
+// exist to provide: a process missing an optional dependency must still serve
+// the rest.
+func TestARouterWithNoHandlersStillServesHealth(t *testing.T) {
+	router := testRouter(t, nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("liveness returned %d with no handlers wired, want 200", recorder.Code)
+	}
+
+	// And a route whose handler is absent is a 404 rather than a panic.
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/payment-methods", nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, missing)
+
+	if recorder.Code == http.StatusInternalServerError {
+		t.Error("an unwired handler produced a 500; the nil guard did not hold")
+	}
 }
 
 // Acceptance criterion 5: health reports accurately in both directions.

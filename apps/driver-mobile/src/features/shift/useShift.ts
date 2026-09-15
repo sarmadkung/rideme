@@ -19,6 +19,16 @@ export interface ShiftState {
   error: string | null;
   /** Seconds left to answer an offer, or null when there is nothing to answer. */
   offerSecondsLeft: number | null;
+  /**
+   * Why the driver cannot go online, when the reason is platform cash they are
+   * holding (BD-09).
+   *
+   * Its own field rather than the generic error string, because this refusal
+   * is the only one the driver can act on themselves and the amount has to
+   * survive into the screen. "Something went wrong" is what a driver reads as
+   * "the app is broken", and then they drive for somebody else.
+   */
+  blockedByCash: { owed: string; cap: string; clearing: string } | null;
 }
 
 export interface ShiftActions {
@@ -37,6 +47,7 @@ const INITIAL: ShiftState = {
   pending: false,
   error: null,
   offerSecondsLeft: null,
+  blockedByCash: null,
 };
 
 /** How often an online driver checks for work. */
@@ -44,7 +55,9 @@ export const POLL_MS = 4000;
 
 export function isOnline(driver: DriverProfile | null): boolean {
   if (driver === null) return false;
-  return driver.status !== 'OFFLINE' && driver.status !== 'SUSPENDED' && driver.status !== 'BLOCKED';
+  return (
+    driver.status !== 'OFFLINE' && driver.status !== 'SUSPENDED' && driver.status !== 'BLOCKED'
+  );
 }
 
 /**
@@ -55,7 +68,9 @@ export function isOnline(driver: DriverProfile | null): boolean {
  * only start. Offering more would let a driver complete a trip they never
  * began.
  */
-export function nextCommand(job: Job | null): { action: 'arrive' | 'start' | 'complete'; label: string } | null {
+export function nextCommand(
+  job: Job | null,
+): { action: 'arrive' | 'start' | 'complete'; label: string } | null {
   if (job === null) return null;
   switch (job.status) {
     case 'ACCEPTED':
@@ -86,12 +101,19 @@ export function useShift(
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  // The last raw error, kept because the state only carries a message and some
+  // refusals say more than a sentence: BD-09's cap sends the amounts in the
+  // error details so the app can tell a driver what to hand in.
+  const lastErrorRef = useRef<unknown>(null);
+
   const run = useCallback(async (work: () => Promise<Partial<ShiftState>>) => {
     setState((s) => ({ ...s, pending: true, error: null }));
+    lastErrorRef.current = null;
     try {
       const patch = await work();
       setState((s) => ({ ...s, ...patch, pending: false, error: null }));
     } catch (error) {
+      lastErrorRef.current = error;
       setState((s) => ({ ...s, pending: false, error: messageFor(error) }));
     }
   }, []);
@@ -116,10 +138,18 @@ export function useShift(
 
   const goOnline = useCallback(
     async (at: PositionInput) => {
-      await run(async () => {
-        const driver = await client.goOnline(at);
-        return { driver };
-      });
+      // Cleared on every attempt: a driver who has just handed in cash taps
+      // this again, and a stale block would tell them they are still stopped.
+      setState((s) => ({ ...s, blockedByCash: null }));
+      try {
+        await run(async () => {
+          const driver = await client.goOnline(at);
+          return { driver };
+        });
+      } finally {
+        const held = cashBlock(lastErrorRef.current);
+        if (held !== null) setState((s) => ({ ...s, blockedByCash: held }));
+      }
     },
     [client, run],
   );
@@ -237,4 +267,18 @@ export function useShift(
 function messageFor(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   return 'Something went wrong. Please try again.';
+}
+
+/**
+ * Reads BD-09's refusal out of an error, when that is what it is.
+ *
+ * The server sends the figures in the error details precisely so the app can
+ * say the amount without a second request — a driver standing next to their
+ * bike wants to know what to hand in, not that a conflict occurred.
+ */
+export function cashBlock(error: unknown): { owed: string; cap: string; clearing: string } | null {
+  if (!(error instanceof ApiError) || error.code !== 'conflict') return null;
+  const { owed, cap, clearing } = error.details;
+  if (owed === undefined || cap === undefined || clearing === undefined) return null;
+  return { owed, cap, clearing };
 }

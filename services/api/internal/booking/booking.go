@@ -126,8 +126,12 @@ type Service struct {
 	// reaches one that is open and connected, which is not where a customer
 	// is while they wait for a driver.
 	notify Notifier
-	logger *slog.Logger
-	now    func() time.Time
+	// methods decides whether the customer may pay the way they asked to.
+	// Optional: without it every booking is cash, which is what the platform
+	// did before the choice existed.
+	methods PaymentMethods
+	logger  *slog.Logger
+	now     func() time.Time
 }
 
 // DeliveryFollower is the order side of document 070's link.
@@ -167,6 +171,23 @@ type Announcer interface {
 // about tokens, devices or preferences.
 type Notifier interface {
 	JobStatusChanged(ctx context.Context, jobID, userID, jobType, status string) error
+}
+
+// ErrMethodRefused is the answer "the customer may not pay that way", as
+// distinct from "the answer could not be determined".
+//
+// Declared here so the distinction survives the interface boundary. Without
+// it, booking sees one error type for both and has to guess — and the guess it
+// would make, refusing, tells a customer to change payment method to solve a
+// database outage.
+var ErrMethodRefused = errors.New("booking: this payment method is not available")
+
+// PaymentMethods decides whether a customer may pay the way they asked to.
+//
+// Declared here rather than imported so booking knows nothing about providers:
+// it knows a customer named a method and asks whether that is allowed.
+type PaymentMethods interface {
+	Allowed(ctx context.Context, method string) error
 }
 
 // TripTracking is the half of tracking a job's lifecycle drives.
@@ -219,6 +240,12 @@ func (s *Service) WithAnnouncer(announce Announcer) *Service {
 // through.
 func (s *Service) WithNotifier(notify Notifier) *Service {
 	s.notify = notify
+	return s
+}
+
+// WithPaymentMethods attaches the rule that decides how a customer may pay.
+func (s *Service) WithPaymentMethods(methods PaymentMethods) *Service {
+	s.methods = methods
 	return s
 }
 
@@ -423,12 +450,15 @@ func (s *Service) PriceDelivery(ctx context.Context, job jobs.Job) error {
 
 // CreateRequest confirms a quote into a job.
 type CreateRequest struct {
-	QuoteID        string
-	RequesterID    string
-	JobType        jobs.Type
-	Stops          []jobs.Stop
-	Requirements   []jobs.Requirement
-	ScheduledAt    *time.Time
+	QuoteID      string
+	RequesterID  string
+	JobType      jobs.Type
+	Stops        []jobs.Stop
+	Requirements []jobs.Requirement
+	ScheduledAt  *time.Time
+	// PaymentMethod is how the customer said they will pay. Empty means cash,
+	// which is what every booking meant before the choice existed.
+	PaymentMethod  string
 	IdempotencyKey string
 }
 
@@ -439,6 +469,29 @@ type CreateRequest struct {
 // financial or operational effects". A customer whose network dropped
 // mid-request must not find two rides on the way.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (jobs.Job, error) {
+	// Checked before the idempotency lookup, so a refused method is refused
+	// the same way every time rather than being replayed as a success by a
+	// retry of the first attempt.
+	if s.methods != nil {
+		method := req.PaymentMethod
+		if method == "" {
+			method = "CASH"
+		}
+		switch err := s.methods.Allowed(ctx, method); {
+		case err == nil:
+		case errors.Is(err, ErrMethodRefused):
+			return jobs.Job{}, httpx.Validation("this payment method is not available",
+				map[string]string{"payment_method": method})
+		default:
+			// A failure to *read* what is allowed is not a refusal of the
+			// method. Flattening the two would tell a customer their card is
+			// unavailable when the database was briefly unreachable, and they
+			// would change payment method to solve a problem they do not have.
+			return jobs.Job{}, httpx.Internal("could not check payment methods").WithCause(err)
+		}
+		req.PaymentMethod = method
+	}
+
 	fingerprint := fingerprintOf(req)
 
 	if req.IdempotencyKey != "" {
@@ -483,6 +536,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (jobs.Job, erro
 		QuoteID:         req.QuoteID,
 		Stops:           req.Stops,
 		Requirements:    req.Requirements,
+		PaymentMethod:   req.PaymentMethod,
 	}, jobs.Actor{Type: jobs.ActorCustomer, ID: req.RequesterID})
 	if err != nil {
 		if errors.Is(err, jobs.ErrNoStops) || errors.Is(err, jobs.ErrStopOrder) || errors.Is(err, jobs.ErrBadCoordinate) {

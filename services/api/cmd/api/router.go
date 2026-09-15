@@ -5,11 +5,13 @@ import (
 	"net/http"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/credit"
 	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/merchant"
 	"github.com/sarmadkung/rideme/services/api/internal/notify"
+	"github.com/sarmadkung/rideme/services/api/internal/payments"
 	"github.com/sarmadkung/rideme/services/api/internal/places"
 	"github.com/sarmadkung/rideme/services/api/internal/realtime"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
@@ -38,6 +40,9 @@ func newRouter(
 	trackHandler *tracking.Handler,
 	realtimeHandler *realtime.Handler,
 	notifyHandler *notify.Handler,
+	creditHandler *credit.Handler,
+	paymentsHandler *payments.Handler,
+	webhookHandler *payments.WebhookHandler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
@@ -80,6 +85,17 @@ func newRouter(
 	}
 	if notifyHandler != nil {
 		notifyHandler.Routes(mux, authenticate)
+	}
+	if creditHandler != nil {
+		creditHandler.Routes(mux, authenticate)
+	}
+	if paymentsHandler != nil {
+		paymentsHandler.Routes(mux, authenticate)
+	}
+	// Unauthenticated by necessity — a provider has no session. The signature
+	// is the authentication, and nothing happens before it verifies.
+	if webhookHandler != nil {
+		webhookHandler.Routes(mux)
 	}
 	if trackHandler != nil {
 		trackHandler.Routes(mux, authenticate)

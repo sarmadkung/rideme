@@ -19,13 +19,14 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
 const jobColumns = `id, type, requester_user_id, COALESCE(merchant_id::text, ''), status,
 	scheduled_at, COALESCE(pricing_quote_id::text, ''), COALESCE(assigned_driver_id::text, ''),
-	COALESCE(assigned_vehicle_id::text, ''), terminated_at, created_at, updated_at`
+	COALESCE(assigned_vehicle_id::text, ''), terminated_at, created_at, updated_at,
+	payment_method`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.Type, &j.RequesterUserID, &j.MerchantID, &j.Status,
 		&j.ScheduledAt, &j.QuoteID, &j.AssignedDriverID, &j.AssignedVehicleID,
-		&j.TerminatedAt, &j.CreatedAt, &j.UpdatedAt)
+		&j.TerminatedAt, &j.CreatedAt, &j.UpdatedAt, &j.PaymentMethod)
 	return j, err
 }
 
@@ -55,10 +56,18 @@ func (s *Store) Create(ctx context.Context, job Job, actor Actor) (Job, error) {
 		quote = job.QuoteID
 	}
 
+	// An unset method is CASH, matching the column default. A job created by
+	// a path that does not ask — a shop turning a ready order into a delivery,
+	// say — keeps the behaviour it had before the choice existed.
+	method := job.PaymentMethod
+	if method == "" {
+		method = "CASH"
+	}
+
 	created, err := scanJob(tx.QueryRow(ctx,
-		`INSERT INTO jobs (type, requester_user_id, merchant_id, status, scheduled_at, pricing_quote_id)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+jobColumns,
-		job.Type, job.RequesterUserID, merchant, status, job.ScheduledAt, quote))
+		`INSERT INTO jobs (type, requester_user_id, merchant_id, status, scheduled_at, pricing_quote_id, payment_method)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING `+jobColumns,
+		job.Type, job.RequesterUserID, merchant, status, job.ScheduledAt, quote, method))
 	if err != nil {
 		return Job{}, fmt.Errorf("insert job: %w", err)
 	}
