@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { formatMoney, tokens } from '@platform/ui';
 import type { ApiClient } from '@platform/api-client';
-import type { DriverEarnings } from '@platform/types';
+import type { DriverBalance, DriverEarnings } from '@platform/types';
 
 /**
  * What the driver has made.
@@ -14,11 +14,20 @@ import type { DriverEarnings } from '@platform/types';
  */
 export function EarningsScreen({ client, onBack }: { client: ApiClient; onBack(): void }) {
   const [earnings, setEarnings] = useState<DriverEarnings | null>(null);
+  const [balance, setBalance] = useState<DriverBalance | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
+    // The balance is read separately and its failure is not fatal. A driver
+    // who cannot see what they owe should still see what they earned; the two
+    // questions are independent and answering neither because one store was
+    // unreachable is worse than answering one.
+    void client
+      .driverBalance()
+      .then(setBalance)
+      .catch(() => setBalance(null));
     try {
       setEarnings(await client.driverEarnings());
       setFailed(false);
@@ -57,6 +66,25 @@ export function EarningsScreen({ client, onBack }: { client: ApiClient; onBack()
           <Pressable testID="earnings-retry" onPress={() => void load()}>
             <Text style={styles.retry}>Try again</Text>
           </Pressable>
+        </View>
+      )}
+
+      {/* What the driver owes, above what they earned.
+          Deliberately not subtracted from the earnings figure: one is what
+          they have made and the other is cash in their pocket that belongs to
+          the platform. Netting them would produce a number that answers
+          neither question, and a driver would reasonably read it as a
+          deduction from their pay. */}
+      {balance !== null && balance.standing.limited && (
+        <View
+          style={[styles.held, balance.standing.blocked ? styles.heldBlocked : styles.heldOk]}
+          testID="earnings-held"
+        >
+          <Text style={styles.heldLabel}>Platform cash you are holding</Text>
+          <Text style={styles.heldAmount} testID="earnings-held-amount">
+            {formatMoney(balance.standing.owed)}
+          </Text>
+          <Text style={styles.heldMessage}>{balance.message}</Text>
         </View>
       )}
 
@@ -190,6 +218,29 @@ const styles = StyleSheet.create({
   tripAmount: { color: tokens.color.text, fontSize: tokens.fontSize.md },
   tripWhen: { color: tokens.color.textMuted, fontSize: tokens.fontSize.sm },
   empty: { color: tokens.color.textMuted, fontSize: tokens.fontSize.md },
+  held: {
+    backgroundColor: tokens.color.surface,
+    borderRadius: tokens.radius.md,
+    borderLeftWidth: 3,
+    padding: tokens.space.md,
+    marginBottom: tokens.space.md,
+    gap: tokens.space.xs,
+  },
+  heldOk: { borderLeftColor: tokens.color.border },
+  heldBlocked: { borderLeftColor: tokens.color.warning },
+  heldLabel: {
+    color: tokens.color.textMuted,
+    fontSize: tokens.fontSize.sm,
+  },
+  heldAmount: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.lg,
+    fontWeight: '600',
+  },
+  heldMessage: {
+    color: tokens.color.textMuted,
+    fontSize: tokens.fontSize.sm,
+  },
   error: {
     color: tokens.color.danger,
     fontSize: tokens.fontSize.md,

@@ -278,4 +278,88 @@ describe('useShift.refresh', () => {
     expect(result.current.error).toBe('this account is not a driver');
     expect(result.current.driver).toBeNull();
   });
+
+  describe("BD-09's cash cap", () => {
+    // The refusal a driver can act on. The server sends the figures in the
+    // error details precisely so the app can name the amount without a second
+    // request: a driver standing next to their bike wants to know what to hand
+    // in, not that a conflict occurred.
+    it('reads the amounts out of a refused go-online', async () => {
+      const refusal = new ApiError(409, {
+        code: 'conflict',
+        message: 'hand in platform cash before going online',
+        request_id: 'req-1',
+        details: { owed: 'PKR 900.00', cap: 'PKR 800.00', clearing: 'PKR 400.00' },
+      });
+      const client = stubClient({
+        goOnline: jest.fn(async () => {
+          throw refusal;
+        }),
+      });
+      const { result } = renderHook(() => useShift(asClient(client)));
+
+      await act(async () => {
+        await result.current.goOnline({ latitude: 31.52, longitude: 74.35 });
+      });
+
+      expect(result.current.blockedByCash).toEqual({
+        owed: 'PKR 900.00',
+        cap: 'PKR 800.00',
+        clearing: 'PKR 400.00',
+      });
+    });
+
+    // A driver who has just handed in cash taps this again. A stale block
+    // would tell them they are still stopped.
+    it('clears the block on the next attempt', async () => {
+      let refuse = true;
+      const client = stubClient({
+        goOnline: jest.fn(async () => {
+          if (refuse) {
+            throw new ApiError(409, {
+              code: 'conflict',
+              message: 'hand in platform cash before going online',
+              request_id: 'req-2',
+              details: { owed: 'PKR 900.00', cap: 'PKR 800.00', clearing: 'PKR 400.00' },
+            });
+          }
+          return aDriver({ status: 'AVAILABLE' });
+        }),
+      });
+      const { result } = renderHook(() => useShift(asClient(client)));
+
+      await act(async () => {
+        await result.current.goOnline({ latitude: 31.52, longitude: 74.35 });
+      });
+      expect(result.current.blockedByCash).not.toBeNull();
+
+      refuse = false;
+      await act(async () => {
+        await result.current.goOnline({ latitude: 31.52, longitude: 74.35 });
+      });
+      expect(result.current.blockedByCash).toBeNull();
+    });
+
+    // Every other conflict is an ordinary error. Reading one as a cash block
+    // would show a card with three undefined amounts in it.
+    it('leaves an unrelated conflict alone', async () => {
+      const client = stubClient({
+        goOnline: jest.fn(async () => {
+          throw new ApiError(409, {
+            code: 'conflict',
+            message: 'your status changed, please retry',
+            request_id: 'req-3',
+          });
+        }),
+      });
+      const { result } = renderHook(() => useShift(asClient(client)));
+
+      await act(async () => {
+        await result.current.goOnline({ latitude: 31.52, longitude: 74.35 });
+      });
+
+      expect(result.current.blockedByCash).toBeNull();
+      expect(result.current.error).toBe('your status changed, please retry');
+    });
+  });
 });

@@ -2571,3 +2571,68 @@ with one.
 gofmt clean (formatted by `gofmt -w` in a container with a Go toolchain, then
 written back). `check-migrations` passes at 18. Not compiled — no Go toolchain
 is reachable from this session and proxy.golang.org is blocked.
+
+## A Driver Sees What They Owe — 2026-09-15
+
+The cap can stop a driver working and an operator can now take their cash. The
+driver themselves still had no way to see any of it: the block arrived as
+"Something went wrong", which is what a driver reads as the app being broken,
+and then they drive for somebody else.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `contractgen` registers `DriverStanding`, `DriverBalance`, `DriverSettlement` | Done | — | **Needs `make contracts`** |
+| `ApiClient.driverBalance` / `driverSettlements` | Done | — | Lint clean |
+| `useShift` reads BD-09's refusal out of the error | Done | 3 unit | **Run: 66/66 jest green** |
+| `ShiftScreen` says what to hand in | Done | covered | **Run** |
+| `EarningsScreen` shows held platform cash | Done | 3 unit | **Run** |
+
+### `make contracts` must run before `make verify`
+
+Three Go types are newly registered in `contractgen` and the generated
+TypeScript has not been regenerated — no Go toolchain is reachable from this
+session, so the generator could not be run here.
+
+```
+make contracts   # regenerates packages/types and packages/validation
+make verify
+```
+
+ADR-007 makes the Go types authoritative and CI's contract gate fails on stale
+output, so this is the normal workflow rather than a workaround. It does mean
+`tsc` will fail until it runs; jest passes regardless, because babel strips
+types rather than checking them.
+
+### Decisions worth naming
+
+**The refusal has its own state field, not the generic error string.** BD-09's
+block is the only refusal a driver can act on themselves, and the amount has to
+survive into the screen. The server already sends the figures in the error
+details for exactly this reason; `cashBlock` reads them out, and an unrelated
+conflict is left as an ordinary error rather than rendering a card with three
+undefined amounts in it.
+
+**The block clears on every attempt.** A driver who has just handed in cash
+taps the button again, and a stale block would tell them they are still
+stopped.
+
+**What is owed is shown above what was earned, and never subtracted from it.**
+One is what the driver has made; the other is cash in their pocket that belongs
+to the platform. Netting them produces a number that answers neither question,
+and a driver would reasonably read it as a deduction from their pay.
+
+**A failed balance read does not hide the earnings.** The two questions are
+independent, and answering neither because one store was unreachable is worse
+than answering one.
+
+**No cap means no card.** A driver with no configured limit sees nothing rather
+than "you are holding PKR 0.00", which is noise on the screen they open to
+check their pay.
+
+### Verification
+
+**Run:** 66/66 jest tests across 8 suites, eslint clean, prettier written,
+`check-migrations` at 18. **Not run:** `tsc`, which needs `make contracts`
+first, and the Go side, which has no toolchain here.

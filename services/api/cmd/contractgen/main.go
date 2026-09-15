@@ -136,6 +136,13 @@ func Registry() *contract.Registry {
 	r.Struct("TripEarning", finance.TripEarning{})
 	r.Struct("DriverEarnings", driver.Earnings{})
 
+	// BD-09's cap, as a driver's app sees it. Inner-first so the response's
+	// `standing` field resolves to the registered name rather than an inline
+	// shape — the same nesting rule the earnings types follow above.
+	r.Struct("DriverStanding", finance.Standing{})
+	r.Struct("DriverBalance", driver.BalanceResponse{})
+	r.Struct("DriverSettlement", finance.Settlement{})
+
 	// The merchant's order surface (documents 72, 74). The dashboard reads the
 	// same generated models the mobile apps do. Inner-first, so the order's
 	// items and issues resolve to the names registered here rather than to

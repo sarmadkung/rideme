@@ -27,7 +27,9 @@ import type {
   ApiErrorBody,
   CancelResult,
   DriverAssignment,
+  DriverBalance,
   DriverEarnings,
+  DriverSettlement,
   DriverProfile,
   ErrorCode,
   GroceryOrder,
@@ -50,8 +52,10 @@ import {
   apiErrorBodySchema,
   cancelResultSchema,
   driverAssignmentSchema,
+  driverBalanceSchema,
   driverEarningsSchema,
   driverProfileSchema,
+  driverSettlementSchema,
   groceryOrderSchema,
   healthResponseSchema,
   jobSchema,
@@ -209,6 +213,18 @@ export interface ApiClient {
 
   /** What the driver has made today and this week, and the trips behind it. */
   driverEarnings(): Promise<DriverEarnings>;
+
+  /**
+   * What the driver is holding that belongs to the platform, and whether it
+   * stops them working (BD-09).
+   *
+   * Separate from earnings on purpose: one is what they have made and the
+   * other is what they owe, and a screen that mixes them invites a driver to
+   * subtract one from the other, which is not what either number means.
+   */
+  driverBalance(): Promise<DriverBalance>;
+  /** What the driver has already handed in. */
+  driverSettlements(): Promise<DriverSettlement[]>;
 
   /**
    * The merchant's fulfilment surface (document 72).
@@ -694,6 +710,15 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     },
     async driverEarnings() {
       return driverEarningsSchema.parse(await request('/driver/earnings'));
+    },
+
+    async driverBalance() {
+      return driverBalanceSchema.parse(await request('/driver/balance'));
+    },
+
+    async driverSettlements() {
+      const body = (await request('/driver/settlements')) as { settlements?: unknown[] };
+      return (body.settlements ?? []).map((settlement) => driverSettlementSchema.parse(settlement));
     },
     async listMerchantOrders(listOptions = {}) {
       const body = (await request('/merchant/orders', {
