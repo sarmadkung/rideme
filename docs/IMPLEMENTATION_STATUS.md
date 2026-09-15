@@ -2397,3 +2397,77 @@ half: a digitally paid fare never creates this debt at all.
 
 gofmt clean; `check-migrations.sh` passes at 17 migrations. Not compiled — no
 Go toolchain is reachable from this session and proxy.golang.org is blocked.
+
+## An Operator Can Take The Cash — 2026-09-15
+
+The gap named in the previous entry, closed. The credit cap could stop a driver
+working and nothing could start them again: the ledger knew how to record a
+repayment and no route called it, so a blocked driver was stuck until somebody
+ran SQL against production.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `internal/credit` — the operator's counter | Done | 6 unit | Partial: no Go toolchain in this session |
+| `POST /admin/drivers/{id}/settlements` | Done | covered | Partial |
+| `GET /admin/drivers/{id}/balance` and `/settlements` | Done | covered | Partial |
+| `GET|PUT /admin/credit-limits` | Done | covered | Partial |
+| `GET /driver/settlements` | Done | — | Partial |
+
+### Decisions worth naming
+
+**Support can see a balance and cannot settle it.** "Why can I not go online"
+is the call support takes, so they read balances. Recording that money arrived,
+and changing a cap, are admin-only: an agent who can mark a debt settled
+without cash changing hands is a fraud path with a help-desk login. There is a
+test that fails if that split is ever widened by accident.
+
+**The caps are set over HTTP, not by migration.** The previous entry promised a
+seed migration for the owner's numbers. A route is better: a cap is
+configuration the owner changes as they learn which drivers are reliable, and
+routing that through a deployment makes it something they ask an engineer for
+instead of something they do.
+
+**Uncapped vehicle types are named, not inferred.** `GET /admin/credit-limits`
+returns the configured limits *and* an explicit `uncapped` list. A type with no
+row has no limit at all — that is the fact an operator most needs on this
+screen, and leaving it to be deduced from absence is how it gets missed.
+
+**A settlement response carries the driver's new standing.** So the agent can
+tell the driver they are back on the road without a second request. If that
+follow-up read fails the settlement is still reported as created: reporting an
+error there would have the agent take the cash again.
+
+**A driver id that does not resolve refuses before any money is recorded.** A
+typo in a uuid would otherwise create a settlement nobody can find and a ledger
+entry against a subject that is not there.
+
+**The agent who took the cash is stored.** `recorded_by` on every settlement.
+When the counted notes and the recorded total disagree, the question is who
+counted them.
+
+### What the owner still has to supply
+
+The numbers, still. `driver_credit_limits` is empty, and no cap means no limit.
+Now settable without a deployment:
+
+```
+PUT /api/v1/admin/credit-limits
+{ "vehicle_type": "MOTORCYCLE", "cap_minor": 80000, "warn_minor": 50000 }
+```
+
+(That example is PKR 800 and PKR 500 — an illustration of the shape, not a
+recommendation. The values are the owner's.)
+
+### What this does not do
+
+No digital remittance rail: `BANK_TRANSFER` and `WALLET` are accepted as
+methods so adding one is a caller rather than a migration, but nothing
+processes them — an operator records them by hand after the money arrives.
+No admin console screen; these are routes, not a UI.
+
+### Verification
+
+gofmt clean; `check-migrations` unchanged at 17. Not compiled — no Go toolchain
+is reachable from this session and proxy.golang.org is blocked.

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/credit"
 	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
@@ -38,6 +39,7 @@ func newRouter(
 	trackHandler *tracking.Handler,
 	realtimeHandler *realtime.Handler,
 	notifyHandler *notify.Handler,
+	creditHandler *credit.Handler,
 	issuer *authn.Issuer,
 	service, version string,
 	logger *slog.Logger,
@@ -80,6 +82,9 @@ func newRouter(
 	}
 	if notifyHandler != nil {
 		notifyHandler.Routes(mux, authenticate)
+	}
+	if creditHandler != nil {
+		creditHandler.Routes(mux, authenticate)
 	}
 	if trackHandler != nil {
 		trackHandler.Routes(mux, authenticate)

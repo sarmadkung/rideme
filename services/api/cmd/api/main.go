@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/credit"
 	"github.com/sarmadkung/rideme/services/api/internal/dispatch"
 	"github.com/sarmadkung/rideme/services/api/internal/driver"
 	"github.com/sarmadkung/rideme/services/api/internal/finance"
@@ -238,6 +239,12 @@ func run() error {
 	// Membership is what scopes a job channel to the people on that job;
 	// without it the authorizer denies job and merchant channels outright,
 	// which fails closed rather than open.
+	// The counter an agent stands behind (BD-09). The cap built alongside it
+	// could stop a driver working and nothing could start them again: the
+	// ledger knew how to record a repayment and no route called it, so a
+	// blocked driver was stuck until somebody ran SQL.
+	creditHandler := credit.NewHandler(ledger, providerStore)
+
 	hub := realtime.NewHub(realtime.RoleAuthorizer{Membership: jobMembership{jobStore}.can})
 	events := realtime.NewPublisher(hub, nil)
 	realtimeHandler := realtime.NewHandler(hub, driverIDLookup{providerStore})
@@ -290,7 +297,8 @@ func run() error {
 		Addr: net.JoinHostPort("", strconv.Itoa(cfg.Port)),
 		Handler: newRouter(checker, identity.NewHandler(identityService), bookingHandler,
 			driverHandler, zonesHandler, placesHandler, merchantHandler, groceryHandler,
-			offerHandler, trackHandler, realtimeHandler, notifyHandler, issuer, serviceName, version, logger,
+			offerHandler, trackHandler, realtimeHandler, notifyHandler, creditHandler,
+			issuer, serviceName, version, logger,
 			cfg.CORSAllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
