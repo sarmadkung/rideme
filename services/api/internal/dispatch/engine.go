@@ -28,8 +28,28 @@ type Engine struct {
 	providers *providers.Store
 	tracking  *tracking.Store
 	routes    *routing.Service
-	logger    *slog.Logger
-	now       func() time.Time
+	// announce tells a driver's phone it has an offer. Optional, and never
+	// load-bearing: the offer is in the database either way and the driver's
+	// app still polls its assignment. Without it, polling is the only way a
+	// driver finds out, which is the wrong shape for something with a
+	// countdown attached.
+	announce OfferAnnouncer
+	logger   *slog.Logger
+	now      func() time.Time
+}
+
+// OfferAnnouncer publishes an offer to whoever is watching.
+//
+// Declared at the consumer so dispatch stays ignorant of channels and
+// envelopes: it knows a driver was offered a job and says so.
+type OfferAnnouncer interface {
+	JobAssigned(ctx context.Context, jobID, driverID, jobType string)
+}
+
+// WithAnnouncer attaches the realtime gateway an offer is pushed through.
+func (e *Engine) WithAnnouncer(announce OfferAnnouncer) *Engine {
+	e.announce = announce
+	return e
 }
 
 func NewEngine(
@@ -212,6 +232,9 @@ func (e *Engine) Dispatch(ctx context.Context, jobID string) (Result, error) {
 			}
 			if err := e.tracking.RemoveFromPool(ctx, candidate.DriverID); err != nil {
 				e.logger.Warn("could not remove driver from the pool", slog.String("error", err.Error()))
+			}
+			if e.announce != nil {
+				e.announce.JobAssigned(ctx, jobID, candidate.DriverID, string(job.Type))
 			}
 			return Result{
 				Outcome: OutcomeOffered, Attempt: attempt, RadiusMeters: radius,

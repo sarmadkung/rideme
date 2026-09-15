@@ -2236,3 +2236,77 @@ provider, an API key and a native module. The driver app does not consume the
 stream at all — it has no screen that would change if it did. And the device
 registration built in the notifications slice is not called from either app
 yet, so no phone has a push token even where a provider existed.
+
+## A Driver Is Told, And Migrations Cannot Collide Again — 2026-09-15
+
+Two of the three items from the 2026-09-15 status review. The third — BD-09 —
+is the owner's and is untouched.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `realtime.Publisher.JobAssigned` / `JobAccepted` | Done | 3 unit | Partial: no Go toolchain in this session |
+| Dispatch engine announces an offer | Done | — | Partial |
+| Accept handler announces the acceptance | Done | — | Partial |
+| `scripts/check-migrations.sh` | Done | proven against the real bug | **Run: passes on main, fails on a reintroduced collision** |
+| `make migrate-check`, added to `verify` and to CI | Done | — | Partial |
+| Roadmap Live Record corrected (phases 11, 12, 13) | Done | — | n/a |
+
+### Two of nine became four of nine
+
+`EventJobAssigned` and `EventJobAccepted` were constants nothing constructed.
+The consequence was specific: **a driver's phone learned it had an offer by
+asking.** Dispatch gives a driver seconds to answer before the round moves on
+(BD-04), and polling for something with a countdown attached is why an offer
+window feels shorter than it is.
+
+`job.accepted` is the customer's event as much as the driver's — it is the
+moment a booking stops being a search, and the customer watching a spinner is
+the one waiting hardest for it. It publishes to the job channel, the driver's,
+and the customer's own, because a customer knows their user id before they know
+a job exists.
+
+Five of nine event types remain unconstructed: driver online/offline, quote,
+payment and support. Each needs a surface that does not exist yet.
+
+### The migration guard
+
+`000014` was claimed by two migrations that reached main from branches which
+never saw each other — neither pull request's diff showed the other's file.
+golang-migrate then refuses the whole directory, so `migrate up` did not run at
+all.
+
+CI's integration job would have caught it on the next pull request touching
+`services/api`. That is both too late and not soon enough: the window between
+the two merges was a `main` on which no migration could run, and the first
+person to feel it would have been whoever deployed.
+
+`scripts/check-migrations.sh` checks three things in about a second, with no
+database and no Go: versions are unique, every `up` has a `down`, and every
+name is one golang-migrate can parse. It runs in `make verify`, in `make
+migrate-check`, and as the first step of CI's Go job — before any service
+container starts.
+
+It was tested the only way a guard should be: by reintroducing the exact bug in
+a copy of the directory and confirming it fails, then confirming it passes on
+main.
+
+### A question this does not answer
+
+That collision should have failed CI's `migrate up / down / up` step on the
+second pull request, and the merge happened anyway. Either that job is not
+running, or it is red and being merged past. **Until someone confirms which,
+every claim in this document about integration coverage is worth less than it
+sounds** — including the correction made on 2026-09-14, which argued the suite
+was running all along. The guard above reduces the blast radius; it does not
+answer the question.
+
+Branch protection with required status checks is the fix if the answer is "red
+and merged past". That is a repository setting, not a code change.
+
+### Verification
+
+gofmt clean. `check-migrations.sh` executed, both ways. The Go changes are not
+compiled — no Go toolchain is reachable from this session and proxy.golang.org
+is blocked.

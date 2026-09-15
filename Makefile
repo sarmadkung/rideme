@@ -13,7 +13,7 @@ API     := services/api
 .DEFAULT_GOAL := help
 .PHONY: help setup infra-up infra-down infra-logs infra-reset \
         migrate-up migrate-down migrate-version api-run api-test api-lint \
-        api-test-integration verify-full \
+        api-test-integration verify-full migrate-check \
         install dev lint typecheck test build verify
 
 help: ## List available targets
@@ -66,6 +66,9 @@ api-run: ## Run the Go API on the host
 api-test: ## Run Go unit tests
 	cd $(API) && go test ./...
 
+migrate-check: ## Refuse a migrations directory golang-migrate would refuse
+	./scripts/check-migrations.sh
+
 api-test-integration: ## Run Go integration tests (needs `make infra-up` and `make migrate-up`)
 	cd $(API) && go test -tags=integration ./tests/...
 
@@ -109,7 +112,7 @@ build: ## Build the workspace
 
 # --- everything --------------------------------------------------------------
 
-verify: api-lint api-test contracts-check lint typecheck test build ## Run every quality gate, both toolchains
+verify: migrate-check api-lint api-test contracts-check lint typecheck test build ## Run every quality gate, both toolchains
 
 # What CI runs, and what `verify` deliberately does not: the integration suite
 # needs Postgres, Redis and NATS up and migrated. `verify` stays runnable on a

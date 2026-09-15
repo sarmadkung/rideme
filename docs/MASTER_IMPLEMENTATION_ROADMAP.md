@@ -1285,6 +1285,12 @@ Phase N — <name>
 > blocker column on 2026-08-29 after the business decisions were resolved. Every edit since
 > asserts its match. `IMPLEMENTATION_STATUS.md` has been correct throughout and remains the
 > authority where the two disagree.
+>
+> Drifted a third time and was corrected on 2026-09-15. Phases 11, 12 and 13 had each moved
+> without this table moving with them — it still recorded a 20% commission, an absent push
+> layer, and a merchant dashboard that had been built four days earlier. The cause was not a
+> silent replacement this time: nobody updated it. The lesson is the same either way, and
+> `IMPLEMENTATION_STATUS.md` remains the authority where the two disagree.
 
 | Phase | Status | Started | Completed | Blockers |
 |---|---|---|---|---|
@@ -1298,9 +1304,9 @@ Phase N — <name>
 | 8 — Dispatch engine | **VERIFIED** | 2026-08-28 | 2026-08-29 | none — BD-04 resolved 2026-08-28, B-5 closed; sweeper enforces the deadline |
 | 9 — Delivery and cargo | **VERIFIED** | 2026-08-28 | 2026-08-28 | BD-10/BD-13/BD-16 mechanisms built, values unset |
 | 10 — Grocery and merchant | **VERIFIED** | 2026-08-28 | 2026-08-29 | none — BD-11 and BD-12 resolved 2026-08-28; sweeper auto-cancels unanswered orders |
-| 11 — Payments and financial | **VERIFIED** | 2026-08-28 | 2026-08-29 | BD-05 resolved (flat 20%); BD-06/BD-09 open but block nothing built |
-| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | booking, trip, place search, foreground location and earnings built and tested; offline queue built but wired to nothing (B-7/BD-21); **no map, no push**; BD-17/18/19 unmeasured |
-| 13 — Operational dashboards | **PARTIAL** | 2026-08-28 | — | admin job list only; **merchant dashboard is an empty directory**; support and finance consoles outstanding |
+| 11 — Payments and financial | **VERIFIED** | 2026-08-28 | 2026-08-29 | BD-05 revised 2026-09-14 (flat 10% drivers, none from merchants, versioned); cash settlement reaches the ledger; **BD-09 now blocks: cash accumulates with no remittance path**; payouts, refunds, webhooks and reconciliation built and uncalled |
+| 12 — Mobile production | **PARTIAL** | 2026-08-28 | — | booking, trip, place search, foreground location and earnings built and tested; customer app consumes the realtime stream (2026-09-15); offline queue built but wired to nothing (B-7/BD-21); **no map**; push layer complete but no provider configured; driver app does not consume realtime; BD-17/18/19 unmeasured |
+| 13 — Operational dashboards | **PARTIAL** | 2026-08-28 | — | admin dashboard 3 screens, merchant dashboard 2 screens (built 2026-09-11); **support and finance consoles outstanding**; `marketing-web` is still empty |
 | 14 — Production infrastructure | **PARTIAL** | 2026-08-28 | — | CI contract gate built; **container does not build**; cloud needs credentials |
 | 15 — Hardening and release | **PARTIAL** | 2026-08-28 | — | full local verification run; load/E2E/remote CI outstanding |
 

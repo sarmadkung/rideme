@@ -97,6 +97,13 @@ jobs:
           go-version-file: services/api/go.mod
           cache-dependency-path: services/api/go.sum
 
+      # Cheap, and it runs before anything else in this job: two migrations
+      # sharing a version makes `migrate up` fail outright, and that reached
+      # main once because neither pull request's diff showed the other's file.
+      - name: Migration versions are unique and reversible
+        working-directory: .
+        run: ./scripts/check-migrations.sh
+
       - name: gofmt
         run: |
           unformatted="$(gofmt -l .)"
