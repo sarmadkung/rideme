@@ -309,7 +309,12 @@ func run() error {
 	// driver. Round is the call that closes that gap.
 	dispatchEngine := dispatch.NewEngine(dispatchStore, jobStore, providerStore,
 		trackingStore, routes, logger, nil).
-		WithAnnouncer(events)
+		WithAnnouncer(events).
+		// BD-09: a driver over their credit cap receives no further offers.
+		// Enforced in the round as well as at go-online, because a driver
+		// crosses the cap on the trip that pushes them over — mid-shift, while
+		// already online.
+		WithCreditCheck(creditCheck{ledger: ledger, logger: logger})
 	dispatchRunner := dispatch.NewRunner(dispatchEngine, jobStore, platformSettings, logger, nil).
 		WithOffers(dispatchStore)
 	// The send pass. Without it a notification is a row nobody reads: queueing
@@ -435,6 +440,27 @@ func (m jobMembership) can(sub realtime.Subscriber, ch realtime.Channel) (bool, 
 		return true, nil
 	}
 	return sub.DriverID != "" && job.AssignedDriverID == sub.DriverID, nil
+}
+
+// creditCheck asks the ledger whether a driver may carry more platform cash.
+//
+// It swallows its error deliberately, and this is the one place in the money
+// path where that is right: a ledger that cannot be read must not empty the
+// candidate pool for the whole city. The platform accepts the risk of one more
+// trip, and the failure is logged where somebody will see it.
+type creditCheck struct {
+	ledger *finance.Store
+	logger *slog.Logger
+}
+
+func (c creditCheck) MayWork(ctx context.Context, driverID, vehicleType string) bool {
+	standing, err := c.ledger.StandingOf(ctx, driverID, vehicleType)
+	if err != nil {
+		c.logger.Error("could not read a driver's credit standing; allowing the offer",
+			slog.String("driver_id", driverID), slog.String("error", err.Error()))
+		return true
+	}
+	return !standing.Blocked
 }
 
 // driverIDLookup narrows the provider store to the one question the tracking

@@ -23,6 +23,7 @@ import (
 	"github.com/sarmadkung/rideme/services/api/internal/realtime"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
 	"github.com/sarmadkung/rideme/services/api/pkg/httpx"
+	"github.com/sarmadkung/rideme/services/api/pkg/money"
 )
 
 // Service is the driver's view of the platform.
@@ -93,6 +94,84 @@ func (s *Service) WithRealtime(announce Announcer, sessions SessionLookup) *Serv
 
 // ErrNoLedger reports earnings being asked for with no ledger configured.
 var ErrNoLedger = errors.New("driver: no ledger is configured")
+
+// ErrOverCreditCap reports a driver who is holding too much of the platform's
+// cash to be given more of it (BD-09).
+//
+// It carries the figures because the message a driver sees has to contain
+// them. "You cannot go online" with no amount and no way to fix it is how a
+// driver decides the app is broken and drives for somebody else.
+type ErrOverCreditCap struct {
+	Owed     money.Amount
+	Cap      money.Amount
+	Clearing money.Amount
+}
+
+func (e *ErrOverCreditCap) Error() string {
+	return fmt.Sprintf("driver: holding %s against a cap of %s; %s must be settled",
+		e.Owed, e.Cap, e.Clearing)
+}
+
+// Standing reports what a driver owes and whether it stops them working.
+//
+// Exposed on its own so the driver's app can show the balance before they are
+// blocked by it. A cap a driver only discovers at the moment it stops them is
+// a cap that feels arbitrary.
+func (s *Service) Standing(ctx context.Context, userID string) (finance.Standing, error) {
+	if s.ledger == nil {
+		return finance.Standing{}, ErrNoLedger
+	}
+	d, err := s.Me(ctx, userID)
+	if err != nil {
+		return finance.Standing{}, err
+	}
+	return s.ledger.StandingOf(ctx, d.ID, s.vehicleTypeOf(ctx, d))
+}
+
+// vehicleTypeOf resolves the vehicle a driver is working on, for the cap that
+// applies to it.
+//
+// An unknown type resolves to the empty string, which finds no cap and so
+// imposes none. That is the right failure: a driver with an unreadable vehicle
+// record should not be stopped from working by a lookup, and the missing cap
+// is logged by the caller.
+func (s *Service) vehicleTypeOf(ctx context.Context, d providers.Driver) string {
+	if d.ActiveVehicleID == "" {
+		return ""
+	}
+	vehicle, err := s.providers.VehicleByID(ctx, d.ActiveVehicleID)
+	if err != nil {
+		return ""
+	}
+	return vehicle.Type
+}
+
+// withinCreditCap refuses a driver who is over their limit.
+//
+// BD-09, as the owner resolved it on 2026-09-15: a driver who owes more than
+// their cap does not work until they pay. Not suspended, not penalised —
+// simply not given more of the platform's money to carry.
+//
+// With no ledger configured, or no cap for their vehicle type, this permits.
+// Failing closed would take every driver off the road over a missing
+// configuration row, which is a worse outcome than an uncapped float.
+func (s *Service) withinCreditCap(ctx context.Context, d providers.Driver) error {
+	if s.ledger == nil {
+		return nil
+	}
+	standing, err := s.ledger.StandingOf(ctx, d.ID, s.vehicleTypeOf(ctx, d))
+	if err != nil {
+		// A balance that cannot be read must not strand a driver. The platform
+		// carries the risk of one more shift; the driver carries none of it.
+		return nil
+	}
+	if !standing.Blocked {
+		return nil
+	}
+	return &ErrOverCreditCap{
+		Owed: standing.Owed, Cap: standing.Cap, Clearing: standing.Clearing,
+	}
+}
 
 // EarningsWindow is how far back the earnings surface looks.
 //
@@ -180,6 +259,12 @@ func (s *Service) GoOnline(ctx context.Context, userID string, at tracking.Fix) 
 	}
 	if d.ActiveVehicleID == "" {
 		return providers.Driver{}, ErrNoVehicle
+	}
+	// Checked before anything moves. A driver who is over their cap should be
+	// told at the moment they try to start, not after their status has changed
+	// and been rolled back.
+	if err := s.withinCreditCap(ctx, d); err != nil {
+		return providers.Driver{}, err
 	}
 
 	at.DriverID = d.ID

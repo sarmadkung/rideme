@@ -3,11 +3,13 @@ package driver
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/sarmadkung/rideme/services/api/internal/booking"
+	"github.com/sarmadkung/rideme/services/api/internal/finance"
 	"github.com/sarmadkung/rideme/services/api/internal/identity"
 	"github.com/sarmadkung/rideme/services/api/internal/providers"
 	"github.com/sarmadkung/rideme/services/api/internal/tracking"
@@ -35,6 +37,11 @@ func (h *Handler) Routes(mux *http.ServeMux, authenticate func(http.Handler) htt
 	mux.Handle("POST "+p+"/driver/location", driverOnly(h.location))
 	mux.Handle("GET "+p+"/driver/assignment", driverOnly(h.assignment))
 	mux.Handle("GET "+p+"/driver/earnings", driverOnly(h.earnings))
+	// What the driver is holding for the platform, and whether it stops them
+	// working (BD-09). Its own route rather than a field on /driver/me: a
+	// driver checks this when they are about to be stopped, and it must not
+	// be a side effect of a call they make for another reason.
+	mux.Handle("GET "+p+"/driver/balance", driverOnly(h.balance))
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
@@ -222,9 +229,25 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrNoVehicle):
 		httpx.WriteError(w, r, httpx.Conflict(
 			"select an active vehicle before going online"))
+	case errors.Is(err, ErrNoLedger):
+		httpx.WriteError(w, r, httpx.Unavailable("balances are not available right now"))
 	case errors.Is(err, providers.ErrStale):
 		httpx.WriteError(w, r, httpx.Conflict("your status changed, please retry"))
 	default:
+		// BD-09's refusal. 409 rather than 403: nothing is wrong with who the
+		// driver is, and the state that refuses them is one they can change.
+		// The figures travel in the details so the app can say the amount
+		// without a second request.
+		var overCap *ErrOverCreditCap
+		if errors.As(err, &overCap) {
+			httpx.WriteError(w, r, httpx.Conflict(
+				"hand in platform cash before going online").WithDetails(map[string]string{
+				"owed":     overCap.Owed.String(),
+				"cap":      overCap.Cap.String(),
+				"clearing": overCap.Clearing.String(),
+			}))
+			return
+		}
 		var rejected *tracking.ErrRejected
 		if errors.As(err, &rejected) {
 			httpx.WriteError(w, r, httpx.Validation("the position was rejected",
@@ -240,6 +263,50 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 // A driver asks this at the end of a shift and after a trip they think was
 // underpaid. The second question is why the individual trips travel with the
 // totals: a figure with no breakdown cannot answer it.
+// BalanceResponse is what the driver owes and what it means for them.
+type BalanceResponse struct {
+	Standing finance.Standing `json:"standing"`
+	// Message is the sentence the app shows. Composed here so the wording is
+	// one thing in one place, rather than three clients each inventing their
+	// own way to say "you cannot work".
+	Message string `json:"message"`
+}
+
+func (h *Handler) balance(w http.ResponseWriter, r *http.Request) {
+	principal, ok := identity.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, r, httpx.Unauthorized("authentication required"))
+		return
+	}
+	standing, err := h.service.Standing(r.Context(), principal.UserID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, BalanceResponse{
+		Standing: standing,
+		Message:  balanceMessage(standing),
+	})
+}
+
+// balanceMessage says what is true, plainly, and always says what to do next.
+func balanceMessage(s finance.Standing) string {
+	switch {
+	case !s.Limited:
+		return fmt.Sprintf("You are holding %s in platform cash.", s.Owed)
+	case s.Blocked:
+		return fmt.Sprintf(
+			"You are holding %s, which is at your limit of %s. Hand in %s to start accepting trips again.",
+			s.Owed, s.Cap, s.Clearing)
+	case s.Warning:
+		return fmt.Sprintf(
+			"You are holding %s of your %s limit. Hand in cash soon to avoid being paused.",
+			s.Owed, s.Cap)
+	default:
+		return fmt.Sprintf("You are holding %s of your %s limit.", s.Owed, s.Cap)
+	}
+}
+
 func (h *Handler) earnings(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.EarningsFor(r.Context(), identity.MustPrincipal(r.Context()).UserID)
 	if err != nil {

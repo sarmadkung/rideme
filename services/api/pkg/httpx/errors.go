@@ -54,6 +54,19 @@ func (e *Error) WithCause(cause error) *Error {
 	return &clone
 }
 
+// WithDetails attaches field-level context to any error, not only a validation
+// one.
+//
+// A conflict a caller can resolve needs to say what would resolve it — a
+// credit cap that refuses a driver has to carry the amount, or the app has to
+// make a second request to say the one sentence that matters. Details is
+// serialised to the client, so it must never hold internal state.
+func (e *Error) WithDetails(details map[string]string) *Error {
+	clone := *e
+	clone.Details = details
+	return &clone
+}
+
 // Sentinels for errors.Is comparison.
 var (
 	ErrNotFound     = &Error{Code: CodeNotFound, Message: "resource not found"}

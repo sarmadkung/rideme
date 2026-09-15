@@ -34,8 +34,12 @@ type Engine struct {
 	// driver finds out, which is the wrong shape for something with a
 	// countdown attached.
 	announce OfferAnnouncer
-	logger   *slog.Logger
-	now      func() time.Time
+	// credit withholds work from a driver who is holding too much of the
+	// platform's cash. Optional: without it no cap is enforced, which is the
+	// behaviour before BD-09 was resolved and is safe.
+	credit CreditCheck
+	logger *slog.Logger
+	now    func() time.Time
 }
 
 // OfferAnnouncer publishes an offer to whoever is watching.
@@ -49,6 +53,23 @@ type OfferAnnouncer interface {
 // WithAnnouncer attaches the realtime gateway an offer is pushed through.
 func (e *Engine) WithAnnouncer(announce OfferAnnouncer) *Engine {
 	e.announce = announce
+	return e
+}
+
+// CreditCheck answers whether a driver may be given more of the platform's
+// money to carry (BD-09).
+//
+// It answers with a bool and no error on purpose. A balance that cannot be
+// read must not remove a driver from a dispatch round — the platform carries
+// the risk of one more trip, and the alternative is an outage in the ledger
+// emptying the candidate pool for the whole city.
+type CreditCheck interface {
+	MayWork(ctx context.Context, driverID, vehicleType string) bool
+}
+
+// WithCreditCheck attaches BD-09's cap.
+func (e *Engine) WithCreditCheck(credit CreditCheck) *Engine {
+	e.credit = credit
 	return e
 }
 
@@ -182,6 +203,14 @@ func (e *Engine) Dispatch(ctx context.Context, jobID string) (Result, error) {
 			MaxLocationAge:   cfg.MaxLocationAge,
 		})
 		if !decision.Eligible {
+			continue
+		}
+		// BD-09: a driver over their credit cap is given no further work.
+		// Checked here rather than only at go-online, because a driver already
+		// online crosses the cap mid-shift — on the trip that pushes them over
+		// — and must stop receiving offers at that moment rather than at their
+		// next sign-in tomorrow.
+		if e.credit != nil && !e.credit.MayWork(ctx, driverID, evehicle.Type) {
 			continue
 		}
 

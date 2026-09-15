@@ -113,6 +113,32 @@ Payout schedule and minimum payout threshold remain undecided. They now bind: se
 **Proceed without?** No for COD settlement. Yes for card/digital payment paths.
 **Recommendation:** None — this is a legal allocation.
 
+**RESOLVED IN PART — 2026-09-15, by the owner.** A driver who is holding more
+of the platform's cash than their cap **does not work until they hand it in**.
+Not suspended and not penalised — simply given no further offers, and refused
+at go-online.
+
+The cap is **per vehicle type** (a bike rider and a truck driver do not carry
+the same float) and **overridable per driver** (who is reliable is learned
+rather than configured). The owner's direction was explicitly that a flat
+PKR 3,000–5,000 is too high for a rider; the table therefore ships **empty**
+and the numbers are still the owner's to set, per vehicle type.
+
+An empty table means **no cap is enforced**, which is the opposite of BD-05's
+refusal and deliberately so: an unset commission refuses to settle because
+paying a guessed rate is worse than not paying yet, but an unset cap that
+failed closed would take every driver off the road at once over a missing
+configuration row.
+
+Also decided: customer-side payments keep **cash and add digital**, rather than
+replacing one with the other. That work is not started — it needs a provider —
+and it is the higher-leverage half, because a digitally paid fare never creates
+the debt this cap exists to bound.
+
+**Still open:** who bears the loss when a driver disappears owing money. That
+is a contract term and possibly a deposit, not a schema, and it is the half of
+BD-09 that remains a legal allocation.
+
 **PARTIALLY UNBLOCKED — 2026-09-14.** Cash settlement now *records* the position without
 allocating the liability, which is the honest half. A completed job debits `CASH_IN_TRANSIT`
 against the driver for everything they collected and credits them only their net fare, so the
