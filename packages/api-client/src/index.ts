@@ -8,6 +8,21 @@
  * lives here at all: this package knows how to call the API and nothing about
  * what the answers mean.
  */
+import {
+  openEventStream,
+  type EventStream,
+  type StreamHandlers,
+  type StreamOptions,
+} from './stream';
+export {
+  openEventStream,
+  parseFrame,
+  MAX_RETRY_MS,
+  type EventStream,
+  type StreamEvent,
+  type StreamHandlers,
+  type StreamOptions,
+} from './stream';
 import type {
   ApiErrorBody,
   CancelResult,
@@ -128,6 +143,8 @@ export interface ApiClientOptions {
   device?: { id?: string; platform?: string; os?: string; appVersion?: string };
   /** Called when the session ends and the user must log in again. */
   onSessionExpired?: () => void;
+  /** Injected so a test can drive the realtime stream without a network. */
+  stream?: StreamOptions;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -148,6 +165,15 @@ export interface ApiClient {
     cursor?: string;
   }): Promise<{ items: Job[]; nextCursor?: string }>;
   getJob(id: string): Promise<Job>;
+
+  /**
+   * Watches a live job over the realtime gateway (documents 018, 047).
+   *
+   * Returns a handle to close. `onOpen` fires on every reconnection, and a
+   * caller should refetch there rather than assume it resumed: the gateway is
+   * explicitly not the system of record and does not replay what was missed.
+   */
+  watchJob(id: string, handlers: StreamHandlers): EventStream;
   cancelJob(id: string, reason?: string): Promise<CancelResult>;
 
   driverArrive(jobId: string): Promise<Job>;
@@ -351,6 +377,7 @@ interface RequestOptions {
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const baseUrl = options.baseUrl.replace(/\/+$/, '') + '/api/v1';
+  const streamOptions = options.stream ?? {};
   const doFetch = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const storage = options.storage ?? memoryTokenStorage();
@@ -581,6 +608,17 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     async getJob(id) {
       return jobSchema.parse(await request(`/jobs/${encodeURIComponent(id)}`));
+    },
+
+    watchJob(id, handlers) {
+      // The token is read once, at subscribe time. A stream outliving its
+      // access token reconnects and is refused with a 401, which surfaces
+      // through onError; the caller falls back to fetching, which refreshes
+      // through the normal path. Threading refresh into the stream would mean
+      // two refresh paths racing each other, and the one that loses retires a
+      // token the other is about to present.
+      const url = `${baseUrl}/realtime?channel=` + encodeURIComponent(`job:${id}`);
+      return openEventStream(url, session?.accessToken ?? null, handlers, streamOptions);
     },
 
     async cancelJob(id, reason) {

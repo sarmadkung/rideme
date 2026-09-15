@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { ApiError, type ApiClient } from '@platform/api-client';
 import type { Job, Quote } from '@platform/types';
-import { isCancellable, isFinished, useBooking } from './useBooking';
+import { isCancellable, isFinished, TRACK_POLL_MS, useBooking } from './useBooking';
 
 const PICKUP = { latitude: 31.5204, longitude: 74.3587 };
 const DROPOFF = { latitude: 31.588, longitude: 74.315 };
@@ -33,8 +33,41 @@ function aJob(status = 'REQUESTED', overrides: Partial<Job> = {}): Job {
   } as Job;
 }
 
+/**
+ * The handlers the hook passed to watchJob, so a test can deliver events the
+ * way the gateway would. One entry per subscription; the last is the live one.
+ */
+const subscriptions: Array<{
+  jobId: string;
+  handlers: {
+    onEvent(event: { type: string; payload: unknown }): void;
+    onOpen?(): void;
+    onError?(error: Error): void;
+  };
+  closed: boolean;
+}> = [];
+
+function latestSubscription() {
+  const subscription = subscriptions[subscriptions.length - 1];
+  if (subscription === undefined) throw new Error('nothing subscribed to the realtime gateway');
+  return subscription;
+}
+
+beforeEach(() => {
+  subscriptions.length = 0;
+});
+
 function stubClient(overrides: Record<string, unknown> = {}) {
   return {
+    watchJob: jest.fn((jobId: string, handlers) => {
+      const subscription = { jobId, handlers, closed: false };
+      subscriptions.push(subscription);
+      return {
+        close: () => {
+          subscription.closed = true;
+        },
+      };
+    }),
     quote: jest.fn(async () => aQuote()),
     createJob: jest.fn(async () => aJob()),
     getJob: jest.fn(async () => aJob()),
@@ -222,25 +255,148 @@ describe('useBooking', () => {
       });
 
       await act(async () => {
-        jest.advanceTimersByTime(5000);
+        jest.advanceTimersByTime(TRACK_POLL_MS);
       });
       await waitFor(() => expect(result.current.job?.status).toBe('SEARCHING'));
 
       await act(async () => {
-        jest.advanceTimersByTime(5000);
+        jest.advanceTimersByTime(TRACK_POLL_MS);
       });
       await waitFor(() => expect(result.current.job?.status).toBe('EXPIRED'));
 
       // BD-04's outcome is terminal. Polling a job nothing will move again is
-      // a request every five seconds forever.
+      // a request forever, at whatever interval.
       const callsAtRest = getJob.mock.calls.length;
       await act(async () => {
-        jest.advanceTimersByTime(30000);
+        jest.advanceTimersByTime(TRACK_POLL_MS * 4);
       });
       expect(getJob.mock.calls.length).toBe(callsAtRest);
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  describe('the realtime stream', () => {
+    async function tracking(client: ReturnType<typeof stubClient>) {
+      const { result } = await planned(client);
+      await act(async () => {
+        await result.current.requestQuote();
+      });
+      await act(async () => {
+        await result.current.confirm();
+      });
+      return result;
+    }
+
+    it('subscribes to the job it is tracking', async () => {
+      const client = stubClient();
+      const result = await tracking(client);
+
+      expect(subscriptions).toHaveLength(1);
+      expect(latestSubscription().jobId).toBe(result.current.job?.id);
+    });
+
+    // The gateway does not replay (document 047), so whatever happened while
+    // there was no stream is recovered by asking — including anything between
+    // confirming the job and the subscription being accepted.
+    it('refetches the job on every connection, and reports being live', async () => {
+      const getJob = jest.fn(async () => aJob('ACCEPTED'));
+      const client = stubClient({ getJob });
+      const result = await tracking(client);
+
+      await act(async () => {
+        latestSubscription().handlers.onOpen?.();
+      });
+
+      await waitFor(() => expect(result.current.job?.status).toBe('ACCEPTED'));
+      expect(result.current.live).toBe(true);
+    });
+
+    // The screen is re-fetched rather than patched from the event payload: the
+    // gateway drops events under backpressure by design, and a job assembled
+    // from events would drift from the one the server holds.
+    it('refetches when a status event arrives', async () => {
+      const getJob = jest.fn(async () => aJob('AT_PICKUP'));
+      const client = stubClient({ getJob });
+      const result = await tracking(client);
+      const before = getJob.mock.calls.length;
+
+      await act(async () => {
+        latestSubscription().handlers.onEvent({
+          type: 'job.status_changed',
+          payload: { status: 'AT_PICKUP' },
+        });
+      });
+
+      await waitFor(() => expect(result.current.job?.status).toBe('AT_PICKUP'));
+      expect(getJob.mock.calls.length).toBeGreaterThan(before);
+    });
+
+    it("keeps the driver's last known position", async () => {
+      const client = stubClient();
+      const result = await tracking(client);
+
+      await act(async () => {
+        latestSubscription().handlers.onEvent({
+          type: 'driver.location',
+          payload: { latitude: 31.5204, longitude: 74.3587, recorded_at: '2026-09-15T09:00:00Z' },
+        });
+      });
+
+      await waitFor(() => expect(result.current.driverPosition).not.toBeNull());
+      expect(result.current.driverPosition?.latitude).toBeCloseTo(31.5204);
+      expect(result.current.driverPosition?.longitude).toBeCloseTo(74.3587);
+    });
+
+    // A malformed payload must not blank a position the customer is watching.
+    it('ignores a position with no coordinates', async () => {
+      const client = stubClient();
+      const result = await tracking(client);
+
+      await act(async () => {
+        latestSubscription().handlers.onEvent({
+          type: 'driver.location',
+          payload: { latitude: 31.5204, longitude: 74.3587 },
+        });
+      });
+      await waitFor(() => expect(result.current.driverPosition).not.toBeNull());
+
+      await act(async () => {
+        latestSubscription().handlers.onEvent({ type: 'driver.location', payload: {} });
+      });
+      expect(result.current.driverPosition?.latitude).toBeCloseTo(31.5204);
+    });
+
+    // A stream that reported an error is not delivering events, and a screen
+    // that still says "live" is lying to the customer about how fresh it is.
+    it('stops claiming to be live when the stream errors', async () => {
+      const client = stubClient();
+      const result = await tracking(client);
+
+      await act(async () => {
+        latestSubscription().handlers.onOpen?.();
+      });
+      expect(result.current.live).toBe(true);
+
+      await act(async () => {
+        latestSubscription().handlers.onError?.(new Error('refused'));
+      });
+      expect(result.current.live).toBe(false);
+    });
+
+    // A stream left open after the customer leaves the screen is a connection
+    // per abandoned trip, against a per-account limit of ten.
+    it('closes the stream when tracking ends', async () => {
+      const client = stubClient();
+      const result = await tracking(client);
+      const subscription = latestSubscription();
+
+      await act(async () => {
+        result.current.reset();
+      });
+
+      await waitFor(() => expect(subscription.closed).toBe(true));
+    });
   });
 });
 

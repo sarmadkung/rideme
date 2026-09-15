@@ -18,8 +18,24 @@ export type BookingStage =
   /** A job exists and is being followed. */
   | 'tracking';
 
+/** Where the driver is, when the gateway has told us. */
+export interface DriverPosition {
+  latitude: number;
+  longitude: number;
+  recordedAt: string;
+}
+
 export interface BookingState {
   stage: BookingStage;
+  /**
+   * The driver's last known position, or null when nothing has arrived. Comes
+   * from the realtime stream only: the platform will not let a customer read a
+   * driver's position on demand outside their own active job, and the job
+   * channel is that scoping expressed as a subscription.
+   */
+  driverPosition: DriverPosition | null;
+  /** Whether the realtime stream is currently connected. */
+  live: boolean;
   pickup: StopInput | null;
   dropoff: StopInput | null;
   quote: Quote | null;
@@ -41,6 +57,8 @@ export interface BookingActions {
 
 const INITIAL: BookingState = {
   stage: 'planning',
+  driverPosition: null,
+  live: false,
   pickup: null,
   dropoff: null,
   quote: null,
@@ -50,8 +68,18 @@ const INITIAL: BookingState = {
   error: null,
 };
 
-/** How often a tracked job is re-read while it is still live. */
-export const TRACK_POLL_MS = 5000;
+/**
+ * How often a tracked job is re-read while it is still live.
+ *
+ * Thirty seconds rather than five. This used to be the only way a customer's
+ * screen changed; now the realtime stream delivers status changes as they
+ * happen and this is the safety net underneath it — for a stream that dropped
+ * without reporting it, or a platform where the socket cannot be held open at
+ * all. Polling this slowly with no stream is a worse experience than before,
+ * and polling every five seconds with one is a request per customer per five
+ * seconds for information that already arrived.
+ */
+export const TRACK_POLL_MS = 30_000;
 
 /**
  * Job states that are over. Polling stops here, and a finished job is not
@@ -184,9 +212,77 @@ export function useBooking(
     setState(INITIAL);
   }, []);
 
-  // Follow a live job. Polling rather than a socket: the realtime gateway
-  // exists but the client transport for it does not, and a customer watching a
-  // stale screen is a worse failure than a request every few seconds.
+  // Watch a live job over the realtime gateway.
+  //
+  // A status event carries the new status, but the screen is re-fetched rather
+  // than patched from the payload: the gateway is not the system of record
+  // (document 047), and a job assembled from events would drift from the one
+  // the server holds the first time an event is dropped under backpressure —
+  // which that gateway does deliberately.
+  useEffect(() => {
+    if (state.stage !== 'tracking' || state.job === null || isFinished(state.job)) return;
+
+    const jobId = state.job.id;
+    let cancelled = false;
+
+    const refetch = () => {
+      void (async () => {
+        try {
+          const fresh = await client.getJob(jobId);
+          if (!cancelled) setState((s) => (s.job?.id === jobId ? { ...s, job: fresh } : s));
+        } catch {
+          // Same reasoning as the poll below: a failed read is not worth a
+          // banner when another is coming.
+        }
+      })();
+    };
+
+    const stream = client.watchJob(jobId, {
+      onOpen: () => {
+        if (cancelled) return;
+        setState((s) => ({ ...s, live: true }));
+        // Every connection, not just reconnections. The gateway does not
+        // replay, so whatever happened while there was no stream is recovered
+        // by asking — including anything between confirming the job and this
+        // subscription being accepted.
+        refetch();
+      },
+      onEvent: (event) => {
+        if (cancelled) return;
+        if (event.type === 'job.status_changed') {
+          refetch();
+          return;
+        }
+        if (event.type === 'driver.location') {
+          const payload = event.payload as {
+            latitude?: number;
+            longitude?: number;
+            recorded_at?: string;
+          };
+          if (typeof payload.latitude !== 'number' || typeof payload.longitude !== 'number') return;
+          setState((s) => ({
+            ...s,
+            driverPosition: {
+              latitude: payload.latitude as number,
+              longitude: payload.longitude as number,
+              recordedAt: payload.recorded_at ?? new Date().toISOString(),
+            },
+          }));
+        }
+      },
+      onError: () => {
+        if (!cancelled) setState((s) => ({ ...s, live: false }));
+      },
+    });
+
+    return () => {
+      cancelled = true;
+      stream.close();
+      setState((s) => ({ ...s, live: false }));
+    };
+  }, [client, state.stage, state.job?.id]);
+
+  // The safety net under the stream.
   useEffect(() => {
     if (state.stage !== 'tracking' || state.job === null || isFinished(state.job)) return;
 

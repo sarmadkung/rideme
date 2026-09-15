@@ -43,6 +43,43 @@ function statusTextFor(job: Job) {
   return STATUS_TEXT[job.status] ?? { title: job.status, detail: '' };
 }
 
+/**
+ * Statuses where the driver is coming *to* the customer, so the distance worth
+ * showing is the one to the pickup. Once the trip starts the customer is in
+ * the vehicle and "your driver is 0.0 km away" is noise.
+ */
+const APPROACHING = new Set(['ACCEPTED', 'ARRIVING', 'AT_PICKUP']);
+
+/**
+ * Great-circle distance in kilometres.
+ *
+ * Straight-line, and labelled that way to the customer, because it is not the
+ * route: a driver 400 m away across a canal is eight minutes from the pickup.
+ * Showing a road distance would need a routing call per position update, which
+ * is a request every few seconds per waiting customer to make a number
+ * slightly better.
+ */
+export function distanceKm(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+): number {
+  const earthRadiusKm = 6371;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const dLat = toRadians(to.latitude - from.latitude);
+  const dLon = toRadians(to.longitude - from.longitude);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(from.latitude)) * Math.cos(toRadians(to.latitude)) * Math.sin(dLon / 2) ** 2;
+  return 2 * earthRadiusKm * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** How the distance reads to somebody standing on a street waiting. */
+export function distanceText(km: number): string {
+  if (km < 0.05) return 'Your driver is here';
+  if (km < 1) return `Your driver is about ${Math.round((km * 1000) / 50) * 50} m away`;
+  return `Your driver is about ${km.toFixed(1)} km away`;
+}
+
 export function TripScreen({ booking }: { booking: BookingState & BookingActions }) {
   const job = booking.job;
   if (job === null) return null;
@@ -50,6 +87,13 @@ export function TripScreen({ booking }: { booking: BookingState & BookingActions
   const status = statusTextFor(job);
   const finished = isFinished(job);
   const cancellation = booking.cancellation;
+
+  const position = booking.driverPosition;
+  const pickup = booking.pickup;
+  const approach =
+    position !== null && pickup !== null && APPROACHING.has(job.status)
+      ? distanceText(distanceKm(position, pickup))
+      : null;
 
   return (
     <View style={styles.screen} testID="trip-screen">
@@ -62,6 +106,15 @@ export function TripScreen({ booking }: { booking: BookingState & BookingActions
         {job.assigned_driver_id !== undefined && !finished && (
           <Text style={styles.meta} testID="trip-driver">
             Driver assigned
+          </Text>
+        )}
+
+        {/* Only while the driver is coming to the customer, and only when a
+            position has actually arrived. A distance that appears and vanishes
+            as the stream reconnects would be worse than none. */}
+        {approach !== null && (
+          <Text style={styles.meta} testID="trip-distance">
+            {approach}
           </Text>
         )}
       </View>
