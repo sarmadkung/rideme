@@ -2636,3 +2636,80 @@ check their pay.
 **Run:** 66/66 jest tests across 8 suites, eslint clean, prettier written,
 `check-migrations` at 18. **Not run:** `tsc`, which needs `make contracts`
 first, and the Go side, which has no toolchain here.
+
+## A Review Pass Over Code That Has Never Compiled — 2026-09-15
+
+Four branches are stacked and unmerged, and the Go in them has never been
+through a compiler in this session. Rather than stack a fifth feature, this is
+a deliberate pass hunting the class of defect that only a build catches.
+
+Two real findings.
+
+### 1. `router_test.go` was three arguments behind the signature
+
+`newRouter` grew `creditHandler`, `paymentsHandler` and `webhookHandler` across
+the stack. The test calls it with a positional list of bare `nil`s, and that
+list stayed at twelve. **The test package would not have compiled.**
+
+This is the same shape that produced the earlier `fix(api): main compiles
+again` — a positional call falling behind a signature, silent until a build.
+Fixed, and guarded two ways:
+
+- the nils are grouped four-four-three-two with a comment naming which handler
+  each stands for, so a miscount is visible in review rather than only to the
+  compiler;
+- a new test asserts the router still serves health with no handlers wired,
+  which is the property `newRouter`'s nil-guards exist to provide and which
+  nothing previously exercised.
+
+### 2. A database failure told customers their card was declined
+
+`booking.Create` mapped **every** error from the payment-method check to
+"this payment method is not available":
+
+```go
+if err := s.methods.Allowed(ctx, method); err != nil {
+    return jobs.Job{}, httpx.Validation("this payment method is not available", ...)
+}
+```
+
+`Allowed` reads `payment_methods` from the database first. A failed query and a
+genuinely disallowed method produced the same message — so a customer would be
+told to change payment method to solve an outage they had nothing to do with,
+and support would receive a wave of "my card does not work" for a query that
+timed out.
+
+Fixed with a `booking.ErrMethodRefused` sentinel so the two answers survive the
+interface boundary: refused is a 422 naming the method, anything else is a 500.
+The distinction could not be made without a sentinel, because the interface
+returns a bare `error` and booking would otherwise have to guess — and the
+guess it was making was the damaging one.
+
+### What was checked and found sound
+
+- **Every consumer-declared interface against its implementation**: booking's
+  five, dispatch's four, driver's two, settlement's three, credit's two,
+  payments' one. All satisfied, including argument order and return arity.
+- **Struct literal fields** against their definitions —
+  `finance.Settlement`, `realtime.DriverPosition`, `tracking.Fix`,
+  `finance.CreditLimit`.
+- **Every `money.Amount` method called** against the type's method set.
+- **Unused imports** across every new and changed file — none.
+- **Every error sentinel declared this session** against whether a caller
+  handles it. The unhandled ones are unhandled correctly: `ErrUnbalanced`,
+  `ErrNoEntries` and `ErrMixedCurrency` are programming faults that should
+  reach a 500, and `settlement.ErrNotComplete` / `ErrNoDriver` are logged
+  rather than returned because settlement never fails a driver's command.
+
+### What this pass cannot do
+
+It reasons about types by reading them. It does not type-check, it cannot see a
+missing method on an embedded type or a subtle interface mismatch behind a type
+alias, and it proves nothing about behaviour. `make verify` remains the gate.
+The finding above is evidence the gate is load-bearing, not evidence it can be
+skipped.
+
+### Verification
+
+gofmt clean. Not compiled — no Go toolchain is reachable from this session and
+proxy.golang.org is blocked.

@@ -173,6 +173,15 @@ type Notifier interface {
 	JobStatusChanged(ctx context.Context, jobID, userID, jobType, status string) error
 }
 
+// ErrMethodRefused is the answer "the customer may not pay that way", as
+// distinct from "the answer could not be determined".
+//
+// Declared here so the distinction survives the interface boundary. Without
+// it, booking sees one error type for both and has to guess — and the guess it
+// would make, refusing, tells a customer to change payment method to solve a
+// database outage.
+var ErrMethodRefused = errors.New("booking: this payment method is not available")
+
 // PaymentMethods decides whether a customer may pay the way they asked to.
 //
 // Declared here rather than imported so booking knows nothing about providers:
@@ -468,9 +477,17 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (jobs.Job, erro
 		if method == "" {
 			method = "CASH"
 		}
-		if err := s.methods.Allowed(ctx, method); err != nil {
+		switch err := s.methods.Allowed(ctx, method); {
+		case err == nil:
+		case errors.Is(err, ErrMethodRefused):
 			return jobs.Job{}, httpx.Validation("this payment method is not available",
 				map[string]string{"payment_method": method})
+		default:
+			// A failure to *read* what is allowed is not a refusal of the
+			// method. Flattening the two would tell a customer their card is
+			// unavailable when the database was briefly unreachable, and they
+			// would change payment method to solve a problem they do not have.
+			return jobs.Job{}, httpx.Internal("could not check payment methods").WithCause(err)
 		}
 		req.PaymentMethod = method
 	}

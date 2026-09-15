@@ -481,9 +481,16 @@ type paymentRules struct {
 func (p paymentRules) Allowed(ctx context.Context, method string) error {
 	configured, err := p.store.Configured(ctx)
 	if err != nil {
+		// Returned as itself, so booking can tell "could not check" from
+		// "not allowed". A customer told their card is unavailable because a
+		// query failed will change payment method to solve a problem they do
+		// not have.
 		return err
 	}
-	return p.gateway.Check(payments.Method(method), configured)
+	if err := p.gateway.Check(payments.Method(method), configured); err != nil {
+		return fmt.Errorf("%w: %w", booking.ErrMethodRefused, err)
+	}
+	return nil
 }
 
 // creditCheck asks the ledger whether a driver may carry more platform cash.
