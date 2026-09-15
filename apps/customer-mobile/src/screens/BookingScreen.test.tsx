@@ -30,6 +30,8 @@ function booking(overrides: Partial<BookingState> = {}): BookingState & BookingA
     quote: null,
     job: null,
     cancellation: null,
+    driverPosition: null,
+    live: false,
     pending: false,
     error: null,
     setPickup: jest.fn(),

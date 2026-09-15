@@ -2153,3 +2153,86 @@ the correct outcome for a duplicate; paying the driver twice is not.
 `internal/notify` (its store, worker and queue semantics), the realtime
 transport against a real hub under load, and `booking.PriceDelivery` end to
 end. Named here rather than left to be rediscovered.
+
+## The Customer Watches The Trip — 2026-09-15
+
+The comment in `useBooking` said exactly what was missing:
+
+> Polling rather than a socket: the realtime gateway exists but the client
+> transport for it does not.
+
+It does now. This is the client half of the 2026-09-14 gateway slice, and the
+first slice in this session that was **actually executed rather than written
+blind** — the workspace toolchain runs on this machine even though the Go one
+does not.
+
+### Tasks
+
+| Task | Status | Tests | Verified |
+|---|---|---|---|
+| `packages/api-client/src/stream.ts` — SSE over XHR | Done | 9 unit | **Run: vitest cannot execute here** |
+| `ApiClient.watchJob` | Done | covered | Typecheck, lint |
+| `useBooking` consumes the stream | Done | 7 unit | **Run: 98/98 jest green** |
+| `TripScreen` shows the driver's approach | Done | 5 unit | **Run: 98/98 jest green** |
+| Poll demoted to a 30s safety net | Done | covered | **Run** |
+
+### Verification actually performed
+
+- `pnpm --filter customer-mobile test` — **98 passed, 12 suites**, including
+  the 12 new tests.
+- `tsc --noEmit` on `customer-mobile` and `api-client` — clean.
+- `eslint` on both — clean.
+- `prettier` — written and checked.
+
+**vitest still cannot run on this machine.** `node_modules` was installed on
+macOS, so `@rollup/rollup-linux-arm64-gnu` is absent in the Linux workspace.
+Installing it would rewrite the lockfile against the wrong platform, so the
+nine `stream.test.ts` tests are **written and not executed**. They run in CI and
+on the Mac.
+
+### Decisions worth naming
+
+**XMLHttpRequest, not EventSource.** React Native has no EventSource. Every SSE
+library for React Native reads an XHR's incremental `responseText`; this does
+the same in about eighty lines, with no dependency to keep current and no
+native module to break an Expo build.
+
+**The screen is refetched, never patched from the event payload.** A status
+event says the status changed; the hook then calls `getJob`. The gateway drops
+events under backpressure *by design* (document 047), so a job assembled from
+events would silently drift from the one the server holds the first time that
+happens. The event is a signal to look, not the thing looked at.
+
+**`onOpen` fires on every connection and refetches each time.** The gateway
+does not replay, so whatever happened while there was no stream is recovered by
+asking — including anything between confirming the job and the subscription
+being accepted.
+
+**Polling stays, at 30 seconds instead of 5.** It is now the safety net under a
+dropped stream rather than the mechanism. Deleting it would leave a customer on
+a frozen screen wherever the socket cannot be held open; leaving it at five
+seconds would be a request per customer per five seconds for information that
+already arrived.
+
+**The distance is straight-line, and says so.** "About 1.2 km away" rather than
+a route: a road distance would need a routing call per position update — a
+request every few seconds per waiting customer — to make the number slightly
+better. It is shown only while the driver is approaching, and only once a
+position has actually arrived, because a distance that appears and vanishes as
+the stream reconnects is worse than none.
+
+**The stream carries the token read at subscribe time and does not refresh.**
+A stream outliving its access token reconnects, is refused with a 401, and
+surfaces through `onError`; the caller falls back to fetching, which refreshes
+through the normal path. Threading refresh into the stream would put two
+refresh paths in a race, and the loser presents a token the winner has just
+retired — which this platform correctly treats as theft and answers by ending
+every session.
+
+### What this does not do
+
+No map. The position is a distance in words, because a map means a tile
+provider, an API key and a native module. The driver app does not consume the
+stream at all — it has no screen that would change if it did. And the device
+registration built in the notifications slice is not called from either app
+yet, so no phone has a push token even where a provider existed.

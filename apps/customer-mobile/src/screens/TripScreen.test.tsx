@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { Job } from '@platform/types';
-import { TripScreen } from './TripScreen';
+import { distanceKm, distanceText, TripScreen } from './TripScreen';
 import type { BookingActions, BookingState } from '../features/booking/useBooking';
 
 function aJob(status: string, overrides: Partial<Job> = {}): Job {
@@ -22,6 +22,8 @@ function tracking(job: Job, overrides: Partial<BookingState> = {}): BookingState
     quote: null,
     job,
     cancellation: null,
+    driverPosition: null,
+    live: false,
     pending: false,
     error: null,
     setPickup: jest.fn(),
@@ -103,5 +105,47 @@ describe('TripScreen', () => {
   it('falls back to the raw status rather than showing nothing', () => {
     render(<TripScreen booking={tracking(aJob('SOMETHING_NEW'))} />);
     expect(screen.getByTestId('trip-status')).toHaveTextContent('SOMETHING_NEW');
+  });
+});
+
+describe("the driver's approach", () => {
+  const pickup = { latitude: 31.5204, longitude: 74.3587 };
+  // Roughly 1.2 km north of the pickup.
+  const nearby = { latitude: 31.5312, longitude: 74.3587, recordedAt: '2026-09-15T09:00:00Z' };
+
+  it('tells the customer how far away the driver is', () => {
+    render(<TripScreen booking={tracking(aJob('ARRIVING'), { pickup, driverPosition: nearby })} />);
+    expect(screen.getByTestId('trip-distance')).toHaveTextContent(
+      'Your driver is about 1.2 km away',
+    );
+  });
+
+  // Once the customer is in the vehicle, "your driver is 0.0 km away" is noise.
+  it('says nothing once the trip has started', () => {
+    render(
+      <TripScreen booking={tracking(aJob('IN_PROGRESS'), { pickup, driverPosition: nearby })} />,
+    );
+    expect(screen.queryByTestId('trip-distance')).toBeNull();
+  });
+
+  // A distance that appears and vanishes as the stream reconnects would be
+  // worse than none.
+  it('says nothing before a position has arrived', () => {
+    render(<TripScreen booking={tracking(aJob('ARRIVING'), { pickup })} />);
+    expect(screen.queryByTestId('trip-distance')).toBeNull();
+  });
+
+  it('reads in metres up close and announces arrival', () => {
+    expect(distanceText(0.02)).toBe('Your driver is here');
+    expect(distanceText(0.32)).toContain('m away');
+    expect(distanceText(4.25)).toContain('4.3 km away');
+  });
+
+  it('measures a known distance', () => {
+    // One degree of latitude is about 111 km.
+    const km = distanceKm({ latitude: 31, longitude: 74 }, { latitude: 32, longitude: 74 });
+    expect(km).toBeGreaterThan(110);
+    expect(km).toBeLessThan(112);
+    expect(distanceKm(pickup, pickup)).toBeCloseTo(0);
   });
 });
